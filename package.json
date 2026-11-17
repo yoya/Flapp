@@ -1,0 +1,10 @@
+{
+  "name": "flapp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "fixtures": "node tools/mkfixtures.js",
+    "oracle": "node tools/oracle.js"
+  }
+}
