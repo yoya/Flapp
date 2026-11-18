@@ -17,6 +17,9 @@
 //   「// place: クラス名 in=置き先のクラス名 frame=F name=名前 x=X y=Y until=G」は、そのスプライトを置き先（省略すると
 //    メインタイムライン）の F フレーム目に置き、G フレーム目で取り除く（どれも省略可）。置き先は、置くものより後に書く。
 //    クラス名を Square にすると、スプライトではなく四角形の図形そのものを置く。
+//   「// field: name=名前 text=文字列 x=X y=Y」は、メインタイムラインの 1 フレーム目に、その名前のテキストフィールド
+//    （100×20 px、文字列は空白を含められない）を置く。
+//   「// sound: クラス名 seconds=秒」は、そのクラスに結び付いたサウンド（小さな音量の 440 Hz の音）を作る。
 //   「// unverified: 理由」は、実機と照合できないテスト。SWF の名前が as3x-*.swf になる（期待値は test/avm2.test.js に書く）。
 // スクリプトは有限回の trace で終わるように書く。
 import { execFileSync } from 'node:child_process';
@@ -24,7 +27,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DefineSprite, End, PlaceObject2, RemoveObject2, ShowFrame, square, swf, tag, u16, u32 } from './mkfixtures.js';
+import { DefineSound, DefineSprite, End, PlaceObject2, RemoveObject2, ShowFrame, pcmBytes, square, swf, tag, tone, u16, u32 } from './mkfixtures.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'test/as3');
@@ -113,11 +116,22 @@ function build(name) {
   // スプライトと、その配置。キャラクタ ID は 1 が四角形、2 以降がスプライト。深度は 1 が四角形、2 以降が置いた順。
   const sprites = [...source.matchAll(/^\/\/ sprite: (\w+)(?: frames=(\d+))?/gm)].map((m, i) => ({ cls: m[1], frames: Number(m[2] ?? 1), id: i + 2 }));
   const places = [...source.matchAll(/^\/\/ place: (\w+)(.*)$/gm)].map((m) => ({ cls: m[1], ...Object.fromEntries(m[2].trim().split(/\s+/).filter(Boolean).map((kv) => kv.split('='))) }));
+  // テキストフィールド (DefineEditText)。キャラクタ ID は 100 以降、深度は 50 以降。
+  const fields = [...source.matchAll(/^\/\/ field: (.*)$/gm)].map((m, i) => ({ id: 100 + i, depth: 50 + i, ...Object.fromEntries(m[1].trim().split(/\s+/).map((kv) => kv.split('='))) }));
+  const editText = (field) => {
+    // 枠は (0, 0)-(2000, 400) twips。RECT は 5 ビットの桁数と、その桁数の 4 つの値（xmin, xmax, ymin, ymax）。
+    const bits = `01100${[0, 2000, 0, 400].map((v) => v.toString(2).padStart(12, '0')).join('')}`.padEnd(56, '0');
+    const rect = bits.match(/.{8}/g).map((byte) => parseInt(byte, 2));
+    return tag(37, [...u16(field.id), ...rect, 0x80, 0x00, 0, ...utf8(field.text ?? ''), 0]); // フラグは「初期の文字列あり」だけ。変数名は空
+  };
+  // サウンド（22050 Hz、16 ビットの PCM）。キャラクタ ID は 200 以降。
+  const sounds = [...source.matchAll(/^\/\/ sound: (\w+)(?: seconds=([\d.]+))?/gm)].map((m, i) => ({ cls: m[1], seconds: Number(m[2] ?? 0.3), id: 200 + i }));
   const timeline = (owner, count, shape) => {
     const mine = places.filter((p) => (p.in ?? 'Main') === owner);
     const tags = [];
     for (let f = 1; f <= count; f++) {
       if (f === 1 && shape) tags.push(PlaceObject2({ depth: 1, id: 1 }));
+      if (f === 1 && owner === 'Main') for (const field of fields) tags.push(PlaceObject2({ depth: field.depth, id: field.id, name: field.name, matrix: { tx: Number(field.x ?? 0) * 20, ty: Number(field.y ?? 0) * 20 } }));
       mine.forEach((p, i) => {
         const sprite = p.cls === 'Square' ? { id: 1 } : sprites.find((sp) => sp.cls === p.cls); // Square は四角形そのもの
         if (!sprite) throw new Error(`${name}: place の ${p.cls} に sprite の宣言が無い`);
@@ -131,11 +145,16 @@ function build(name) {
   const pack = (declaration) => `package
 {
    import flash.display.*;
+   import flash.errors.*;
    import flash.events.*;
+   import flash.external.*;
+   import flash.filters.*;
    import flash.geom.*;
+   import flash.media.*;
    import flash.net.*;
    import flash.system.*;
    import flash.text.*;
+   import flash.ui.*;
    import flash.utils.*;
 
 ${declaration}
@@ -166,8 +185,10 @@ ${members}
       tag(9, [255, 255, 255]),
       ...(sprites.length || places.length ? [square(1, 800, [0x33, 0x66, 0x99])] : []),
       ...sprites.map((sprite) => DefineSprite(sprite.id, sprite.frames, [...timeline(sprite.cls, sprite.frames, true), End()])),
+      ...fields.map(editText),
+      ...sounds.map((sound) => DefineSound(sound.id, 3, 22050, Math.round(22050 * sound.seconds), pcmBytes(tone(22050, sound.seconds)))),
       tag(82, [...u32(1), ...utf8('frame1'), 0, ...abc], true), // DoABC（遅延初期化）
-      tag(76, [...u16(sprites.length + 1), ...sprites.flatMap((sprite) => [...u16(sprite.id), ...utf8(sprite.cls), 0]), ...u16(0), ...utf8('Main'), 0]), // SymbolClass: スプライトとメインタイムライン
+      tag(76, [...u16(sprites.length + sounds.length + 1), ...[...sprites, ...sounds].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8('Main'), 0]), // SymbolClass: スプライト、サウンド、メインタイムライン
       ...timeline('Main', frames, false), End(),
     ],
   }));
