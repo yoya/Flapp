@@ -1,25 +1,40 @@
 // 辞書（キャラクタ定義）、表示リスト、タイムラインの進行（仕様 3・13 章）。描画や DOM には依存しない。
-import { parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
+import { parseBitmap } from '../swf/bitmap.js';
+import { parseDefineButton, parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
+import { parseDefineMorphShape } from '../swf/morph.js';
 import { parseSWF } from '../swf/parse.js';
 import { parseDefineShape } from '../swf/shape.js';
+import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, textToPaths } from '../swf/text.js';
 import { shapeToPaths } from '../shape/paths.js';
 
 const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
-const PLACE_DEFAULTS = Object.freeze({ matrix: IDENTITY, cxform: null, ratio: 0, name: '', clipDepth: 0 });
+const PLACE_DEFAULTS = Object.freeze({
+  matrix: IDENTITY, cxform: null, ratio: 0, name: '', clipDepth: 0, filters: null, blendMode: 'normal', visible: true,
+});
 const SHAPE_TAGS = new Set([2, 22, 32, 83]);
+const BITMAP_TAGS = new Set([6, 20, 21, 35, 36, 90]);
 const MAX_NESTING = 255;
 
 export class Movie {
   /**
    * @param {Uint8Array | ArrayBuffer} bytes
-   * @param {{ maxLength?: number, maxInstances?: number }} [options]
+   * @param {{ maxLength?: number, maxInstances?: number, maxBitmapPixels?: number }} [options]
    *   maxInstances: 表示リスト上に同時に存在できるオブジェクト数の上限（入れ子の爆発への備え）
+   *   maxBitmapPixels: 全ビットマップの画素数の合計の上限（展開後のメモリへの備え）
    */
   static async load(bytes, options = {}) {
-    return new Movie(await parseSWF(bytes, options), options);
+    const movie = new Movie(await parseSWF(bytes, options), options);
+    await movie.#decodeBitmaps();
+    return movie;
   }
 
-  constructor(swf, { maxInstances = 100000 } = {}) {
+  #jpegTables;
+  #pendingBitmaps = [];
+  #bitmapPixelBudget;
+
+  /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26 } = {}) {
+    this.#bitmapPixelBudget = maxBitmapPixels;
     this.version = swf.version;
     this.frameSize = swf.frameSize; // twips
     this.frameRate = swf.frameRate;
@@ -63,6 +78,29 @@ export class Movie {
         } else if (SHAPE_TAGS.has(tag.code)) {
           const shape = parseDefineShape(tag);
           this.#define({ type: 'shape', id: shape.id, bounds: shape.bounds, paths: shapeToPaths(shape) });
+        } else if (tag.code === 7 || tag.code === 34) {
+          // ボタンは、通常状態 (up) のキャラクタを置いた 1 フレームのスプライトとして扱う。
+          // マウスへの反応（over / down 状態、アクション）は未対応。
+          const button = parseDefineButton(tag);
+          const ops = button.records.filter((rec) => rec.up).map((rec) => ({ op: 'place', move: false, ...rec }));
+          this.#define({ type: 'sprite', id: button.id, timeline: [ops], button });
+        } else if (tag.code === 46 || tag.code === 84) {
+          this.#define({ type: 'morph', ...parseDefineMorphShape(tag) });
+        } else if (tag.code === 10 || tag.code === 48 || tag.code === 75) {
+          this.#define({ type: 'font', ...parseDefineFont(tag) });
+        } else if (tag.code === 11 || tag.code === 33) {
+          // 静的テキストは、グリフを並べた図形として扱う。
+          const text = parseDefineText(tag);
+          this.#define({ type: 'shape', id: text.id, bounds: text.bounds, paths: textToPaths(text, this.#font) });
+        } else if (tag.code === 37) {
+          const edit = parseDefineEditText(tag);
+          this.#define({ type: 'shape', id: edit.id, bounds: edit.bounds, paths: editTextToPaths(edit, this.#font) });
+        } else if (tag.code === 8) {
+          this.#jpegTables ??= tag.body;
+        } else if (BITMAP_TAGS.has(tag.code) && tag.length >= 2) {
+          // 展開は非同期なので、ID だけ先に登録しておく。
+          const def = { type: 'bitmap', id: tag.body[0] | (tag.body[1] << 8), width: 0, height: 0 };
+          if (this.#define(def)) this.#pendingBitmaps.push({ def, tag });
         } else if (tag.code === 39 && tag.tags) {
           const def = { type: 'sprite', id: tag.spriteId };
           if (this.#define(def)) def.timeline = this.#buildTimeline(tag.tags, def);
@@ -73,6 +111,24 @@ export class Movie {
       }
     }
     return frames;
+  }
+
+  #font = (id) => {
+    const font = this.dictionary.get(id);
+    return font?.type === 'font' ? font : undefined;
+  };
+
+  async #decodeBitmaps() {
+    for (const { def, tag } of this.#pendingBitmaps) {
+      try {
+        Object.assign(def, await parseBitmap(tag, this.#jpegTables, this.#bitmapPixelBudget));
+        this.#bitmapPixelBudget -= def.width * def.height;
+      } catch (e) {
+        if (e.name !== 'SWFError') throw e;
+        this.warn(`tag ${tag.name} at offset ${tag.offset}: ${e.message}`);
+      }
+    }
+    this.#pendingBitmaps = [];
   }
 
   #define(def) {
@@ -101,6 +157,9 @@ export class DisplayObject {
     this.ratio = desc.ratio;
     this.name = desc.name;
     this.clipDepth = desc.clipDepth;
+    this.filters = desc.filters; // null はフィルタなし
+    this.blendMode = desc.blendMode;
+    this.visible = desc.visible;
   }
 
   /** 自分と子孫の数。 */
@@ -221,6 +280,10 @@ export class MovieClip extends DisplayObject {
       movie.warn(`sprite ${this.character.id} cannot place character ${character.id} defined after it`);
       return;
     }
+    if (character.type !== 'sprite' && character.type !== 'shape' && character.type !== 'morph') {
+      movie.warn(`character ${character.id} (${character.type}) cannot be placed`);
+      return;
+    }
     if (movie.instances >= movie.maxInstances) {
       movie.warn(`too many display objects (limit ${movie.maxInstances})`);
       return;
@@ -245,6 +308,9 @@ const describe = (obj) => ({
   ratio: obj.ratio,
   name: obj.name,
   clipDepth: obj.clipDepth,
+  filters: obj.filters,
+  blendMode: obj.blendMode,
+  visible: obj.visible,
 });
 
 // PlaceObject を、その深度の現在の状態 prev（無ければ undefined）に適用した結果を返す。何もしない場合は null。
@@ -264,5 +330,8 @@ function mergePlace(prev, op) {
     ratio: op.ratio ?? base.ratio,
     name: op.name ?? base.name,
     clipDepth: op.clipDepth ?? base.clipDepth,
+    filters: op.filters ?? base.filters,
+    blendMode: op.blendMode ?? base.blendMode,
+    visible: op.visible ?? base.visible,
   };
 }
