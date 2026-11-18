@@ -68,14 +68,18 @@ function huffman(lengths) {
  * @param {Uint8Array} data
  * @param {number} start  deflate のストリームが始まる位置
  * @param {number} limit  出力の上限バイト数（超えたら失敗）
+ * @param {Uint8Array | null} [dictionary]  ストリームより前にあったことにするデータ（距離の参照先になる。出力には含めない）
  * @returns {Uint8Array | null} 壊れたデータや上限の超過なら null
  */
-export function inflateSync(data, start, limit) {
+export function inflateSync(data, start, limit, dictionary = null) {
   let pos = start;
   let hold = 0;
   let held = 0;
-  let out = new Uint8Array(Math.min(Math.max(data.length * 3, 1024), limit));
-  let size = 0;
+  const before = dictionary?.length ?? 0;
+  limit += before;
+  let out = new Uint8Array(Math.min(Math.max(data.length * 3, 1024) + before, limit));
+  if (dictionary) out.set(dictionary);
+  let size = before;
   const fail = () => { throw new RangeError('bad deflate data'); };
   const bits = (n) => {
     while (held < n) {
@@ -170,5 +174,5 @@ export function inflateSync(data, start, limit) {
     if (e instanceof RangeError) return null;
     throw e;
   }
-  return out.subarray(0, size);
+  return out.subarray(before, size);
 }

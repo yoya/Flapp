@@ -12,7 +12,7 @@ SWF ファイルを読み込んで、ブラウザの Canvas に再生します�
   ボタン、マスク、ブレンド、フィルタ（ぼかし・影・光彩・色行列）
 - **スクリプト**: ActionScript 1 / 2 (AVM1) と ActionScript 3 (AVM2)
 - **音**: イベント音とストリーム音（PCM、ADPCM、MP3）
-- **ビデオ**: SWF に埋め込まれたビデオと FLV ファイル（Sorenson H.263、Screen Video。ブラウザでは H.264 と AAC も）
+- **ビデオ**: SWF に埋め込まれたビデオと FLV ファイル（Sorenson H.263、Screen Video。FLV では Screen Video v2 も。ブラウザでは H.264 と AAC も）
 - **入力**: マウスとキーボード
 
 SWF は信用できない入力として扱います。
@@ -23,7 +23,7 @@ SWF は信用できない入力として扱います。
 
 未対応のもの:
 
-- VP6 と Screen Video v2 のビデオ、ActionScript 1 / 2 からのビデオの操作（`NetStream`）
+- VP6 のビデオ、ActionScript 1 / 2 からのビデオの操作（`NetStream`）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式

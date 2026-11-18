@@ -17,6 +17,11 @@
 //   video-h263.flv  ffmpeg -f lavfi -i testsrc2=size=64x48:rate=12 -frames:v 8 -c:v flv -g 4 -q:v 4 -an -fflags +bitexact -flags +bitexact video-h263.flv
 //   video-h263.yuv  ffmpeg -i video-h263.flv -f rawvideo -pix_fmt yuv420p video-h263.yuv
 //                   （H.263 の復号を ffmpeg の復号結果と突き合わせるため。test/video.test.js）
+// Screen Video v2 は ffmpeg でしか作れないので、FLV の素材だけがある（灰色の地に、現れては消える四角。128×64 px、7 フレーム）:
+//   video-screen2.flv     ffmpeg -f lavfi -i "color=c=0x406080:size=128x64:rate=12,drawbox=x=8:y=8:w=30:h=20:color=red:t=fill:enable='eq(n,1)+eq(n,2)',
+//                         drawbox=x=80:y=30:w=20:h=20:color=yellow:t=fill:enable='eq(n,2)+eq(n,4)',drawbox=x=64:y=0:w=64:h=64:color=0x1830c8:t=fill:enable='eq(n,6)'"
+//                         -frames:v 7 -c:v flashsv2 -g 10 -an -fflags +bitexact -flags +bitexact video-screen2.flv
+//   video-screen2.rgb.gz  ffmpeg -i video-screen2.flv -f rawvideo -pix_fmt rgb24 video-screen2.rgb; gzip -9n video-screen2.rgb
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseFLV } from '../src/video/flv.js';

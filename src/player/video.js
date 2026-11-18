@@ -4,13 +4,16 @@
 // （version は、絵が変わるたびに進む）。
 import { scanMP3 } from '../audio/decode.js';
 import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../video/h263.js';
-import { ScreenVideoDecoder } from '../video/screen.js';
+import { ScreenVideo2Decoder, ScreenVideoDecoder } from '../video/screen.js';
 
 // 1 回の更新で復号する量の上限（巻き戻しや飛び越しで、一度に大量に復号しないため）。フレーム数と、画素数の合計の両方で抑える。
 const MAX_CATCH_UP = 32;
 const MAX_CATCH_UP_PIXELS = 1 << 23;
 
-/** このコーデックを、ここで復号できるか。 */
+/**
+ * SWF に埋め込まれたビデオとして、このコーデックを復号できるか。
+ * Screen Video v2 は、復号器はあるが、埋め込みでは使えない（実機も、埋め込みの v2 は何も表示しない。FLV でだけ映る）。
+ */
 export const decodable = (codec) => codec === 'h263' || codec === 'screen';
 
 /**
@@ -19,7 +22,7 @@ export const decodable = (codec) => codec === 'h263' || codec === 'screen';
  */
 class FrameSequence {
   /**
-   * @param {string} codec 'h263' | 'screen'
+   * @param {string} codec 'h263' | 'screen' | 'screen2'
    * @param {(n: number) => Uint8Array | undefined} packet  n 番のフレームのビデオパケット（無ければ undefined）
    * @param {(target: number) => number} keyBefore  target 以下で、そこから復号を始められるフレームの番号
    * @param {(message: string) => void} warn
@@ -42,7 +45,7 @@ class FrameSequence {
   show(target) {
     if (this.failed || target === this.decoded) return this.image;
     if (!this.decoder || target < this.decoded) {
-      this.decoder = this.codec === 'h263' ? new H263Decoder() : new ScreenVideoDecoder();
+      this.decoder = this.codec === 'h263' ? new H263Decoder() : this.codec === 'screen2' ? new ScreenVideo2Decoder() : new ScreenVideoDecoder();
       this.decoded = this.keyBefore(target) - 1;
     }
     let pixels = MAX_CATCH_UP_PIXELS;
@@ -154,7 +157,7 @@ export class FlvPlayback {
     this.sequence = null;
     this.external = null; // H.264: ホストのデコーダ（video/webcodecs.js を参照）
     this.fed = 0; // ホストのデコーダに入れ終えたフレームの数
-    if (decodable(codec)) {
+    if (decodable(codec) || codec === 'screen2') {
       const keyBefore = (target) => { for (let n = target; n > 0; n--) if (flv.video[n]?.key) return n; return 0; };
       this.sequence = new FrameSequence(codec, (n) => flv.video[n]?.data, keyBefore, warn);
     } else if (codec === 'avc') {

@@ -3,14 +3,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { gunzipSync } from 'node:zlib';
 import { Movie } from '../src/player/movie.js';
 import { SoundMixer } from '../src/player/sound.js';
-import { FlvPlayback, embeddedSequence } from '../src/player/video.js';
+import { FlvPlayback, decodable, embeddedSequence } from '../src/player/video.js';
 import { parseSWF } from '../src/swf/parse.js';
 import { parseDefineVideoStream, parseVideoFrame } from '../src/swf/video.js';
 import { parseFLV } from '../src/video/flv.js';
 import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../src/video/h263.js';
-import { ScreenVideoDecoder } from '../src/video/screen.js';
+import { ScreenVideo2Decoder, ScreenVideoDecoder } from '../src/video/screen.js';
 import { SCREEN_VIDEO, fixtures, screenVideoPixel } from '../tools/mkfixtures.js';
 
 const asset = (name) => readFileSync(new URL(`../tools/assets/${name}`, import.meta.url));
@@ -205,4 +206,56 @@ test('FLV の再生: 復号できない映像や音声は、警告を残して�
   avc.play(0);
   assert.equal(avc.image(), null);
   assert.equal(h.warnings[1], 'video: codec avc needs a decoder from the host (it will not be shown)');
+});
+
+test('Screen Video v2: 復号結果が ffmpeg の復号結果と一致する（15 ビットの色の広げ方の差だけ）', () => {
+  const flv = parseFLV(asset('video-screen2.flv'));
+  const reference = gunzipSync(asset('video-screen2.rgb.gz'));
+  const decoder = new ScreenVideo2Decoder();
+  const pixel = (p, x, y) => [...p.rgba.subarray((y * p.width + x) * 4, (y * p.width + x) * 4 + 3)];
+  const seen = flv.video.map((tag, n) => {
+    const p = decoder.decode(tag.data);
+    assert.deepEqual([p.width, p.height], [128, 64]);
+    // 実機は 15 ビットの色の下位 3 ビットを 0 のままにするので、ffmpeg（上位ビットを写す）より 0〜7 だけ暗い。
+    for (let i = 0; i < 128 * 64; i++) {
+      for (let k = 0; k < 3; k++) {
+        const diff = reference[(n * 128 * 64 + i) * 3 + k] - p.rgba[i * 4 + k];
+        assert.ok(diff >= 0 && diff <= 7, `frame ${n} value ${i}.${k}: ${diff}`);
+      }
+    }
+    return [pixel(p, 2, 2), pixel(p, 10, 10), pixel(p, 85, 35), pixel(p, 100, 5)].map(String).join(' ');
+  });
+  // 地の色（15 ビットの色）と、現れては消える四角（赤と黄はパレットの色）。消えたところは、キーフレームの絵に戻る。
+  const gray = '64,88,128';
+  assert.deepEqual(seen, [
+    `${gray} ${gray} ${gray} ${gray}`,
+    `${gray} 255,0,0 ${gray} ${gray}`, // 一部の行だけが送られる
+    `${gray} 255,0,0 255,255,0 ${gray}`, // 左のブロックは「変わっていない」
+    `${gray} ${gray} ${gray} ${gray}`, // 行が 1 つも無いブロック: キーフレームに戻る
+    `${gray} ${gray} 255,255,0 ${gray}`,
+    `${gray} ${gray} ${gray} ${gray}`,
+    `${gray} ${gray} 24,48,192 24,48,192`, // 右のブロック全体が変わる
+  ]);
+});
+
+test('Screen Video v2: 確かめられていない機能と壊れたデータは VideoError にする。埋め込みでは使えない', () => {
+  const [key, inter] = parseFLV(asset('video-screen2.flv')).video.map((t) => t.data);
+  assert.throws(() => new ScreenVideo2Decoder().decode(inter), /without a key block/); // キーフレームより前の差分
+  assert.throws(() => new ScreenVideo2Decoder().decode(key.subarray(0, 20)), VideoError);
+  for (const [flags, message] of [[2, /IFrameImage/], [1, /palette/]]) {
+    const packet = Uint8Array.from(key); // Buffer の slice は写しにならないので、写しを作る
+    packet[4] = flags;
+    assert.throws(() => new ScreenVideo2Decoder().decode(packet), message);
+  }
+  const primed = Uint8Array.from(key);
+  primed[7] |= 2; // 最初のブロックの形式に「ほかのブロックを辞書にする」を立てる
+  assert.throws(() => new ScreenVideo2Decoder().decode(primed), /another block/);
+  // FLV では再生できるが、SWF に埋め込んだもの（実機も何も表示しない）は対象外。
+  assert.equal(decodable('screen2'), false);
+  const h = host();
+  const playback = new FlvPlayback(h, parseFLV(asset('video-screen2.flv')));
+  playback.play(0);
+  h.time = 500;
+  assert.deepEqual([...playback.image().rgba.subarray((5 * 128 + 100) * 4, (5 * 128 + 100) * 4 + 3)], [24, 48, 192]);
+  assert.deepEqual(h.warnings, []);
 });
