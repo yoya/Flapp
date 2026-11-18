@@ -5,6 +5,7 @@ import { installStage } from './stage.js';
 import { installTextField } from './textfield.js';
 import { installNet } from './net.js';
 import { installXML } from './xml.js';
+import { installSound } from './sound.js';
 import { numberToString, toBool, toInt32, toNumber, toStr } from './convert.js';
 import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, MAX_ARRAY_LENGTH, READ_ONLY } from './object.js';
 
@@ -383,4 +384,5 @@ export function installGlobals(vm) {
   installTextField(vm);
   installNet(vm);
   installXML(vm);
+  installSound(vm);
 }
