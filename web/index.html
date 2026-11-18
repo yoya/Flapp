@@ -12,7 +12,7 @@
   #traces:empty { display: none; }
 </style>
 <h1>Flapp</h1>
-<p>SWF ファイルを選ぶか、ここにドロップしてください。<input type="file" id="file" accept=".swf"></p>
+<p>SWF ファイル（または FLV ファイル）を選ぶか、ここにドロップしてください。<input type="file" id="file" accept=".swf,.flv"></p>
 <p>
   <label>SWF 5 以前の文字コード:
     <select id="encoding">
@@ -32,6 +32,10 @@
   import { Movie } from '../src/player/movie.js';
   import { CanvasRenderer } from '../src/render/canvas.js';
   import { WebAudioOutput } from '../src/audio/webaudio.js';
+  import { SoundMixer } from '../src/player/sound.js';
+  import { FlvPlayback } from '../src/player/video.js';
+  import { parseFLV } from '../src/video/flv.js';
+  import { WebCodecsVideo } from '../src/video/webcodecs.js';
 
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
@@ -42,11 +46,11 @@
   // 有効になったら、流れている途中のストリーム音を次のフレームで鳴らし直させる。
   for (const type of ['pointerdown', 'keydown']) {
     window.addEventListener(type, () => {
-      if (audio.context.state === 'suspended') audio.resume().then(() => current?.sounds.stop((p) => p.stream));
+      if (audio.context.state === 'suspended') audio.resume().then(() => (current?.sounds ?? videoSounds)?.resync());
     }, { capture: true });
   }
   let current = null; // 再生中のムービー
-  let loaded = null; // 再生中のファイル { bytes, label }（文字コードを変えたときに読み直す）
+  let loaded = null; // 再生中のファイル { bytes, label, base }（文字コードを変えたときに読み直す）
 
   // SWF 5 以前の文字列は、ファイルを作った環境の文字コードで入っている（ファイルからは判別できない）。
   // 実機は OS の言語に合わせるので、ここではブラウザの言語から初期値を決める。?encoding= でも指定できる。
@@ -56,9 +60,43 @@
     ?? (language.startsWith('ja') ? 'shift_jis' : language.startsWith('ko') ? 'euc-kr'
       : /^zh-(tw|hk|hant)/.test(language) ? 'big5' : language.startsWith('zh') ? 'gbk' : 'windows-1252');
   if (!encoding.value) encoding.value = 'windows-1252'; // 一覧に無い指定
-  encoding.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label); });
+  encoding.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label, loaded.base); });
 
   let redraw = () => {}; // 再生中のムービーを描き直す
+  let stopVideo = () => {}; // 再生中の FLV を止める
+  let videoSounds = null; // 再生中の FLV の音
+  const video = WebCodecsVideo.supported ? new WebCodecsVideo() : undefined; // H.264 は、ブラウザのデコーダで復号する
+
+  // FLV ファイルを、そのまま再生する。
+  function playFLV(bytes, label, info, warnings) {
+    let flv;
+    try {
+      flv = parseFLV(new Uint8Array(bytes));
+    } catch (e) {
+      info.textContent = `${label}: ${e.message}`;
+      return;
+    }
+    const started = performance.now();
+    const host = { now: () => performance.now() - started, video, warn: (message) => { warnings.textContent += `${message}\n`; } };
+    host.sounds = videoSounds = new SoundMixer(host, audio);
+    const playback = new FlvPlayback(host, flv);
+    playback.play(0);
+    stopVideo = () => playback.close();
+    const ctx = canvas.getContext('2d');
+    timer = setInterval(() => {
+      const image = playback.image();
+      if (image) {
+        if (canvas.width !== image.width || canvas.height !== image.height) Object.assign(canvas, { width: image.width, height: image.height });
+        canvas.style.width = `${image.width}px`;
+        canvas.style.height = `${image.height}px`;
+        if (image.image) ctx.drawImage(image.image, 0, 0);
+        else ctx.putImageData(new ImageData(image.rgba, image.width, image.height), 0, 0);
+      }
+      const codec = flv.video[0]?.codec ?? 'no video';
+      info.textContent = `${label}: FLV, ${codec}${flv.audio[0] ? ` + ${flv.audio[0].format}` : ''}, ${(playback.time / 1000).toFixed(2)} / ${(playback.duration / 1000).toFixed(2)} s`;
+      if (playback.finished()) clearInterval(timer);
+    }, 1000 / 30);
+  }
 
   // マウスとキーの入力をムービーへ伝える（_xmouse / _ymouse、ボタン）。キー入力は、ステージをクリックして選んでいる間だけ受け取る。
   const input = (handle) => (e) => {
@@ -84,11 +122,27 @@
   }));
   canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
 
-  async function play(bytes, label) {
+  // base は、?swf= で読んだときの SWF の URL。そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
+  async function play(bytes, label, base) {
     clearInterval(timer);
+    stopVideo();
+    stopVideo = () => {};
     const info = document.getElementById('info');
     const warnings = document.getElementById('warnings');
     warnings.textContent = '';
+    if (String.fromCharCode(...new Uint8Array(bytes, 0, Math.min(3, bytes.byteLength))) === 'FLV') {
+      current?.sounds.stop();
+      current = null;
+      document.getElementById('traces').textContent = '';
+      playFLV(bytes, label, info, warnings);
+      return;
+    }
+    const media = base && (async (url) => {
+      const target = new URL(url, new URL(base, location.href));
+      if (target.origin !== location.origin) return null;
+      const res = await fetch(target);
+      return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+    });
     // trace() の出力。画面に残すのは最後の 500 行まで。
     const traces = document.getElementById('traces');
     traces.textContent = '';
@@ -99,19 +153,19 @@
       traces.textContent = lines.join('\n');
       traces.scrollTop = traces.scrollHeight;
     };
-    // スクリプトが要求した URL は、開かずに trace の欄へ表示する。
-    const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''} （開きません）`);
+    // スクリプトが要求した URL は、開かずに trace の欄へ表示する（NetStream.play のファイルだけは、?swf= で読んだときに同じサーバから渡す）。
+    const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''} ${kind === 'play' && base ? '（同じサーバから読みます）' : '（開きません）'}`);
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
-      movie = await Movie.load(bytes, { trace, onRequest, audio, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
     }
     await renderer.prepare(movie);
     current = movie;
-    loaded = { bytes, label };
+    loaded = { bytes, label, base };
     const scale = window.devicePixelRatio || 1;
     const draw = () => {
       renderer.render(movie, scale);
@@ -147,7 +201,7 @@
   const param = new URLSearchParams(location.search).get('swf');
   if (param) {
     const res = await fetch(param);
-    if (res.ok) play(await res.arrayBuffer(), param);
+    if (res.ok) play(await res.arrayBuffer(), param, param);
     else document.getElementById('info').textContent = `${param}: HTTP ${res.status}`;
   }
 </script>
