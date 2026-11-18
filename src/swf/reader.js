@@ -47,6 +47,9 @@ export class Reader {
   s16() { return this.view.getInt16(this.#take(2), true); }
   s32() { return this.view.getInt32(this.#take(4), true); }
 
+  /** FLOAT: IEEE 754 単精度。 */
+  f32() { return this.view.getFloat32(this.#take(4), true); }
+
   /** FIXED: 16.16 固定小数。 */
   fixed() { return this.s32() / 65536; }
   /** FIXED8: 8.8 固定小数。 */

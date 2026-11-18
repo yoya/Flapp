@@ -8,9 +8,10 @@ export function parseSetBackgroundColor(tag) {
 
 /**
  * PlaceObject (4) / PlaceObject2 (26) / PlaceObject3 (70)。
- * 存在しない項目はプロパティ自体を持たない。フィルタ・ブレンド・クリップアクション等は未解釈。
+ * 存在しない項目はプロパティ自体を持たない。クリップアクションは未解釈。
  * @returns {{ depth: number, move: boolean, characterId?: number, matrix?: object, cxform?: object,
- *             ratio?: number, name?: string, clipDepth?: number }}
+ *             ratio?: number, name?: string, clipDepth?: number,
+ *             filters?: object[], blendMode?: string, visible?: boolean }}
  */
 export function parsePlaceObject(tag) {
   const r = new Reader(tag.body);
@@ -32,7 +33,95 @@ export function parsePlaceObject(tag) {
   if (flags & 0x10) place.ratio = r.u16();
   if (flags & 0x20) place.name = r.string();
   if (flags & 0x40) place.clipDepth = r.u16();
+  if (flags2 & 0x01) place.filters = filterList(r);
+  if (flags2 & 0x02) place.blendMode = BLEND_MODES[r.u8()] ?? 'normal';
+  if ((flags2 & 0x04) && r.remaining > 0) r.u8(); // BitmapCache。フラグだけ立って値が無いファイルがある
+  if (flags2 & 0x20) place.visible = r.u8() !== 0;
   return place;
+}
+
+// 番号 0 と 1 はどちらも通常の合成。
+export const BLEND_MODES = [
+  'normal', 'normal', 'layer', 'multiply', 'screen', 'lighten', 'darken', 'difference',
+  'add', 'subtract', 'invert', 'alpha', 'erase', 'overlay', 'hardlight',
+];
+
+/** FILTERLIST（PlaceObject3 とボタンで共通）。 */
+export function filterList(r) {
+  const filters = [];
+  const count = r.u8();
+  for (let i = 0; i < count; i++) {
+    const id = r.u8();
+    // 影・光彩・ベベル系に共通の末尾: ぼかし量、(角度と距離)、強さ、フラグ
+    const blur = () => ({ blurX: r.fixed(), blurY: r.fixed() });
+    const offset = () => ({ angle: r.fixed(), distance: r.fixed() });
+    const gradientColors = () => {
+      const n = r.u8();
+      const colors = Array.from({ length: n }, () => r.rgba());
+      return colors.map((color) => ({ color, ratio: r.u8() }));
+    };
+    if (id === 0) {
+      const f = { type: 'dropShadow', color: r.rgba(), ...blur(), ...offset(), strength: r.fixed8() };
+      Object.assign(f, { inner: r.ub(1) === 1, knockout: r.ub(1) === 1, compositeSource: r.ub(1) === 1, passes: r.ub(5) });
+      filters.push(f);
+    } else if (id === 1) {
+      filters.push({ type: 'blur', ...blur(), passes: r.ub(5) });
+      r.align();
+    } else if (id === 2) {
+      const f = { type: 'glow', color: r.rgba(), ...blur(), strength: r.fixed8() };
+      Object.assign(f, { inner: r.ub(1) === 1, knockout: r.ub(1) === 1, compositeSource: r.ub(1) === 1, passes: r.ub(5) });
+      filters.push(f);
+    } else if (id === 3 || id === 4 || id === 7) {
+      const f = id === 3
+        ? { type: 'bevel', shadowColor: r.rgba(), highlightColor: r.rgba() }
+        : { type: id === 4 ? 'gradientGlow' : 'gradientBevel', colors: gradientColors() };
+      Object.assign(f, blur(), offset(), { strength: r.fixed8() });
+      Object.assign(f, { inner: r.ub(1) === 1, knockout: r.ub(1) === 1, compositeSource: r.ub(1) === 1, onTop: r.ub(1) === 1, passes: r.ub(4) });
+      filters.push(f);
+    } else if (id === 5) {
+      const f = { type: 'convolution', matrixX: r.u8(), matrixY: r.u8(), divisor: r.f32(), bias: r.f32() };
+      f.matrix = Array.from({ length: f.matrixX * f.matrixY }, () => r.f32());
+      f.defaultColor = r.rgba();
+      r.ub(6);
+      Object.assign(f, { clamp: r.ub(1) === 1, preserveAlpha: r.ub(1) === 1 });
+      filters.push(f);
+    } else if (id === 6) {
+      filters.push({ type: 'colorMatrix', matrix: Array.from({ length: 20 }, () => r.f32()) });
+    } else {
+      throw new SWFError(`unknown filter ${id}`);
+    }
+  }
+  return filters;
+}
+
+/**
+ * DefineButton (7) / DefineButton2 (34)。状態ごとに表示するキャラクタの一覧だけを読む（アクションは未解釈）。
+ * @returns {{ id: number, records: Array<{ up: boolean, over: boolean, down: boolean, hitTest: boolean,
+ *   characterId: number, depth: number, matrix: object, cxform?: object, filters?: object[], blendMode?: string }> }}
+ */
+export function parseDefineButton(tag) {
+  if (tag.code !== 7 && tag.code !== 34) throw new SWFError(`tag ${tag.code} is not a DefineButton`);
+  const r = new Reader(tag.body);
+  const button = { id: r.u16(), records: [] };
+  if (tag.code === 34) {
+    r.u8(); // TrackAsMenu
+    r.u16(); // ActionOffset
+  }
+  for (;;) {
+    const flags = r.u8();
+    if (flags === 0) break;
+    const rec = {
+      up: (flags & 0x01) !== 0, over: (flags & 0x02) !== 0, down: (flags & 0x04) !== 0, hitTest: (flags & 0x08) !== 0,
+      characterId: r.u16(), depth: r.u16(), matrix: r.matrix(),
+    };
+    if (tag.code === 34) {
+      rec.cxform = r.cxform(true);
+      if (flags & 0x10) rec.filters = filterList(r);
+      if (flags & 0x20) rec.blendMode = BLEND_MODES[r.u8()] ?? 'normal';
+    }
+    button.records.push(rec);
+  }
+  return button;
 }
 
 /** RemoveObject (5) / RemoveObject2 (28) */
