@@ -1,9 +1,11 @@
 // ビデオ: タグの解析、Sorenson H.263・Screen Video・VP6 の復号、埋め込みビデオの再生、FLV の分解と再生。
 // H.263 と VP6 の復号結果は、ffmpeg で復号した結果（tools/assets/video-h263.yuv、video-vp6.yuv.gz、video-vp6a.yuva.gz）と比べる。
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { gunzipSync } from 'node:zlib';
+import { decodeADPCM } from '../src/audio/decode.js';
 import { Movie } from '../src/player/movie.js';
 import { SoundMixer } from '../src/player/sound.js';
 import { FlvPlayback, decodable, embeddedSequence } from '../src/player/video.js';
@@ -196,10 +198,12 @@ test('FLV の再生: 時刻に合わせて絵が進み、最後のタグの時�
 
 test('FLV の再生: 復号できない映像や音声は、警告を残して飛ばす', () => {
   const h = host();
-  const playback = new FlvPlayback(h, parseFLV(asset('tone-adpcm.flv')));
+  const tone = parseFLV(asset('tone-adpcm.flv'));
+  tone.audio.forEach((t) => { t.format = 'nellymoser'; });
+  const playback = new FlvPlayback(h, tone);
   playback.play(0);
   assert.equal(playback.image(), null);
-  assert.deepEqual(h.warnings, ['video: FLV audio format adpcm is not supported (it will be silent)']);
+  assert.deepEqual(h.warnings, ['video: FLV audio format nellymoser is not supported (it will be silent)']);
   // H.264 は、ホストがデコーダを渡さなければ映らない。
   const flv = parseFLV(flvBytes);
   flv.video.forEach((t) => { t.codec = 'avc'; t.packetType = 1; });
@@ -207,6 +211,21 @@ test('FLV の再生: 復号できない映像や音声は、警告を残して�
   avc.play(0);
   assert.equal(avc.image(), null);
   assert.equal(h.warnings[1], 'video: codec avc needs a decoder from the host (it will not be shown)');
+});
+
+test('FLV の再生: ADPCM の音声は、タグごとに復号してつなぐ', () => {
+  const h = host();
+  const playback = new FlvPlayback(h, parseFLV(asset('tone-adpcm.flv')));
+  const { sound } = playback;
+  // 0.3 秒・22050 Hz の音が、4096 サンプルずつ 2 つのタグに入っている（2 つ目は、余りを無音で埋めてある）。
+  assert.deepEqual([sound.format, sound.rate, sound.channels, sound.bits, sound.sampleCount], ['adpcm', 22050, 1, 16, 8192]);
+  assert.deepEqual(sound.blocks.map((b) => b.sampleCount), [4096, 4096]);
+  // 復号した結果は、ffmpeg で復号したもの（test/sound.test.js と同じハッシュ）。
+  const out = sound.blocks.flatMap((b) => [...decodeADPCM(b.data, 1, b.sampleCount)[0]]);
+  const bytes = Buffer.alloc(out.length * 2);
+  out.forEach((v, i) => bytes.writeInt16LE(v, i * 2));
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), '84cac926993757523b7ad2e78b0f557e63232e3c16fd5da618702ca6be471cd1');
+  assert.deepEqual(h.warnings, []);
 });
 
 test('Screen Video v2: 復号結果が ffmpeg の復号結果と一致する（15 ビットの色の広げ方の差だけ）', () => {

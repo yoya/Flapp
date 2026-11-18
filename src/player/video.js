@@ -180,7 +180,7 @@ function flvSound(flv, warn) {
   if (!tags.length) return null;
   const { format, rate, bits16, stereo } = tags[0];
   if (format === 'aac') return aacSound(tags, warn);
-  if (format !== 'mp3' && format !== 'pcm' && format !== 'pcm-native') {
+  if (format !== 'mp3' && format !== 'pcm' && format !== 'pcm-native' && format !== 'adpcm') {
     warn(`FLV audio format ${format} is not supported (it will be silent)`);
     return null;
   }
@@ -195,6 +195,17 @@ function flvSound(flv, warn) {
   if (format === 'mp3') {
     const scan = scanMP3(data);
     Object.assign(sound, { sampleCount: scan.samples, rate: scan.rate || rate });
+  }
+  if (format === 'adpcm') {
+    // タグ 1 つが、独立した ADPCM データ（符号の幅 2 ビット、続いて 4096 サンプルごとに初期値 22 ビットと符号）。
+    // タグにサンプル数は入っていないので、データの長さに収まる数を求める。
+    sound.bits = 16;
+    sound.blocks = tags.filter((t) => t.data.length).map((t) => {
+      const size = (t.data[0] >> 6) + 2, bits = t.data.length * 8 - 2, header = 22 * channels, block = header + size * channels * 4095;
+      const rest = bits % block;
+      return { data: t.data, sampleCount: Math.floor(bits / block) * 4096 + (rest >= header ? 1 + Math.floor((rest - header) / (size * channels)) : 0) };
+    });
+    sound.sampleCount = sound.blocks.reduce((n, b) => n + b.sampleCount, 0);
   }
   return sound.sampleCount > 0 ? sound : null;
 }
