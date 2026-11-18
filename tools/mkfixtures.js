@@ -334,7 +334,7 @@ function DefineText({ id, version = 1, bounds, matrix: m, records }) {
 }
 
 // DefineEditText（読み取り専用・選択不可）。align: 0 左 / 1 右 / 2 中央。
-function DefineEditText({ id, bounds, fontId, height, color, text, multiline, wordWrap, border, useOutlines, html, align = 0, leading = 0 }) {
+function DefineEditText({ id, bounds, fontId, height, color, text, multiline, wordWrap, border, useOutlines, html, align = 0, leading = 0, variable = '' }) {
   return tag(37, [
     ...u16(id), ...rect(...bounds),
     0x80 | (wordWrap ? 0x40 : 0) | (multiline ? 0x20 : 0) | 0x08 | 0x04 | (fontId !== undefined ? 0x01 : 0),
@@ -342,7 +342,7 @@ function DefineEditText({ id, bounds, fontId, height, color, text, multiline, wo
     ...(fontId !== undefined ? [...u16(fontId), ...u16(height)] : []),
     ...color,
     align, ...u16(0), ...u16(0), ...u16(0), ...u16(leading & 0xffff), // 左右の余白、字下げ、行間
-    0, // 変数名なし
+    ...cstr(variable), // 連動する変数の名前（無ければ空）
     ...cstr(text),
   ]);
 }
@@ -1083,6 +1083,30 @@ Object.assign(fixtures, {
         tr('clip Ax via Ax=[', property([bytes([...SJIS.kanaA, 0x78])], NAME), '] via Dix=[', property([bytes([...SJIS.kanaDi, 0x78])], NAME), '] via AX=[', property([bytes([...SJIS.kanaA, 0x58])], NAME), ']'),
         Stop,
       ]),
+      ShowFrame(), End(),
+    ],
+  }),
+  // 変数と連動するテキストフィールド（定義で変数名を指定したもの）。変数が未定義なら、最初の文字列が変数に入る。
+  // 先に値が入っている変数には、フィールドの方が合わせる。
+  'as-swf4-edittext': swf({
+    version: 4, frames: 3,
+    tags: [
+      DefineEditText({ id: 1, bounds: [0, 2000, 0, 400], height: 240, color: [0, 0, 0, 255], text: 'init one', variable: 'one' }),
+      DefineEditText({ id: 2, bounds: [0, 2000, 0, 400], height: 240, color: [0, 0, 0, 255], text: 'init two', variable: 'two' }),
+      DefineEditText({ id: 3, bounds: [0, 2000, 0, 400], height: 240, color: [0, 0, 0, 255], text: 'init three', variable: '/:three' }),
+      DefineSprite(4, 1, [PlaceObject2({ depth: 1, id: 3 }), DoAction([tr('in clip: three=[', variable('three'), '] /:three=[', variable('/:three'), ']')]), ShowFrame(), End()]),
+      DoAction([PushString('two'), PushString('set before'), SetVariable, tr('frame 1 before place: one=[', variable('one'), '] two=[', variable('two'), ']')]),
+      PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
+      PlaceObject2({ depth: 2, id: 2, matrix: { tx: 200, ty: 800 } }),
+      PlaceObject2({ depth: 3, id: 4, name: 'clip', matrix: { tx: 200, ty: 1400 } }),
+      ShowFrame(),
+      DoAction([
+        tr('frame 2: one=[', variable('one'), '] two=[', variable('two'), '] three=[', variable('three'), ']'),
+        PushString('one'), PushString('changed'), SetVariable,
+        tr('after set: one=[', variable('one'), ']'),
+      ]),
+      ShowFrame(),
+      DoAction([tr('frame 3: one=[', variable('one'), ']'), Stop]),
       ShowFrame(), End(),
     ],
   }),

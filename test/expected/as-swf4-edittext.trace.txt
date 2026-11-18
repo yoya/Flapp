@@ -1,0 +1,6 @@
+frame 1 before place: one=[init one] two=[set before]
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'three'
+in clip: three=[] /:three=[init three]
+frame 2: one=[init one] two=[set before] three=[init three]
+after set: one=[changed]
+frame 3: one=[changed]
