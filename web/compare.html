@@ -26,7 +26,9 @@
   const SETTLE_FRAME = 10; // 多フレームのテスト用 SWF は、このフレームまでに絵が止まるように作ってある
   const CORNER = 12;       // 比較から外す左下の正方形の一辺（ステージ px）
 
-  const names = await (await fetch('../test/fixtures/index.json')).json();
+  // ?only=名前の一部 で対象を絞れる。
+  const only = new URLSearchParams(location.search).get('only') ?? '';
+  const names = (await (await fetch('../test/fixtures/index.json')).json()).filter((n) => n.includes(only));
   const rows = document.getElementById('rows');
   const summary = [];
 
@@ -45,7 +47,6 @@
       const frame = Math.min(SETTLE_FRAME, movie.root.totalFrames);
       for (let i = 1; i < frame; i++) movie.advance();
       result.frame = frame;
-      if (movie.warnings.length) result.warnings = movie.warnings;
 
       // 実機は色管理をせずに SWF の RGB 値をそのまま画面へ書く。画像に付いたディスプレイの
       // プロファイルで変換されると値が変わるので、無変換で読む。
@@ -64,7 +65,10 @@
       ectx.drawImage(img, 0, img.height - h, w, h, 0, 0, w, h);
 
       const ours = document.createElement('canvas');
-      new CanvasRenderer(ours).render(movie, scale);
+      const renderer = new CanvasRenderer(ours);
+      await renderer.prepare(movie);
+      renderer.render(movie, scale);
+      if (movie.warnings.length) result.warnings = movie.warnings;
 
       const a = ours.getContext('2d').getImageData(0, 0, w, h).data;
       const b = ectx.getImageData(0, 0, w, h).data;

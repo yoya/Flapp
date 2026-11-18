@@ -34,6 +34,7 @@
       info.textContent = `${label}: ${e.message}`;
       return;
     }
+    await renderer.prepare(movie);
     const scale = window.devicePixelRatio || 1;
     const draw = () => {
       renderer.render(movie, scale);
