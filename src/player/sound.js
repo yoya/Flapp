@@ -29,8 +29,10 @@ export class SoundMixer {
   }
 
   // owner（音を鳴らしたクリップ）にかかる音量。全体の音量と、そのクリップから上の各クリップの音量の積。
-  #volume(owner) {
-    let v = this.volumes.get(null) ?? UNITY;
+  // gain は、その音だけにかかる倍率（AS3 の SoundChannel の音量）。
+  #volume(owner, gain = null) {
+    const all = this.volumes.get(null) ?? UNITY;
+    let v = gain ? { ll: gain.ll * all.ll + gain.lr * all.rl, lr: gain.ll * all.lr + gain.lr * all.rr, rl: gain.rl * all.ll + gain.rr * all.rl, rr: gain.rl * all.lr + gain.rr * all.rr } : all;
     for (let clip = owner; clip; clip = clip.parent) {
       const w = this.volumes.get(clip);
       if (w) v = { ll: v.ll * w.ll + v.lr * w.rl, lr: v.ll * w.lr + v.lr * w.rr, rl: v.rl * w.ll + v.rr * w.rl, rr: v.rl * w.lr + v.rr * w.rr };
@@ -44,9 +46,10 @@ export class SoundMixer {
    * @param {object} info   parseSoundInfo の結果（位置は 44100 Hz 換算のサンプル数）
    * @param {object | null} owner  音を鳴らしたクリップ
    * @param {(() => void) | null} onComplete  鳴り終わったときに呼ぶ
+   * @param {object | null} gain  この音だけにかける倍率 { ll, lr, rl, rr }
    * @returns {object | null} 鳴らし始めた音（鳴らさなかったら null）
    */
-  start(sound, info, owner = null, onComplete = null) {
+  start(sound, info, owner = null, onComplete = null, gain = null) {
     if (info.stop) {
       this.stop((p) => p.sound === sound);
       return null;
@@ -58,8 +61,8 @@ export class SoundMixer {
     const loops = Math.max(1, info.loops ?? 1);
     const envelope = info.envelope?.map((e) => ({ time: e.position / 44100, left: e.left / 32768, right: e.right / 32768 }));
     const entry = {
-      sound, owner, onComplete, stream: false, startedAt: this.movie.now(), seconds: (outPoint - inPoint) * loops, inPoint,
-      handle: this.output?.play(sound, { offset: 0, inPoint, outPoint, loops, envelope, volume: this.#volume(owner) }) ?? null,
+      sound, owner, onComplete, gain, stream: false, startedAt: this.movie.now(), seconds: (outPoint - inPoint) * loops, inPoint,
+      handle: this.output?.play(sound, { offset: 0, inPoint, outPoint, loops, envelope, volume: this.#volume(owner, gain) }) ?? null,
     };
     if (this.playing.length < 64) this.playing.push(entry); // 同時に鳴らす数の上限
     else this.output?.stop(entry.handle);
@@ -110,7 +113,13 @@ export class SoundMixer {
   /** クリップ（null は全体）の音量を設定し、鳴っている音に反映する。 */
   setVolume(clip, volume) {
     this.volumes.set(clip, volume);
-    for (const p of this.playing) this.output?.setVolume?.(p.handle, this.#volume(p.owner));
+    for (const p of this.playing) this.output?.setVolume?.(p.handle, this.#volume(p.owner, p.gain));
+  }
+
+  /** 鳴っている音 entry だけにかける倍率を変える。 */
+  setGain(entry, gain) {
+    entry.gain = gain;
+    if (this.playing.includes(entry)) this.output?.setVolume?.(entry.handle, this.#volume(entry.owner, gain));
   }
 
   getVolume(clip) {
