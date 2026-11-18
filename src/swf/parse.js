@@ -1,4 +1,5 @@
 // SWF のヘッダとタグ列の切り出し（仕様 2 章）。タグの中身は解釈せず、バイト列のビューとして返す。
+import { inflate } from './inflate.js';
 import { lzmaDecode } from './lzma.js';
 import { Reader, SWFError } from './reader.js';
 import { tagNames } from './tagnames.js';
@@ -31,7 +32,9 @@ export async function parseSWF(input, { maxLength = 256 * 1024 * 1024 } = {}) {
   if (compression === 'none') {
     body = file.subarray(8, fileLength);
   } else if (compression === 'zlib') {
-    body = await inflate(file.subarray(8), bodyLength, warnings);
+    const { bytes, truncated } = await inflate(file.subarray(8), bodyLength);
+    if (truncated) warnings.push('decompressed data exceeds FileLength; the rest is ignored');
+    body = bytes;
   } else {
     // ZWS: 圧縮データ長 (UI32)、LZMA プロパティ 5 バイト、LZMA データ。
     if (file.length < 17) throw new SWFError('ZWS header is truncated');
@@ -52,44 +55,6 @@ export async function parseSWF(input, { maxLength = 256 * 1024 * 1024 } = {}) {
   const frameCount = r.u16();
   const tags = readTags(r, 8, warnings, false);
   return { signature, version, fileLength, frameSize, frameRate, frameCount, tags, warnings };
-}
-
-// zlib 展開。宣言された長さを超えた分は捨てる（展開爆弾への備え）。
-async function inflate(data, limit, warnings) {
-  const stream = new DecompressionStream('deflate');
-  const writer = stream.writable.getWriter();
-  // 書き込み側の失敗は読み取り側のエラーとして現れるので、ここでは握りつぶす。
-  writer.write(data).catch(() => {});
-  writer.close().catch(() => {});
-
-  const reader = stream.readable.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (total + value.length > limit) {
-        chunks.push(value.subarray(0, limit - total));
-        total = limit;
-        warnings.push('decompressed data exceeds FileLength; the rest is ignored');
-        await reader.cancel();
-        break;
-      }
-      chunks.push(value);
-      total += value.length;
-    }
-  } catch (e) {
-    throw new SWFError(`zlib: ${e.message}`);
-  }
-
-  const out = new Uint8Array(total);
-  let pos = 0;
-  for (const c of chunks) {
-    out.set(c, pos);
-    pos += c.length;
-  }
-  return out;
 }
 
 // r の現在位置から End タグまで読む。base は r の先頭が（展開後の）ファイルの何バイト目かを表す。
