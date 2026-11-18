@@ -7,9 +7,9 @@
 // zws-hello.swf だけはここで生成しない（Node に LZMA 圧縮が無いため）。lzma-src.swf を
 // 次のコマンドで圧縮したものをコミットしている:
 //   python3 -c 'import lzma,struct;d=open("test/fixtures/lzma-src.swf","rb").read();c=lzma.compress(d[8:],format=lzma.FORMAT_ALONE);open("test/fixtures/zws-hello.swf","wb").write(b"ZWS"+d[3:8]+struct.pack("<I",len(c)-13)+c[:5]+c[13:])'
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { deflateSync } from 'node:zlib';
+import { crc32, deflateSync } from 'node:zlib';
 
 export const u16 = (v) => [v & 0xff, (v >> 8) & 0xff];
 export const u32 = (v) => [...u16(v & 0xffff), ...u16(v >>> 16)];
@@ -64,8 +64,9 @@ function cxform({ mult, add }) {
   return bits.bytes();
 }
 
-export function tag(code, body = []) {
-  return body.length < 0x3f
+// long: 中身が短くても長いタグヘッダにする。ビットマップ定義タグは長いヘッダでないと実機が読まない。
+export function tag(code, body = [], long = false) {
+  return body.length < 0x3f && !long
     ? [...u16((code << 6) | body.length), ...body]
     : [...u16((code << 6) | 0x3f), ...u32(body.length), ...body];
 }
@@ -88,16 +89,35 @@ export const DefineSprite = (id, frames, tags) => tag(39, [...u16(id), ...u16(fr
 export const RemoveObject2 = (depth) => tag(28, u16(depth));
 
 // PlaceObject2。id があれば配置、move があれば既存の変更（両方なら置き換え）。
-export function PlaceObject2({ depth, id, move = false, matrix: m, cxform: cx, name, clipDepth }) {
+export function PlaceObject2({ depth, id, move = false, matrix: m, cxform: cx, ratio, name, clipDepth }) {
   const flags = (move ? 0x01 : 0) | (id !== undefined ? 0x02 : 0) | (m ? 0x04 : 0) | (cx ? 0x08 : 0) |
-    (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0);
+    (ratio !== undefined ? 0x10 : 0) | (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0);
   return tag(26, [
     flags, ...u16(depth),
     ...(id !== undefined ? u16(id) : []),
     ...(m ? matrix(m) : []),
     ...(cx ? cxform(cx) : []),
+    ...(ratio !== undefined ? u16(ratio) : []),
     ...(name !== undefined ? cstr(name) : []),
     ...(clipDepth !== undefined ? u16(clipDepth) : []),
+  ]);
+}
+
+// PlaceObject3。PlaceObject2 の項目に加えて blendMode（番号）、filters（FILTER のバイト列の配列）、visible。
+export function PlaceObject3({ depth, id, move = false, matrix: m, cxform: cx, name, clipDepth, blendMode, filters, visible }) {
+  const flags = (move ? 0x01 : 0) | (id !== undefined ? 0x02 : 0) | (m ? 0x04 : 0) | (cx ? 0x08 : 0) |
+    (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0);
+  const flags2 = (filters ? 0x01 : 0) | (blendMode !== undefined ? 0x02 : 0) | (visible !== undefined ? 0x20 : 0);
+  return tag(70, [
+    flags, flags2, ...u16(depth),
+    ...(id !== undefined ? u16(id) : []),
+    ...(m ? matrix(m) : []),
+    ...(cx ? cxform(cx) : []),
+    ...(name !== undefined ? cstr(name) : []),
+    ...(clipDepth !== undefined ? u16(clipDepth) : []),
+    ...(filters ? [filters.length, ...filters.flat()] : []),
+    ...(blendMode !== undefined ? [blendMode] : []),
+    ...(visible !== undefined ? [visible ? 1 : 0] : []),
   ]);
 }
 
@@ -125,9 +145,10 @@ const lineStyle2 = ({ width, join = 0, miterLimit = 3, color }) => [
  *   ['line', dx, dy]
  *   ['curve', 制御点 dx, dy, 終点 dx, dy]               終点は制御点からの差分
  */
-export function DefineShape({ id, version = 1, bounds, fills = [], lines = [], records }) {
-  let fillBits = 32 - Math.clz32(fills.length);
-  let lineBits = 32 - Math.clz32(lines.length);
+// SHAPE のレコード列（NumFillBits / NumLineBits から EndShapeRecord まで）をビット列にする。
+function shapeBits(records, fillCount, lineCount) {
+  let fillBits = 32 - Math.clz32(fillCount);
+  let lineBits = 32 - Math.clz32(lineCount);
   const bits = new Bits().ub(4, fillBits).ub(4, lineBits);
   for (const [type, ...args] of records) {
     if (type === 'style') {
@@ -163,7 +184,11 @@ export function DefineShape({ id, version = 1, bounds, fills = [], lines = [], r
       }
     }
   }
-  bits.ub(6, 0); // EndShapeRecord
+  return bits.ub(6, 0); // EndShapeRecord
+}
+
+export function DefineShape({ id, version = 1, bounds, fills = [], lines = [], records }) {
+  const bits = shapeBits(records, fills.length, lines.length);
   return tag({ 1: 2, 2: 22, 3: 32, 4: 83 }[version], [
     ...u16(id), ...rect(...bounds),
     ...(version === 4 ? [...rect(...bounds), 0x01] : []), // EdgeBounds（ここでは同じ値）、UsesScalingStrokes
@@ -171,6 +196,215 @@ export function DefineShape({ id, version = 1, bounds, fills = [], lines = [], r
     lines.length, ...lines.flat(),
     ...bits.bytes(),
   ]);
+}
+
+// --- フィルタ ---
+const fixed32 = (v) => u32(Math.round(v * 65536) >>> 0);
+const float32 = (v) => [...new Uint8Array(new Float32Array([v]).buffer)];
+export const blurFilter = (x, y, passes) => [1, ...fixed32(x), ...fixed32(y), passes << 3];
+// flags: 0x80 内側 / 0x40 ノックアウト / 0x20 元の絵も描く。下位 5 ビットはぼかしの回数。
+const dropShadowFilter = ({ color, blur, angle, distance, strength = 1, flags = 0x20, passes = 1 }) => [
+  0, ...color, ...fixed32(blur), ...fixed32(blur), ...fixed32(angle), ...fixed32(distance), ...u16(Math.round(strength * 256)), flags | passes,
+];
+const glowFilter = ({ color, blur, strength = 1, flags = 0x20, passes = 1 }) => [
+  2, ...color, ...fixed32(blur), ...fixed32(blur), ...u16(Math.round(strength * 256)), flags | passes,
+];
+const colorMatrixFilter = (m) => [6, ...m.flatMap(float32)];
+
+// --- ボタン ---
+// records: [{ states, id, depth, matrix, cxform }]。states は 1 通常 / 2 マウスが乗った状態 / 4 押下 / 8 当たり判定 の和。
+// DefineButton2 のレコードは色変換を必ず持つ（指定が無ければ「変換なし」の 1 バイト）。
+const buttonRecords = (records, version) => records.flatMap((rec) => [
+  rec.states, ...u16(rec.id), ...u16(rec.depth), ...matrix(rec.matrix),
+  ...(version === 2 ? (rec.cxform ? cxform(rec.cxform) : [0]) : []),
+]);
+const DefineButton = (id, records) => tag(7, [...u16(id), ...buttonRecords(records, 1), 0, 0]); // 末尾はレコード終端とアクション終端
+const DefineButton2 = (id, records) => tag(34, [...u16(id), 0, ...u16(0), ...buttonRecords(records, 2), 0]); // アクションなし
+
+// --- モーフ図形 ---
+// DefineMorphShape。fills / lines は MORPHFILLSTYLE / MORPHLINESTYLE のバイト列（開始と終了の値を並べたもの）。
+// startRecords は塗り・線の指定つき、endRecords は移動と辺だけ。
+export function DefineMorphShape({ id, startBounds, endBounds, fills = [], lines = [], startRecords, endRecords }) {
+  const styles = [fills.length, ...fills.flat(), lines.length, ...lines.flat()];
+  const start = shapeBits(startRecords, fills.length, lines.length).bytes();
+  const end = shapeBits(endRecords, 0, 0).bytes();
+  return tag(46, [
+    ...u16(id), ...rect(...startBounds), ...rect(...endBounds),
+    ...u32(styles.length + start.length), // EndEdges までのバイト数
+    ...styles, ...start, ...end,
+  ]);
+}
+
+// --- フォントとテキスト ---
+// テスト用のグリフ。em は 1024、原点はベースラインの左端、y は下向き。O の穴は逆回りで描く。
+const GLYPHS = {
+  I: [['style', { moveTo: [250, -700], fill1: 1 }], ['line', 150, 0], ['line', 0, 700], ['line', -150, 0], ['line', 0, -700]],
+  L: [
+    ['style', { moveTo: [100, -700], fill1: 1 }],
+    ['line', 150, 0], ['line', 0, 550], ['line', 350, 0], ['line', 0, 150], ['line', -500, 0], ['line', 0, -700],
+  ],
+  O: [
+    ['style', { moveTo: [100, -700], fill1: 1 }], ['line', 500, 0], ['line', 0, 700], ['line', -500, 0], ['line', 0, -700],
+    ['style', { moveTo: [250, -550] }], ['line', 0, 400], ['line', 200, 0], ['line', 0, -400], ['line', -200, 0],
+  ],
+};
+const CHARS = Object.keys(GLYPHS).sort(); // 文字コード順 = グリフ番号順
+const ADVANCE = 700;
+const scaled = (records, k) => records.map(([type, ...args]) => (type === 'style'
+  ? [type, { ...args[0], moveTo: args[0].moveTo?.map((v) => v * k) }]
+  : [type, ...args.map((v) => v * k)]));
+const glyphShapes = (k) => CHARS.map((ch) => shapeBits(scaled(GLYPHS[ch], k), 1, 0).bytes());
+// 各グリフの位置（オフセット表の先頭から）と、その後ろの位置。
+function glyphOffsets(shapes, tableSize) {
+  let pos = tableSize;
+  const offsets = shapes.map((shape) => {
+    const at = pos;
+    pos += shape.length;
+    return at;
+  });
+  return { offsets, end: pos };
+}
+
+// DefineFont（グリフだけ。文字コードや送り幅は持たない）。
+const DefineFont = (id) => {
+  const shapes = glyphShapes(1);
+  const { offsets } = glyphOffsets(shapes, shapes.length * 2);
+  return tag(10, [...u16(id), ...offsets.flatMap(u16), ...shapes.flat()]);
+};
+
+// DefineFont2 / DefineFont3（文字コード表とレイアウト情報つき）。DefineFont3 は座標が 20 倍。
+function DefineFont2({ id, version = 2, name }) {
+  const k = version === 3 ? 20 : 1;
+  const shapes = glyphShapes(k);
+  const { offsets, end } = glyphOffsets(shapes, (shapes.length + 1) * 2);
+  const nameBytes = [...new TextEncoder().encode(name)];
+  return tag(version === 3 ? 75 : 48, [
+    ...u16(id), 0x80 | 0x04, 1, nameBytes.length, ...nameBytes, // HasLayout, WideCodes / 言語コード / 名前
+    ...u16(shapes.length), ...offsets.flatMap(u16), ...u16(end), ...shapes.flat(),
+    ...CHARS.flatMap((ch) => u16(ch.charCodeAt(0))),
+    ...u16(800 * k), ...u16(200 * k), ...u16(0), // ascent, descent, leading
+    ...CHARS.flatMap(() => u16(ADVANCE * k)),
+    ...CHARS.flatMap(() => rect(0, 0, 0, 0)),
+    ...u16(0), // カーニングなし
+  ]);
+}
+
+// 文字列を、高さ height のときのグリフ番号と送り幅の列にする。
+const glyphRun = (str, height) => [...str].map((ch) => [CHARS.indexOf(ch), Math.round((ADVANCE * height) / 1024)]);
+
+// DefineText / DefineText2。records: [{ fontId, height, color, x, y, glyphs: [[番号, 送り幅], ...] }]
+function DefineText({ id, version = 1, bounds, matrix: m, records }) {
+  const all = records.flatMap((rec) => rec.glyphs);
+  const glyphBits = Math.max(1, 32 - Math.clz32(Math.max(...all.map((g) => g[0]))));
+  const advanceBits = sbits(...all.map((g) => g[1]));
+  return tag(version === 2 ? 33 : 11, [
+    ...u16(id), ...rect(...bounds), ...matrix(m), glyphBits, advanceBits,
+    ...records.flatMap((rec) => {
+      const bits = new Bits();
+      for (const [index, advance] of rec.glyphs) bits.ub(glyphBits, index).sb(advanceBits, advance);
+      return [
+        0x80 | (rec.fontId !== undefined ? 0x08 : 0) | (rec.color ? 0x04 : 0) | (rec.y !== undefined ? 0x02 : 0) | (rec.x !== undefined ? 0x01 : 0),
+        ...(rec.fontId !== undefined ? u16(rec.fontId) : []),
+        ...(rec.color ?? []),
+        ...(rec.x !== undefined ? u16(rec.x & 0xffff) : []),
+        ...(rec.y !== undefined ? u16(rec.y & 0xffff) : []),
+        ...(rec.fontId !== undefined ? u16(rec.height) : []),
+        rec.glyphs.length, ...bits.bytes(),
+      ];
+    }),
+    0,
+  ]);
+}
+
+// DefineEditText（読み取り専用・選択不可）。align: 0 左 / 1 右 / 2 中央。
+function DefineEditText({ id, bounds, fontId, height, color, text, multiline, wordWrap, border, useOutlines, html, align = 0, leading = 0 }) {
+  return tag(37, [
+    ...u16(id), ...rect(...bounds),
+    0x80 | (wordWrap ? 0x40 : 0) | (multiline ? 0x20 : 0) | 0x08 | 0x04 | (fontId !== undefined ? 0x01 : 0),
+    0x20 | 0x10 | (border ? 0x08 : 0) | (html ? 0x02 : 0) | (useOutlines ? 0x01 : 0),
+    ...(fontId !== undefined ? [...u16(fontId), ...u16(height)] : []),
+    ...color,
+    align, ...u16(0), ...u16(0), ...u16(0), ...u16(leading & 0xffff), // 左右の余白、字下げ、行間
+    0, // 変数名なし
+    ...cstr(text),
+  ]);
+}
+
+// --- ビットマップ ---
+// type: 0x40 繰り返し / 0x41 繰り返さない（どちらも補間あり）、0x42 / 0x43 は同じく補間なし。
+export const bitmapFill = (type, id, m) => [type, ...u16(id), ...matrix(m)];
+
+/**
+ * DefineBitsLossless / 2。pixel(x, y) の返すもの:
+ *   format 3: カラーテーブルの番号（table は [r, g, b] か、alpha なら [r, g, b, a] の列）
+ *   format 4: [r, g, b]（各 5 ビット）
+ *   format 5: [r, g, b]、alpha なら [r, g, b, a]
+ * アルファつきの色は乗算前の値で渡す（ファイルには乗算済みで書く）。
+ */
+export function DefineBitsLossless({ id, format, width, height, alpha = false, table = [], pixel }) {
+  const premultiplied = ([r, g, b, a]) => [Math.round((r * a) / 255), Math.round((g * a) / 255), Math.round((b * a) / 255), a];
+  const data = table.flatMap((c) => (alpha ? premultiplied(c) : c));
+  for (let y = 0; y < height; y++) {
+    const row = [];
+    for (let x = 0; x < width; x++) {
+      const p = pixel(x, y);
+      if (format === 3) {
+        row.push(p);
+      } else if (format === 4) {
+        const v = (p[0] << 10) | (p[1] << 5) | p[2];
+        row.push(v >> 8, v & 0xff);
+      } else if (alpha) {
+        const [r, g, b, a] = premultiplied(p);
+        row.push(a, r, g, b);
+      } else {
+        // 予約バイトは仕様では 0 だが、実機はこれをアルファとして持つので、0 だとアルファを含む
+        // 色変換をかけたときに消える。実際のファイルと同じく 0xFF を入れる。
+        row.push(0xff, ...p);
+      }
+    }
+    while (row.length % 4) row.push(0); // 行は 32 ビット境界まで詰める
+    data.push(...row);
+  }
+  return tag(alpha ? 36 : 20, [
+    ...u16(id), format, ...u16(width), ...u16(height),
+    ...(format === 3 ? [table.length - 1] : []),
+    ...deflateSync(Uint8Array.from(data)),
+  ], true);
+}
+
+const be32 = (v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+// 8 ビット RGBA の PNG。pixel(x, y) は [r, g, b, a]。
+function png(width, height, pixel) {
+  const raw = [];
+  for (let y = 0; y < height; y++) {
+    raw.push(0);
+    for (let x = 0; x < width; x++) raw.push(...pixel(x, y));
+  }
+  const chunk = (type, data) => {
+    const body = [...new TextEncoder().encode(type), ...data];
+    return [...be32(data.length), ...body, ...be32(crc32(Uint8Array.from(body)))];
+  };
+  return [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ...chunk('IHDR', [...be32(width), ...be32(height), 8, 6, 0, 0, 0]),
+    ...chunk('IDAT', [...deflateSync(Uint8Array.from(raw))]),
+    ...chunk('IEND', []),
+  ];
+}
+
+// 48x32 のなだらかなグラデーションの JPEG（sips で作成）。
+const photo = [...readFileSync(new URL('assets/photo.jpg', import.meta.url))];
+// JPEG を、量子化表・ハフマン表だけのストリーム (JPEGTables 用) と残りに分ける。
+function splitJPEG(jpeg) {
+  const tables = [0xff, 0xd8];
+  const image = [0xff, 0xd8];
+  let pos = 2;
+  while (jpeg[pos + 1] !== 0xda) {
+    const end = pos + 2 + ((jpeg[pos + 2] << 8) | jpeg[pos + 3]);
+    (jpeg[pos + 1] === 0xdb || jpeg[pos + 1] === 0xc4 ? tables : image).push(...jpeg.slice(pos, end));
+    pos = end;
+  }
+  return { tables: [...tables, 0xff, 0xd9], image: [...image, ...jpeg.slice(pos)] };
 }
 
 // 原点から右下へ size twips の正方形（時計回り。右側が内側なので fill1）。
@@ -187,7 +421,7 @@ const blob = Array.from({ length: 4096 }, (_, i) => {
   return (seed >>> 16) & 0xff;
 });
 
-const rectRecords = (x, y, w, h, style) => [
+export const rectRecords = (x, y, w, h, style) => [
   ['style', { moveTo: [x, y], ...style }], ['line', w, 0], ['line', 0, h], ['line', -w, 0], ['line', 0, -h],
 ];
 const GRAD = 1400 / 32768; // グラデーションの定義域 (±16384) を 1400 twips 四方に縮める倍率
@@ -253,6 +487,285 @@ export const fixtures = {
         depth: 2, id: 1, matrix: { a: 0.5, b: 0.25, c: -0.25, d: 0.5, tx: 1200, ty: 1700 },
         cxform: { mult: [128, 256, 256, 192], add: [0, 0, 64, 0] },
       }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // 可逆ビットマップの各形式（13x9 画素を補間なしで 4 倍に拡大）。上段左から
+  // 24 ビット、カラーテーブル、15 ビット。下段はアルファつき 32 ビット、アルファつきカラーテーブル、
+  // カラーテーブルの繰り返し塗り。右下は補間ありの塗りを回転・色変換して置いたもの。
+  'bitmap-lossless': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineBitsLossless({ id: 1, format: 5, width: 13, height: 9, pixel: (x, y) => [x * 20, y * 28, (x ^ y) & 1 ? 255 : 0] }),
+      DefineBitsLossless({
+        id: 2, format: 3, width: 13, height: 9, table: [[255, 255, 255], [220, 0, 0], [0, 140, 0], [0, 0, 200]],
+        pixel: (x, y) => (x + y * 2) % 4,
+      }),
+      DefineBitsLossless({ id: 3, format: 4, width: 13, height: 9, pixel: (x, y) => [x * 2, 31 - y * 3, (x + y) % 32] }),
+      DefineBitsLossless({ id: 4, format: 5, alpha: true, width: 13, height: 9, pixel: (x, y) => [255, y * 28, 0, x * 21] }),
+      DefineBitsLossless({
+        id: 5, format: 3, alpha: true, width: 13, height: 9,
+        table: [[0, 0, 0, 0], [0, 0, 255, 255], [0, 0, 255, 128], [255, 255, 0, 64]],
+        pixel: (x, y) => (x + y) % 4,
+      }),
+      square(6, 4400, [0, 160, 160]), // アルファを見るための下地
+      DefineShape({
+        id: 7, version: 3, bounds: [0, 4000, 0, 1600],
+        fills: [
+          bitmapFill(0x43, 1, { a: 80, d: 80 }),
+          bitmapFill(0x43, 2, { a: 80, d: 80, tx: 1200 }),
+          bitmapFill(0x43, 3, { a: 80, d: 80, tx: 2400 }),
+          bitmapFill(0x43, 4, { a: 80, d: 80, ty: 880 }),
+          bitmapFill(0x43, 5, { a: 80, d: 80, tx: 1200, ty: 880 }),
+          bitmapFill(0x42, 2, { a: 20, d: 20, tx: 2400, ty: 880 }),
+        ],
+        records: [
+          ...rectRecords(0, 0, 1040, 720, { fill1: 1 }),
+          ...rectRecords(1200, 0, 1040, 720, { fill1: 2 }),
+          ...rectRecords(2400, 0, 1040, 720, { fill1: 3 }),
+          ...rectRecords(0, 880, 1040, 720, { fill1: 4 }),
+          ...rectRecords(1200, 880, 1040, 720, { fill1: 5 }),
+          ...rectRecords(2400, 880, 1040, 720, { fill1: 6 }),
+        ],
+      }),
+      DefineShape({
+        id: 8, version: 3, bounds: [0, 1040, 0, 720],
+        fills: [bitmapFill(0x41, 1, { a: 80, d: 80 })],
+        records: rectRecords(0, 0, 1040, 720, { fill1: 1 }),
+      }),
+      PlaceObject2({ depth: 1, id: 6, matrix: { tx: 200, ty: 1000 } }),
+      PlaceObject2({ depth: 2, id: 7, matrix: { tx: 300, ty: 200 } }),
+      PlaceObject2({
+        depth: 3, id: 8, matrix: { a: COS30, b: 0.5, c: -0.5, d: COS30, tx: 3900, ty: 1900 },
+        cxform: { mult: [256, 128, 256, 192], add: [0, 64, 0, 0] },
+      }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // JPEG 系のビットマップ（48x32 を等倍で）。左上から JPEG2（古い SWF にある余分なヘッダつき）、
+  // JPEGTables + DefineBits、JPEG3（アルファつき）、JPEG2 に入れた PNG。
+  'bitmap-jpeg': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      tag(8, splitJPEG(photo).tables), // JPEGTables
+      tag(21, [...u16(1), 0xff, 0xd9, 0xff, 0xd8, ...photo], true),
+      tag(6, [...u16(2), ...splitJPEG(photo).image], true),
+      tag(35, [
+        ...u16(3), ...u32(photo.length), ...photo,
+        ...deflateSync(Uint8Array.from({ length: 48 * 32 }, (_, i) => Math.round(((i % 48) * 255) / 47))),
+      ], true),
+      tag(21, [...u16(4), ...png(48, 32, (x, y) => [x * 5, 255 - y * 8, (x >> 2) & 1 ? 255 : 0, y < 16 ? 255 : 128])], true),
+      square(5, 4400, [0, 160, 160]),
+      DefineShape({
+        id: 6, version: 3, bounds: [0, 4160, 0, 640],
+        fills: [1, 2, 3, 4].map((id, i) => bitmapFill(0x41, id, { a: 20, d: 20, tx: i * 1080 })),
+        records: [1, 2, 3, 4].flatMap((n, i) => rectRecords(i * 1080, 0, 960, 640, { fill1: n })),
+      }),
+      PlaceObject2({ depth: 1, id: 5, matrix: { tx: 200, ty: 400 } }),
+      PlaceObject2({ depth: 2, id: 6, matrix: { tx: 300, ty: 200 } }),
+      PlaceObject2({ depth: 3, id: 6, matrix: { a: 2, d: 2, tx: -600, ty: 1400 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // フォントとテキスト。左上: DefineFont2 を使う 2 行の静的テキスト。右上: DefineFont3 と半透明の色、
+  // 行列（横に拡大して傾ける）つきの DefineText2。左下: DefineFont（v1）。右下: 枠つき・中央寄せ・
+  // 2 行のテキストフィールド（埋め込みフォント）。
+  text: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineFont2({ id: 1, name: 'Flapp Test' }),
+      DefineFont2({ id: 2, version: 3, name: 'Flapp Test 3' }),
+      DefineFont(3),
+      DefineText({
+        id: 10, bounds: [0, 1800, 0, 1800],
+        records: [
+          { fontId: 1, height: 800, color: [200, 0, 0], x: 0, y: 800, glyphs: glyphRun('LOL', 800) },
+          { color: [0, 0, 200], x: 100, y: 1700, glyphs: glyphRun('IO', 800) },
+        ],
+      }),
+      DefineText({
+        id: 11, version: 2, bounds: [0, 1800, 0, 500], matrix: { a: 1.5, c: -0.3 },
+        records: [{ fontId: 2, height: 400, color: [0, 120, 0, 128], x: 0, y: 400, glyphs: glyphRun('LOLI', 400) }],
+      }),
+      DefineText({
+        id: 12, bounds: [0, 1300, 0, 600],
+        records: [{ fontId: 3, height: 600, color: [0, 0, 0], x: 0, y: 600, glyphs: glyphRun('IOI', 600) }],
+      }),
+      DefineEditText({
+        id: 13, bounds: [0, 2200, 0, 1300], fontId: 1, height: 500, color: [0, 0, 160, 255],
+        text: 'LOL\rIO', multiline: true, border: true, useOutlines: true, align: 2, leading: 40,
+      }),
+      PlaceObject2({ depth: 1, id: 10, matrix: { tx: 200, ty: 100 } }),
+      PlaceObject2({ depth: 2, id: 11, matrix: { tx: 2700, ty: 300 } }),
+      PlaceObject2({ depth: 3, id: 12, matrix: { tx: 200, ty: 2200 } }),
+      PlaceObject2({ depth: 4, id: 13, matrix: { tx: 2400, ty: 1700 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // フィルタ。上段左から: ぼかし 4x4、ぼかし 8x2 を 3 回、影（45 度・距離 4・半透明の黒）、赤い光彩（強さ 2、2 回）。
+  // 下段左から: 青い内側の光彩、ノックアウトの影、色行列（赤緑青の入れ替えとアルファ半分）、ぼかしと影の重ねがけ。
+  filter: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 600, [255, 160, 0]),
+      ...[
+        [blurFilter(4, 4, 1)],
+        [blurFilter(8, 2, 3)],
+        [dropShadowFilter({ color: [0, 0, 0, 128], blur: 4, angle: Math.PI / 4, distance: 4 })],
+        [glowFilter({ color: [255, 0, 0, 255], blur: 6, strength: 2, passes: 2 })],
+        [glowFilter({ color: [0, 0, 255, 255], blur: 6, flags: 0x80 | 0x20 })],
+        [dropShadowFilter({ color: [0, 0, 0, 255], blur: 2, angle: 0, distance: 6, flags: 0x40 | 0x20 })],
+        [colorMatrixFilter([0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0.5, 0])],
+        [blurFilter(3, 3, 1), dropShadowFilter({ color: [0, 0, 160, 255], blur: 4, angle: Math.PI / 2, distance: 5 })],
+      ].map((filters, i) => PlaceObject3({
+        depth: 1 + i, id: 1, filters, matrix: { tx: 400 + (i % 4) * 1100, ty: 400 + Math.floor(i / 4) * 1400 },
+      })),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // ボタンは通常状態だけが表示される。左: DefineButton2（通常 = 赤と、色変換をかけた小さい青。
+  // 乗った状態 = 青、押下 = 緑は表示されない）。右: DefineButton（通常 = 青）をスプライトの中に置く。
+  button: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 1000, [255, 0, 0]),
+      square(2, 1000, [0, 0, 255]),
+      square(3, 1000, [0, 160, 0]),
+      DefineButton2(4, [
+        { states: 1 | 8, id: 1, depth: 1 },
+        { states: 1, id: 2, depth: 2, matrix: { a: 0.4, d: 0.4, tx: 300, ty: 300 }, cxform: { mult: [256, 256, 256, 128], add: [128, 0, 0, 0] } },
+        { states: 2, id: 2, depth: 1 },
+        { states: 4, id: 3, depth: 1, matrix: { tx: 100, ty: 100 } },
+      ]),
+      DefineButton(5, [{ states: 1 | 2 | 4 | 8, id: 2, depth: 1, matrix: { a: 0.5, d: 0.5 } }]),
+      DefineSprite(6, 1, [PlaceObject2({ depth: 1, id: 5, matrix: { tx: 200, ty: 200 } }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 1, id: 4, matrix: { tx: 400, ty: 400 } }),
+      PlaceObject2({ depth: 2, id: 6, matrix: { a: COS30, b: 0.5, c: -0.5, d: COS30, tx: 2800, ty: 400 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // 注意: 塗りを fill1 側だけに指定したモーフ図形は、実機（デバッガ版 35.0.0.60）が描画時に
+  // 不定期にクラッシュする（存在しない塗りを参照する）。原因は未特定。ここでは fill0 側に指定している。
+  // モーフ図形を比率 0, 1/4, 1/2, 3/4, 1 で並べる。上段: 赤い正方形から青いひし形（2 辺は曲線）へ。
+  // 塗りの色、線の幅と色も変わる。下段: 線形グラデーションの色・位置・行列と、矩形の幅が変わる。
+  morph: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineMorphShape({
+        id: 1, startBounds: [-10, 810, -10, 810], endBounds: [-160, 960, -160, 960],
+        fills: [[0x00, 255, 0, 0, 255, 0, 0, 255, 255]],
+        lines: [[...u16(20), ...u16(120), 0, 0, 0, 255, 0, 160, 0, 255]],
+        startRecords: rectRecords(0, 0, 800, 800, { fill0: 1, line: 1 }),
+        endRecords: [
+          ['style', { moveTo: [400, -100] }],
+          ['curve', 400, 0, 100, 500], ['line', -500, 500], ['curve', -400, 0, -100, -500], ['line', 500, -500],
+        ],
+      }),
+      DefineMorphShape({
+        id: 2, startBounds: [0, 400, 0, 800], endBounds: [0, 800, 0, 800],
+        fills: [[
+          0x10, ...matrix({ a: 400 / 32768, d: 400 / 32768, tx: 200, ty: 400 }), ...matrix({ a: 800 / 32768, d: 800 / 32768, tx: 400, ty: 400 }),
+          2, 0, 255, 0, 0, 255, 64, 0, 0, 255, 255, 255, 255, 255, 0, 255, 255, 0, 255, 0, 255,
+        ]],
+        startRecords: rectRecords(0, 0, 400, 800, { fill0: 1 }),
+        endRecords: [['style', { moveTo: [0, 0] }], ['line', 800, 0], ['line', 0, 800], ['line', -800, 0], ['line', 0, -800]],
+      }),
+      ...[0, 16384, 32768, 49152, 65535].flatMap((ratio, i) => [
+        PlaceObject2({ depth: 1 + i, id: 1, ratio, matrix: { a: 0.7, d: 0.7, tx: 250 + i * 900, ty: 300 } }),
+        PlaceObject2({ depth: 11 + i, id: 2, ratio, matrix: { tx: 200 + i * 900, ty: 1700 } }),
+      ]),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // クリップ層（マスク）。左上: 半透明の塗りと太い線を持つ丸で、深度 3〜4 を切り抜く（深度 5 は対象外）。
+  // 右上: スプライト（正方形 2 つ）をマスクにする。下: マスクの範囲の中にもう 1 つマスクがある入れ子。
+  mask: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 1200, [255, 0, 0]),
+      square(2, 800, [0, 0, 255]),
+      square(3, 300, [0, 160, 0]),
+      DefineShape({
+        id: 4, version: 3, bounds: [-700, 700, -700, 700],
+        fills: [solid(0, 0, 0, 64)], lines: [lineStyle(200, 255, 0, 255, 255)],
+        records: [
+          ['style', { moveTo: [600, 0], fill1: 1, line: 1 }],
+          ['curve', 0, 600, -600, 0], ['curve', -600, 0, 0, -600], ['curve', 0, -600, 600, 0], ['curve', 600, 0, 0, 600],
+        ],
+      }),
+      square(5, 400, [0, 0, 0]),
+      DefineSprite(6, 1, [
+        PlaceObject2({ depth: 1, id: 5 }), PlaceObject2({ depth: 2, id: 5, matrix: { tx: 500, ty: 500 } }), ShowFrame(), End(),
+      ]),
+      square(7, 1400, [0, 0, 255]),
+      square(8, 1000, [0, 0, 0]),
+      square(9, 1600, [0, 0, 255]),
+      // 丸のマスク
+      PlaceObject2({ depth: 2, id: 4, matrix: { tx: 900, ty: 900 }, clipDepth: 4 }),
+      PlaceObject2({ depth: 3, id: 1, matrix: { tx: 300, ty: 300 } }),
+      PlaceObject2({ depth: 4, id: 2, matrix: { tx: 900, ty: 900 } }),
+      PlaceObject2({ depth: 5, id: 3, matrix: { tx: 1500, ty: 300 } }),
+      // スプライトのマスク
+      PlaceObject2({ depth: 10, id: 6, matrix: { tx: 2600, ty: 400 }, clipDepth: 11 }),
+      PlaceObject2({ depth: 11, id: 7, matrix: { tx: 2400, ty: 200 } }),
+      // 入れ子
+      PlaceObject2({ depth: 20, id: 8, matrix: { tx: 600, ty: 1900 }, clipDepth: 30 }),
+      PlaceObject2({ depth: 21, id: 1, matrix: { tx: 400, ty: 1700 } }),
+      PlaceObject2({ depth: 22, id: 8, matrix: { tx: 1100, ty: 2100 }, clipDepth: 23 }),
+      PlaceObject2({ depth: 23, id: 9, matrix: { tx: 300, ty: 1600 } }),
+      PlaceObject2({ depth: 24, id: 3, matrix: { tx: 700, ty: 2000 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // ブレンドモード。赤・緑・青の横縞の上に、橙の四角を各モードで重ねる（上段は不透明、下段は半透明）。
+  // 左から multiply, screen, lighten, darken, difference, add, subtract, invert, overlay, hardlight。
+  // 右下は layer の中での alpha と erase。
+  blend: swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineShape({
+        id: 1, bounds: [0, 4400, 0, 600], fills: [solid(200, 40, 40), solid(40, 200, 40), solid(40, 40, 200)],
+        records: [0, 1, 2].flatMap((i) => rectRecords(0, i * 200, 4400, 200, { fill1: i + 1 })),
+      }),
+      DefineShape({
+        id: 2, version: 3, bounds: [0, 340, 0, 500], fills: [solid(255, 160, 64, 255)],
+        records: rectRecords(0, 0, 340, 500, { fill1: 1 }),
+      }),
+      square(3, 700, [0, 0, 255]),
+      DefineShape({
+        id: 4, version: 3, bounds: [0, 400, 0, 400], fills: [solid(255, 255, 255, 128)],
+        records: rectRecords(0, 0, 400, 400, { fill1: 1 }),
+      }),
+      DefineSprite(5, 1, [PlaceObject2({ depth: 1, id: 3 }), PlaceObject3({ depth: 2, id: 4, matrix: { tx: 150, ty: 150 }, blendMode: 11 }), ShowFrame(), End()]),
+      DefineSprite(6, 1, [PlaceObject2({ depth: 1, id: 3 }), PlaceObject3({ depth: 2, id: 4, matrix: { tx: 150, ty: 150 }, blendMode: 12 }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
+      PlaceObject2({ depth: 2, id: 1, matrix: { tx: 200, ty: 1000 } }),
+      ...[3, 4, 5, 6, 7, 8, 9, 10, 13, 14].flatMap((mode, i) => [
+        PlaceObject3({ depth: 10 + i, id: 2, matrix: { tx: 250 + i * 440, ty: 250 }, blendMode: mode }),
+        PlaceObject3({
+          depth: 30 + i, id: 2, matrix: { tx: 250 + i * 440, ty: 1050 }, blendMode: mode,
+          cxform: { mult: [256, 256, 256, 128] },
+        }),
+      ]),
+      PlaceObject2({ depth: 50, id: 1, matrix: { a: 0.5, tx: 200, ty: 2100 } }),
+      PlaceObject3({ depth: 51, id: 5, matrix: { tx: 300, ty: 1900 }, blendMode: 2 }),
+      PlaceObject3({ depth: 52, id: 6, matrix: { tx: 1300, ty: 1900 }, blendMode: 2 }),
       ShowFrame(),
       End(),
     ],
