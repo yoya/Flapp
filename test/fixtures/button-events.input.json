@@ -1,0 +1,9 @@
+[
+  ["move", 10, 10], ["move", 70, 50], ["down"], ["up"],
+  ["down"], ["move", 10, 10], ["move", 70, 50], ["move", 10, 10], ["up"],
+  ["move", 70, 50], ["move", 130, 50], ["down"], ["move", 70, 50], ["up"],
+  ["key", "a"], ["key", "Enter"], ["key", "ArrowLeft"], ["key", " "], ["key", "z"], ["key", "y"], ["key", "x"],
+  ["move", 55, 205], ["down"], ["up"],
+  ["move", 43, 123], ["down"], ["up"],
+  ["move", 70, 150], ["down"], ["up"], ["move", 10, 10]
+]

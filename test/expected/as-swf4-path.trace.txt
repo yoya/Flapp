@@ -1,0 +1,5 @@
+mid t=5 child frame=3
+root f1
+leaf f3 parent t=5 self=3
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'm/t:t'
+root f2 /m/t frame=3 /m:t=5 m/t:t=[]

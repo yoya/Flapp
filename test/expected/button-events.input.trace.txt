@@ -1,0 +1,23 @@
+A rollOver
+A press
+A release
+A press
+A dragOut
+A dragOver
+A dragOut
+A releaseOutside
+A rollOver
+A rollOut
+B rollOver
+B press
+B dragOut
+B releaseOutside
+A rollOver
+A key a
+A key enter
+A key left
+B key space
+D key z
+E key y
+A rollOut
+C release

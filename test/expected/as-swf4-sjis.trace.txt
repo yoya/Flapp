@@ -1,0 +1,17 @@
+s=あい
+length=4 mblength=2
+substring(s,1,2)=あ
+substring(s,2,2)=[]
+substring(s,3,1)=[]
+mbsubstring(s,2,1)=い
+mbsubstring(s,1,5)=あい
+ord=130 mbord=33440
+chr(177)=ｱ mbchr(33440)=あ mbchr(65)=A
+chr(130) add chr(160)=
+length(hankaku)=1 mblength=1
+a eq a=1 a eq i=0 a lt i=1
+s add x=あいx
+var kanaA=[set by A] var kanaDi=[]
+var abc=[set by ABC]
+name=表 target=/表
+clip Ax via Ax=[アx] via Dix=[] via AX=[アx]

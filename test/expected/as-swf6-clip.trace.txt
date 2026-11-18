@@ -1,0 +1,45 @@
+eval card=[_level0.card]
+x via name=5
+x via eval=5
+x after "abc"=5
+x after ""=5
+x after "12abc"=5
+x after " 7"=7
+x after "8 "=7
+x after "1e1"=10
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ðŽQÆ‚µ‚Ä‚¢‚Ü‚· 'nothing'
+x after undefined=10
+visible after ""=true
+visible after "abc"=true
+visible after "2"=true
+visible after "0"=false
+visible after "true"=false
+name=renamed target=/renamed
+card size=56.6,56.6
+turned size=40,40
+mirror: 125 125 180
+flip: 125 125 0
+mirror xscale 50 -> 50 125 180
+flip rotation 90 -> 125 125 90
+x 0.15 -> 0.15
+x 2.999 -> 2.95
+x 1.975 -> 1.95
+x -1.975 -> -1.95
+x 0.049 -> 0
+x -0.049 -> 0
+x 100.126 -> 100.1
+x -16.85+17 -> 0.1
+xscale 77 -> 77 width=30.8
+xscale 33.3 -> 33.3 width=13.3
+xscale 0.01 -> 0.01 width=0
+xscale 150.5 -> 150.5 width=60.2
+xscale -50 -> -50 width=20
+xscale 100 -> 100 width=40
+alpha 33 -> 32.8125
+alpha 50 -> 50
+alpha 99 -> 98.828125
+alpha 100.4 -> 100.390625
+alpha 0.3 -> 0
+alpha -10 -> -9.765625
+alpha 300 -> 300
+alpha 100 -> 100

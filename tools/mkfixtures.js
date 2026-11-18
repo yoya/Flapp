@@ -89,17 +89,24 @@ export const DefineSprite = (id, frames, tags) => tag(39, [...u16(id), ...u16(fr
 export const RemoveObject2 = (depth) => tag(28, u16(depth));
 
 // PlaceObject2。id があれば配置、move があれば既存の変更（両方なら置き換え）。
-export function PlaceObject2({ depth, id, move = false, matrix: m, cxform: cx, ratio, name, clipDepth }) {
+// clipActions: [{ events, code }]。events は 0x01 load / 0x02 enterFrame / 0x04 unload などの和（SWF 6 以降の 32 ビット形式で書く）。
+export function PlaceObject2({ depth, id, move = false, matrix: m, cxform: cx, ratio, name, clipDepth, clipActions }) {
   const flags = (move ? 0x01 : 0) | (id !== undefined ? 0x02 : 0) | (m ? 0x04 : 0) | (cx ? 0x08 : 0) |
-    (ratio !== undefined ? 0x10 : 0) | (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0);
+    (ratio !== undefined ? 0x10 : 0) | (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0) |
+    (clipActions ? 0x80 : 0);
   return tag(26, [
     flags, ...u16(depth),
     ...(id !== undefined ? u16(id) : []),
     ...(m ? matrix(m) : []),
     ...(cx ? cxform(cx) : []),
     ...(ratio !== undefined ? u16(ratio) : []),
-    ...(name !== undefined ? cstr(name) : []),
+    ...(name !== undefined ? (Array.isArray(name) ? [...name, 0] : cstr(name)) : []), // 配列ならそのままのバイト列
     ...(clipDepth !== undefined ? u16(clipDepth) : []),
+    ...(clipActions ? [
+      ...u16(0), ...u32(clipActions.reduce((all, a) => all | a.events, 0)),
+      ...clipActions.flatMap((a) => [...u32(a.events), ...u32(a.code.length), ...a.code]),
+      ...u32(0),
+    ] : []),
   ]);
 }
 
@@ -218,8 +225,18 @@ const buttonRecords = (records, version) => records.flatMap((rec) => [
   rec.states, ...u16(rec.id), ...u16(rec.depth), ...matrix(rec.matrix),
   ...(version === 2 ? (rec.cxform ? cxform(rec.cxform) : [0]) : []),
 ]);
-const DefineButton = (id, records) => tag(7, [...u16(id), ...buttonRecords(records, 1), 0, 0]); // 末尾はレコード終端とアクション終端
-const DefineButton2 = (id, records) => tag(34, [...u16(id), 0, ...u16(0), ...buttonRecords(records, 2), 0]); // アクションなし
+// DefineButton の actions はアクションのバイト列（ボタンの上でマウスを離すと実行される）。
+const DefineButton = (id, records, actions = []) => tag(7, [...u16(id), ...buttonRecords(records, 1), 0, ...actions.flat(2), 0]);
+// DefineButton2 の actions は [{ cond, key, code }]。cond は 0x01 rollOver / 0x02 rollOut / 0x04 press / 0x08 release /
+// 0x10 dragOut / 0x20 dragOver / 0x40 releaseOutside の和、key は keyPress のキーコード。
+function DefineButton2(id, records, actions = []) {
+  const recs = [...buttonRecords(records, 2), 0];
+  const conds = actions.flatMap(({ cond = 0, key = 0, code }, i) => {
+    const body = [...code.flat(), 0];
+    return [...u16(i === actions.length - 1 ? 0 : 4 + body.length), ...u16(cond | (key << 9)), ...body];
+  });
+  return tag(34, [...u16(id), 0, ...u16(actions.length ? 2 + recs.length : 0), ...recs, ...conds]);
+}
 
 // --- モーフ図形 ---
 // DefineMorphShape。fills / lines は MORPHFILLSTYLE / MORPHLINESTYLE のバイト列（開始と終了の値を並べたもの）。
@@ -871,6 +888,282 @@ export const fixtures = {
     ],
   }),
 };
+
+// ボタンのイベント。A と B が隣り合い、C（DefineButton）が下にある。どの遷移でどのアクションが走るかを trace で確かめる。
+// 実機へ送る入力の手順は test/fixtures/button-events.input.json。
+{
+  const events = { rollOver: 0x01, rollOut: 0x02, press: 0x04, release: 0x08, dragOut: 0x10, dragOver: 0x20, releaseOutside: 0x40 };
+  const says = (text) => [PushString(text), Trace()];
+  const records = (hit) => [
+    { states: 1, id: 1, depth: 1 }, { states: 2, id: 2, depth: 1 }, { states: 4, id: 3, depth: 1 }, { states: 8, id: hit, depth: 1 },
+  ];
+  const button = (id, label, keys) => DefineButton2(id, records(1), [
+    ...Object.entries(events).map(([name, cond]) => ({ cond, code: says(`${label} ${name}`) })),
+    ...keys.map(([name, key]) => ({ key, code: says(`${label} key ${name}`) })),
+  ]);
+  fixtures['button-events'] = swf({
+    version: 6, width: 240, height: 240,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 1200, [160, 160, 160]), square(2, 1200, [80, 120, 255]), square(3, 1200, [255, 80, 80]),
+      // 当たり判定が円のボタン用（角は外れる）
+      DefineShape({
+        id: 4, bounds: [0, 1200, 0, 1200], fills: [solid(0, 0, 0)],
+        records: [
+          ['style', { moveTo: [600, 0], fill1: 1 }],
+          ['curve', 600, 0, 0, 600], ['curve', 0, 600, -600, 0], ['curve', -600, 0, 0, -600], ['curve', 0, -600, 600, 0],
+        ],
+      }),
+      button(10, 'A', [['a', 97], ['enter', 13], ['left', 1]]),
+      button(11, 'B', [['a', 97], ['space', 32]]),
+      DefineButton(12, records(4), [says('C release')]),
+      PlaceObject2({ depth: 1, id: 10, matrix: { tx: 800, ty: 400 } }),
+      PlaceObject2({ depth: 2, id: 11, matrix: { tx: 2000, ty: 400 } }),
+      PlaceObject2({ depth: 3, id: 12, matrix: { tx: 800, ty: 2400 } }),
+      // 同じキーに反応するボタンが複数あるとき、どれが実行されるか。E（ルート直下、深度 5）を先に置き、
+      // D（深度 4 のクリップの中）と F（深度 6 のクリップの中）を後から置く。
+      button(13, 'D', [['z', 122]]), button(14, 'E', [['z', 122], ['y', 121]]), button(15, 'F', [['y', 121]]),
+      DefineSprite(16, 1, [PlaceObject2({ depth: 1, id: 13 }), ShowFrame(), End()]),
+      DefineSprite(17, 1, [PlaceObject2({ depth: 1, id: 15 }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 5, id: 14, matrix: { a: 0.5, d: 0.5, tx: 3000, ty: 2400 } }),
+      PlaceObject2({ depth: 4, id: 16, matrix: { a: 0.5, d: 0.5, tx: 2200, ty: 2400 } }),
+      PlaceObject2({ depth: 6, id: 17, matrix: { a: 0.5, d: 0.5, tx: 3800, ty: 2400 } }),
+      // 見えなくしたクリップの中のボタン G。
+      button(18, 'G', [['x', 120]]),
+      DefineSprite(19, 1, [PlaceObject2({ depth: 1, id: 18 }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 7, id: 19, name: 'hidden', matrix: { a: 0.5, d: 0.5, tx: 800, ty: 3800 } }),
+      DoAction([PushString('hidden'), PushString('7'), PushString('0'), [0x23]]), // hidden._visible = 0
+      ShowFrame(), End(),
+    ],
+  });
+}
+
+// 太い線（幅 8 px）を持つ図形を、拡大・縦横比の違う拡大・斜めの変形をかけて置く。線幅がどう拡大されるかを確かめる。
+// 外接矩形は広めに取る（実機は描画範囲を外接矩形から決めるので、線がはみ出すと切れてしまう）。
+fixtures['stroke-scale'] = swf({
+  version: 8, width: 240, height: 240,
+  tags: [
+    SetBackgroundColor(0xee, 0xee, 0xee),
+    DefineShape({
+      id: 1, version: 3, bounds: [-300, 700, -300, 700],
+      fills: [solid(255, 255, 255, 255)], lines: [lineStyle(160, 81, 140, 204, 255)],
+      records: [['style', { moveTo: [0, 0], fill1: 1, line: 1 }], ['line', 400, 0], ['line', 0, 400], ['line', -400, 0], ['line', 0, -400]],
+    }),
+    DefineSprite(2, 1, [PlaceObject2({ depth: 1, id: 1, matrix: { a: 1.267, d: 1.267 } }), ShowFrame(), End()]),
+    PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
+    PlaceObject2({ depth: 2, id: 1, matrix: { a: 2, d: 2, tx: 1200, ty: 200 } }),
+    PlaceObject2({ depth: 3, id: 1, matrix: { a: 3, d: 1, tx: 2600, ty: 200 } }),
+    PlaceObject2({ depth: 4, id: 1, matrix: { a: 1, d: 3, tx: 200, ty: 1600 } }),
+    PlaceObject2({ depth: 5, id: 2, matrix: { a: 1.581, b: -0.255, c: -0.510, d: 1.446, tx: 1800, ty: 2400 } }),
+    PlaceObject2({ depth: 6, id: 1, matrix: { a: 0.5, d: 0.5, tx: 3600, ty: 3200 } }),
+    ShowFrame(), End(),
+  ],
+});
+
+// --- SWF 4 のアクション（FFDec では SWF 4 の命令列を作れないので手で組む） ---
+// 実物の SWF 4 と実機を突き合わせて見つかった挙動を、小さな SWF で固定する。
+const GetVariable = [0x1c], SetVariable = [0x1d], StringAdd = [0x21], GetProperty = [0x22], SetProperty = [0x23];
+const Stop = [0x07], Call = [0x9e, 0, 0];
+const GotoFrame2 = (play) => [0x9f, 1, 0, play ? 1 : 0];
+const FrameLabel = (name) => tag(43, cstr(name));
+const str = (x) => (typeof x === 'string' ? PushString(x) : x.flat());
+// trace(a add b add ...)。文字列は push、配列はその命令列（スタックに値を 1 つ残すもの）。
+const tr = (...parts) => [...parts.flatMap((part, i) => [...str(part), ...(i ? StringAdd : [])]), ...Trace()];
+const variable = (name) => [...PushString(name), ...GetVariable];
+const property = (target, index) => [...str(target), ...PushString(String(index)), ...GetProperty];
+const setProperty = (target, index, value) => [...PushString(target), ...PushString(String(index)), ...str(value), ...SetProperty];
+const binary = (name, op, a, b) => tr(`${a} ${name} ${b} = [`, [PushString(a), PushString(b), [op]], ']');
+const unary = (name, op, a) => tr(`${name} ${a} = [`, [PushString(a), [op]], ']');
+const X = 0, CURRENTFRAME = 4, VISIBLE = 7, WIDTH = 8, HEIGHT = 9, TARGET = 11, NAME = 13;
+// Shift-JIS のバイト列: あい / あ / い / ア / ヂ / 表 / 半角のｱ
+const SJIS = { ai: [0x82, 0xa0, 0x82, 0xa2], a: [0x82, 0xa0], i: [0x82, 0xa2], kanaA: [0x83, 0x41], kanaDi: [0x83, 0x61], hyo: [0x95, 0x5c], hankaku: [0xb1] };
+const bytes = (list) => [0x96, ...u16(list.length + 2), 0, ...list, 0]; // 文字列の push（バイト列をそのまま）
+const turn45 = { a: Math.SQRT1_2, b: Math.SQRT1_2, c: -Math.SQRT1_2, d: Math.SQRT1_2 };
+
+// クリップのプロパティ。SWF 4 と 5 以降で結果が変わるもの（クリップ名を変数として読む、_visible の型、
+// 拡大率の控えの有無）と、変わらないもの（数値でない代入は無視、位置とアルファは切り捨てて持つ）がある。
+// 幅と高さは、子孫の図形を 1 つずつ変換してから合わせた矩形（45 度 × 45 度で、元の正方形と同じ大きさになる）。
+const clipProperties = (version) => swf({
+  version,
+  tags: [
+    square(1, 800, [255, 0, 0]),
+    DefineSprite(2, 1, [PlaceObject2({ depth: 1, id: 1, matrix: turn45 }), ShowFrame(), End()]),
+    PlaceObject2({ depth: 1, id: 2, name: 'card', matrix: { tx: 100, ty: 40 } }),
+    PlaceObject2({ depth: 2, id: 2, name: 'turned', matrix: { ...turn45, tx: 2400, ty: 1600 } }),
+    PlaceObject2({ depth: 3, id: 1, name: 'shape' }),
+    DefineSprite(3, 1, [PlaceObject2({ depth: 1, id: 1 }), ShowFrame(), End()]),
+    PlaceObject2({ depth: 4, id: 3, name: 'num', matrix: { tx: 3000, ty: 200 } }),
+    PlaceObject2({ depth: 5, id: 3, name: 'mirror', matrix: { a: -1.25, d: 1.25, tx: 4000, ty: 2000 } }),
+    PlaceObject2({ depth: 6, id: 3, name: 'flip', matrix: { a: 1.25, d: -1.25, tx: 3000, ty: 3000 } }),
+    DoAction([
+      tr('eval card=[', variable('card'), ']'),
+      tr('x via name=', property('card', X)),
+      tr('x via eval=', property(variable('card'), X)),
+      ...['abc', '', '12abc', ' 7', '8 ', '1e1'].flatMap((v) => [setProperty('card', X, v), tr(`x after "${v}"=`, property('card', X))]),
+      setProperty('card', X, variable('nothing')), tr('x after undefined=', property('card', X)),
+      ...['', 'abc', '2', '0', 'true'].flatMap((v) => [setProperty('card', VISIBLE, v), tr(`visible after "${v}"=`, property('card', VISIBLE))]),
+      setProperty('card', NAME, 'renamed'), tr('name=', property('renamed', NAME), ' target=', property('renamed', TARGET)),
+      tr('card size=', property('renamed', WIDTH), ',', property('renamed', HEIGHT)),
+      tr('turned size=', property('turned', WIDTH), ',', property('turned', HEIGHT)),
+      // 鏡像の行列で置かれたクリップ。
+      ...['mirror', 'flip'].map((n) => tr(`${n}: `, property(n, 2), ' ', property(n, 3), ' ', property(n, 10))),
+      setProperty('mirror', 2, '50'), tr('mirror xscale 50 -> ', property('mirror', 2), ' ', property('mirror', 3), ' ', property('mirror', 10)),
+      setProperty('flip', 10, '90'), tr('flip rotation 90 -> ', property('flip', 2), ' ', property('flip', 3), ' ', property('flip', 10)),
+      // 代入した値は固定小数に直して持つので、読み戻すと端数が変わる。
+      ...['0.15', '2.999', '1.975', '-1.975', '0.049', '-0.049', '100.126'].flatMap((v) => [setProperty('num', X, v), tr(`x ${v} -> `, property('num', X))]),
+      setProperty('num', X, [PushString('-16.85'), PushString('17'), [0x0a]]), tr('x -16.85+17 -> ', property('num', X)),
+      ...['77', '33.3', '0.01', '150.5', '-50', '100'].flatMap((v) => [setProperty('num', 2, v), tr(`xscale ${v} -> `, property('num', 2), ' width=', property('num', WIDTH))]),
+      // （回転は、実機の固定小数の三角関数による端数まで再現していないので、ここでは確かめない。）
+      ...['33', '50', '99', '100.4', '0.3', '-10', '300', '100'].flatMap((v) => [setProperty('num', 6, v), tr(`alpha ${v} -> `, property('num', 6))]),
+      Stop,
+    ]),
+    ShowFrame(), End(),
+  ],
+});
+
+Object.assign(fixtures, {
+  // 数値への変換と演算。SWF 4 は文字列の先頭の数値だけを読み、読めなければ 0 にする。
+  'as-swf4-convert': swf({
+    version: 4,
+    tags: [
+      DoAction([
+        ...['abc', '12abc', '', ' 12', '12 ', '1e2', '0x10', '010', '1.5', '.5', '-3', '+3', '1,5', 'Infinity', 'NaN'].map((a) => binary('+', 0x0a, a, '1')),
+        ...[['abc', '1'], ['2', '10'], ['abc', 'abd'], ['', '1'], ['1', '']].map(([a, b]) => binary('<', 0x0f, a, b)),
+        ...[['abc', '0'], ['', '0'], ['1.0', '1'], ['abc', 'xyz']].map(([a, b]) => binary('==', 0x0e, a, b)),
+        ...['abc', '0', '', '1', '0.0', ' ', '12abc'].map((a) => unary('not', 0x12, a)),
+        ...[['1', '0'], ['7', '2'], ['abc', '2']].map(([a, b]) => binary('/', 0x0d, a, b)),
+        ...[['1', 'abc'], ['abc', ''], ['2', '3']].flatMap(([a, b]) => [binary('and', 0x10, a, b), binary('or', 0x11, a, b)]),
+        ...[['1.0', '1'], ['A', 'a']].map(([a, b]) => binary('eq', 0x13, a, b)),
+        ...[['a', 'b'], ['', 'a'], ['a', ''], ['10', '9']].map(([a, b]) => binary('lt', 0x29, a, b)),
+        ...['3.7', '-3.7', 'abc', '1e20', ''].map((a) => unary('int', 0x18, a)),
+        ...['0', '-5', '1', 'abc'].map((a) => unary('random', 0x30, a)),
+        ...[['0', '2'], ['-1', '2'], ['2', '-1'], ['2', '100'], ['10', '2'], ['2', '0'], ['abc', '2'], ['2', 'abc'], ['1.9', '1.9']]
+          .map(([i, n]) => tr(`substring(hello, ${i}, ${n}) = [`, [PushString('hello'), PushString(i), PushString(n), [0x15]], ']')),
+        tr('1/3 = ', [PushString('1'), PushString('3'), [0x0d]]),
+        tr('undefined + 1 = [', [variable('nothing'), PushString('1'), [0x0a]], ']'),
+        tr('undefined eq empty = [', [variable('nothing'), PushString(''), [0x13]], ']'),
+        tr('not undefined = [', [variable('nothing'), [0x12]], ']'),
+        Stop,
+      ]),
+      ShowFrame(), End(),
+    ],
+  }),
+  'as-swf4-clip': clipProperties(4),
+  'as-swf6-clip': clipProperties(6),
+  // SWF 5 以前の文字列は UTF-8 ではなく、作成環境の文字コードのバイト列（ここでは Shift-JIS）。
+  // 長さや切り出しはバイト単位、mb 付きの命令は文字単位になる。
+  'as-swf4-sjis': swf({
+    version: 4,
+    tags: [
+      DefineSprite(1, 1, [ShowFrame(), End()]),
+      PlaceObject2({ depth: 1, id: 1, name: SJIS.hyo }),
+      PlaceObject2({ depth: 2, id: 1, name: [...SJIS.kanaA, 0x78] }), // "アx"
+      DoAction([
+        PushString('s'), bytes(SJIS.ai), SetVariable,
+        tr('s=', variable('s')),
+        tr('length=', [variable('s'), [0x14]], ' mblength=', [variable('s'), [0x31]]),
+        tr('substring(s,1,2)=', [variable('s'), PushString('1'), PushString('2'), [0x15]]),
+        tr('substring(s,2,2)=[', [variable('s'), PushString('2'), PushString('2'), [0x15]], ']'),
+        tr('substring(s,3,1)=[', [variable('s'), PushString('3'), PushString('1'), [0x15]], ']'),
+        tr('mbsubstring(s,2,1)=', [variable('s'), PushString('2'), PushString('1'), [0x35]]),
+        tr('mbsubstring(s,1,5)=', [variable('s'), PushString('1'), PushString('5'), [0x35]]),
+        tr('ord=', [variable('s'), [0x32]], ' mbord=', [variable('s'), [0x36]]),
+        tr('chr(177)=', [PushString('177'), [0x33]], ' mbchr(33440)=', [PushString('33440'), [0x37]], ' mbchr(65)=', [PushString('65'), [0x37]]),
+        tr('chr(130) add chr(160)=', [PushString('130'), [0x33], PushString('160'), [0x33], StringAdd]),
+        tr('length(hankaku)=', [bytes(SJIS.hankaku), [0x14]], ' mblength=', [bytes(SJIS.hankaku), [0x31]]),
+        tr('a eq a=', [bytes(SJIS.a), bytes(SJIS.a), [0x13]], ' a eq i=', [bytes(SJIS.a), bytes(SJIS.i), [0x13]], ' a lt i=', [bytes(SJIS.a), bytes(SJIS.i), [0x29]]),
+        tr('s add x=', [variable('s'), PushString('x'), StringAdd]),
+        // 2 バイト目が英字のコード（ア = 83 41、ヂ = 83 61）。名前の大文字小文字を同一視するとき、ここが巻き込まれるか。
+        bytes(SJIS.kanaA), PushString('set by A'), SetVariable,
+        tr('var kanaA=[', [bytes(SJIS.kanaA), GetVariable], '] var kanaDi=[', [bytes(SJIS.kanaDi), GetVariable], ']'),
+        PushString('ABC'), PushString('set by ABC'), SetVariable,
+        tr('var abc=[', variable('abc'), ']'),
+        // 名前が Shift-JIS のクリップ（表 = 95 5C。2 バイト目が "\\" と同じ）
+        tr('name=', property([bytes(SJIS.hyo)], NAME), ' target=', property([bytes(SJIS.hyo)], TARGET)),
+        tr('clip Ax via Ax=[', property([bytes([...SJIS.kanaA, 0x78])], NAME), '] via Dix=[', property([bytes([...SJIS.kanaDi, 0x78])], NAME), '] via AX=[', property([bytes([...SJIS.kanaA, 0x58])], NAME), ']'),
+        Stop,
+      ]),
+      ShowFrame(), End(),
+    ],
+  }),
+  // call: 同じクリップのフレームのアクションを、その場で実行する。
+  // （デバッガ版の実機はスプライト内のフレームを call すると落ちるので、ルートだけで確かめる。）
+  'as-swf4-call': swf({
+    version: 4, frames: 4,
+    tags: [
+      DoAction([tr('f1'), PushString('lab'), Call, tr('after call'), PushString('3'), Call, tr('after call by number')]), ShowFrame(),
+      DoAction([tr('f2')]), ShowFrame(),
+      FrameLabel('lab'), DoAction([tr('in lab'), PushString('end'), GotoFrame2(false), tr('lab done')]), ShowFrame(),
+      FrameLabel('end'), DoAction([tr('f4'), Stop]), ShowFrame(),
+      End(),
+    ],
+  }),
+  // ターゲットパス。".." は親を指す 1 つの要素。同名の変数があっても、パスは子のクリップを指す。
+  'as-swf4-path': swf({
+    version: 4, frames: 2,
+    tags: [
+      DefineSprite(1, 3, [
+        DoAction([Stop]), ShowFrame(), ShowFrame(),
+        DoAction([tr('leaf f3 parent t=', variable('..:t'), ' self=', property('../t', CURRENTFRAME)), PushString('../..:2'), GotoFrame2(false)]), ShowFrame(),
+        End(),
+      ]),
+      DefineSprite(2, 1, [
+        PlaceObject2({ depth: 1, id: 1, name: 't' }),
+        DoAction([
+          PushString('t'), PushString('5'), SetVariable,
+          PushString('t:3'), GotoFrame2(false),
+          tr('mid t=', variable('t'), ' child frame=', property('t', CURRENTFRAME)),
+        ]),
+        ShowFrame(), End(),
+      ]),
+      PlaceObject2({ depth: 1, id: 2, name: 'm' }),
+      DoAction([tr('root f1'), Stop]), ShowFrame(),
+      DoAction([tr('root f2 /m/t frame=', property('/m/t', CURRENTFRAME), ' /m:t=', variable('/m:t'), ' m/t:t=[', variable('m/t:t'), ']')]), ShowFrame(),
+      End(),
+    ],
+  }),
+  // タグが深度 16384 以上（スクリプトが作るクリップの領域）に置いたクリップは、先頭フレームへ戻っても作り直されない。
+  'as-swf4-highdepth': swf({
+    version: 4, frames: 3,
+    tags: [
+      DefineSprite(1, 1, [DoAction([tr('created')]), ShowFrame(), End()]),
+      PlaceObject2({ depth: 20000, id: 1, name: 'high' }),
+      PlaceObject2({ depth: 5, id: 1, name: 'low' }),
+      DoAction([tr('f1')]), ShowFrame(),
+      RemoveObject2(5), ShowFrame(),
+      DoAction([
+        Stop,
+        PushString('n'), variable('n'), PushString('1'), [0x0a], SetVariable,
+        variable('n'), PushString('2'), [0x0f], [0x12], [0x9d, 2, 0, 10, 0], // if (!(n < 2)) 以降を飛ばす
+        PushString('1'), GotoFrame2(true),
+      ]),
+      ShowFrame(), End(),
+    ],
+  }),
+});
+
+// 別のクリップのフレームを call すると、呼ばれた側のクリップを対象に実行される。四角が (150, 100) px に動けば、
+// 対象も変数も card のもの。デバッガ版の実機はスプライト内のフレームを call すると落ちるので trace の期待値を
+// 作れない。リリース版の実機の画面で確かめた結果を test/avm1.test.js で固定する。
+export const callOtherClip = swf({
+  version: 4,
+  tags: [
+    square(1, 800, [255, 0, 0]),
+    DefineSprite(2, 2, [
+      PlaceObject2({ depth: 1, id: 1 }),
+      DoAction([PushString('x'), PushString('card-var'), SetVariable, Stop]), ShowFrame(),
+      DoAction([
+        setProperty('', X, '150'),
+        variable('x'), PushString('card-var'), [0x13], [0x12], [0x9d, 2, 0, 12, 0], // if (x ne "card-var") 以降を飛ばす
+        setProperty('', 1, '100'),
+      ]),
+      ShowFrame(), End(),
+    ]),
+    PlaceObject2({ depth: 1, id: 2, name: 'card', matrix: { tx: 400, ty: 400 } }),
+    DoAction([PushString('x'), PushString('root-var'), SetVariable, PushString('card:2'), Call, Stop]),
+    ShowFrame(), End(),
+  ],
+});
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = new URL('../test/fixtures/', import.meta.url);
