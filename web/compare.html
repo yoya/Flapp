@@ -50,7 +50,8 @@
     const result = { name };
     summary.push(result);
     try {
-      const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer());
+      // URL に ?matchPlayer を付けると、見た目を実機に寄せる指定で描く（Movie.load の同名のオプション）。
+      const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer(), { matchPlayer: new URLSearchParams(location.search).has('matchPlayer') });
       const frame = entry.frame ?? Math.min(SETTLE_FRAME, movie.root.totalFrames);
       for (let i = 1; i < frame; i++) movie.advance();
       result.frame = frame;

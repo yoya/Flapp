@@ -148,8 +148,9 @@ export class Movie {
    *   media: (url) => Uint8Array | Promise<Uint8Array> | null   NetStream.play(url) が再生する FLV ファイルを返す関数。
    *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
    *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
-   *   matchPlayer: true にすると、復号はできるが実機の Flash Player が映さないもの（インターレースの VP6）を、実機と同じに映さない。
-   *             既定は false（復号できるものは映す）
+   *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
+   *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
+   *             - 埋め込みの H.263 / VP6 を整数倍で置いたとき、実機と同じに、横方向だけ右隣の画素と混ぜて描く
    *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
    *             ブラウザでは CanvasRenderer の rasterizer()）。省略すると、表示オブジェクトの draw は警告を残して何もしない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
@@ -1230,7 +1231,12 @@ export class VideoObject extends DisplayObject {
         image, width: image.width, height: image.height, smooth: this.smoothing,
         list: [{
           kind: 'fill', evenOdd: false, path: [['M', 0, 0], ['L', w, 0], ['L', w, h], ['L', 0, h], ['Z']],
-          style: { type: 'bitmap', bitmap: image, matrix: { a: w / image.width, b: 0, c: 0, d: h / image.height, tx: 0, ty: 0 }, repeat: false, smooth: this.smoothing },
+          style: {
+            type: 'bitmap', bitmap: image, matrix: { a: w / image.width, b: 0, c: 0, d: h / image.height, tx: 0, ty: 0 }, repeat: false, smooth: this.smoothing,
+            // 実機は、埋め込みの H.263 / VP6 を整数倍で描くとき、横方向だけ右隣の画素と混ぜる（render/canvas.js の #blendRight）。
+            // matchPlayer を指定したときだけ、描画側にそれを頼む。
+            blendRight: this.movie.matchPlayer && !this.source && (this.character.codec === 'h263' || this.character.codec === 'vp6'),
+          },
         }],
       };
     }

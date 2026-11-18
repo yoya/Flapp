@@ -13,6 +13,7 @@ const IDENTITY_CX = null;
 // マスクは形だけを使うので、色とアルファによらず不透明に描く。
 const OPAQUE_CX = { rm: 256, gm: 256, bm: 256, am: 0, ra: 0, ga: 0, ba: 0, aa: 255 };
 const TINT_CACHE_SIZE = 8;
+const MAX_BLENDED_PIXELS = 1 << 24; // #blendRight で作る画像の画素数の上限
 
 // Flash のブレンドモード → Canvas の合成方法（そのまま対応するもの）。
 const COMPOSITE = {
@@ -65,6 +66,7 @@ export class CanvasRenderer {
     this.bitmaps = new WeakMap(); // ビットマップ定義 → 描画に使える画像
     this.tinted = new WeakMap(); // ビットマップ定義 → Map(色変換 → 変換済みの画像)
     this.padded = new WeakMap(); // 画像 → 縁を 1 画素延ばした画像
+    this.blended = new WeakMap(); // 画像 → { z, image }: 実機と同じに、横方向に右隣の画素を混ぜて拡大した画像（#blendRight）
     this.layers = []; // 使い回すレイヤー
   }
 
@@ -126,7 +128,7 @@ export class CanvasRenderer {
    */
   #rasterize(movie, d, m, width, height) {
     const sub = new CanvasRenderer(new OffscreenCanvas(width, height));
-    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded });
+    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded, blended: this.blended });
     sub.base = { a: m.a / 20, b: m.b / 20, c: m.c / 20, d: m.d / 20, tx: m.tx, ty: m.ty };
     sub.#drawContent(sub.ctx, d, sub.base, IDENTITY_CX, false);
     return sub.ctx.getImageData(0, 0, width, height).data;
@@ -334,7 +336,13 @@ export class CanvasRenderer {
       ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
       ctx.imageSmoothingEnabled = style.smooth;
       ctx.globalAlpha = source.alpha;
-      if (style.repeat) {
+      const blended = style.blendRight && !style.smooth && this.#blendRight(ctx, source.image);
+      if (blended) {
+        // 横方向は、装置の画素に合わせて拡大済みの画像を使う。
+        const pattern = ctx.createPattern(blended.image, 'no-repeat');
+        pattern.setTransform(new DOMMatrix([1 / blended.z, 0, 0, 1, 0, 0]));
+        ctx.fillStyle = pattern;
+      } else if (style.repeat) {
         ctx.fillStyle = ctx.createPattern(source.image, 'repeat');
       } else {
         // 繰り返さない塗りは、縁の画素を 1 画素外へ延ばした画像を使う。そのままだと縁が
@@ -419,6 +427,39 @@ export class CanvasRenderer {
     ctx.drawImage(padded, 0, h, w + 2, 1, 0, h + 1, w + 2, 1); // 下（角を含む）
     this.padded.set(image, padded);
     return padded;
+  }
+
+  /**
+   * 実機が、埋め込みの H.263 / VP6 のビデオを整数倍で描くときの絵を作る（Movie.load の matchPlayer を指定したときだけ使う）。
+   * 実機は、横方向だけ、装置の各画素を「その画素 × 1/z ＋ 右隣の画素 × (1 − 1/z)」にする（z は、ビデオの 1 画素あたりの
+   * 装置の画素数。右端は端の画素を延ばす）。ビデオの各画素の右端の 1 列だけが、右隣の画素と混ざることになる。
+   * 実機の画面と、全画素で突き合わせて確かめた規則（なぜそうなるのかは分かっていない）。
+   * 今の変換（ctx）で、回転が無く、ステージ上の拡大率が整数のときに、横に z 倍した画像を返す。それ以外は null（ふつうに描く）。
+   */
+  #blendRight(ctx, image) {
+    const t = ctx.getTransform();
+    const z = Math.round(t.a), zoom = Math.round(t.a / this.scale);
+    if (t.b !== 0 || t.c !== 0 || z < 2 || Math.abs(t.a - z) > 1e-4 || zoom < 1 || Math.abs(t.a / this.scale - zoom) > 1e-4) return null;
+    const { width: w, height: h } = image;
+    if (w * z * h > MAX_BLENDED_PIXELS) return null;
+    const cached = this.blended.get(image);
+    if (cached?.z === z) return cached;
+    const from = image.getContext('2d').getImageData(0, 0, w, h).data;
+    const out = new ImageData(w * z, h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const at = (y * w + x) * 4, next = (y * w + Math.min(x + 1, w - 1)) * 4;
+        for (let i = 0; i < z; i++) {
+          const to = (y * w * z + x * z + i) * 4;
+          for (let k = 0; k < 4; k++) out.data[to + k] = i < z - 1 ? from[at + k] : Math.round(from[at + k] / z + from[next + k] * (1 - 1 / z));
+        }
+      }
+    }
+    const canvas = new OffscreenCanvas(w * z, h);
+    canvas.getContext('2d').putImageData(out, 0, 0);
+    const result = { z, image: canvas };
+    this.blended.set(image, result);
+    return result;
   }
 
   // 色変換を反映した画像と、描画時に掛けるアルファを返す。まだ復号されていなければ null。

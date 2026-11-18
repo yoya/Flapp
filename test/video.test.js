@@ -419,6 +419,27 @@ test('VP6: matchPlayer を指定すると、インターレースのストリー
   assert.equal((await Movie.load(fixtures['video-vp6'])).matchPlayer, false);
 });
 
+test('埋め込みビデオ: matchPlayer を指定すると、H.263 と VP6 の塗りに、横方向の混ぜ合わせを頼む印が付く', async () => {
+  // 実機は、埋め込みの H.263 / VP6 を整数倍で描くとき、横方向だけ右隣の画素と混ぜる。混ぜるのは描画側（render/canvas.js）で、
+  // その結果は web/compare.html?matchPlayer で実機の画面と比べる。ここでは、描画側に頼む印だけを確かめる。
+  const blend = async (name, options) => {
+    const movie = await Movie.load(fixtures[name], options);
+    for (let i = 0; i < 10; i++) movie.advance();
+    return movie.root.sortedChildren().map((video) => video.paths()[0].style.blendRight);
+  };
+  assert.deepEqual(await blend('video-vp6', { matchPlayer: true }), [true, true]);
+  assert.deepEqual(await blend('video-h263', { matchPlayer: true }), [true, true]);
+  assert.deepEqual(await blend('video-vp6a', { matchPlayer: true }), [false]); // アルファ付きと Screen Video は、実機でも混ざらない
+  assert.deepEqual(await blend('video-screen', { matchPlayer: true }), [false]);
+  assert.deepEqual(await blend('video-vp6'), [false, false]);
+  // NetStream の絵を映しているときも、混ぜない。
+  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true });
+  const [video] = movie.root.sortedChildren();
+  const picture = video.image();
+  video.source = { image: () => picture };
+  assert.equal(video.paths()[0].style.blendRight, false);
+});
+
 test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止まらない復号にならない）', () => {
   // でたらめに壊すのは、インターレースのストリーム（復号の経路がいちばん多い）。
   const frames = parseFLV(asset('video-vp6i.flv')).video.map((t) => t.data.subarray(1));
