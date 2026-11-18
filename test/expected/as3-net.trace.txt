@@ -1,0 +1,32 @@
+[object LoaderInfo] true true false null false true
+width=E2099 height=E2099 frameRate=E2099 swfVersion=E2099 actionScriptVersion=E2099 contentType=null sameDomain=E2099 loader=null bytesLoaded=true bytesTotal=true content=this url=string loaderURL=string parameters=[object Object] applicationDomain=[object ApplicationDomain] childAllowsParent=E2099 parentAllowsChild=E2099 sharedEvents=[object EventDispatcher]
+[object URLLoader] undefined text 0 0 true
+[object Loader] true null [object LoaderInfo] true 0 true null null 0 0 null
+1 true 0 0
+Error 2099
+TypeError 2007
+TypeError 2007
+-- URLVariables
+1 a=1 true true a b c,2 true 日 true
+two 1
+name=a%20b%26c%3Dd%2F%C3%A9
+list=1&list=2
+Error 2101
+-- system
+[object ApplicationDomain] false true true true false true true false null
+ReferenceError 1065
+13 32 37 38 39 40 27 16 17 8 9 46 112 123 65 90 48 105 36 35 33 34 45 20
+GET POST text binary variables auto hand auto string 2 4 StandAlone string true number false false number
+page.html POST true null GET null a true
+frameConstructed 0
+exitFrame 0
+loaderInfo init true false 0 
+width=240 height=160 frameRate=12 swfVersion=15 actionScriptVersion=3 contentType=application/x-shockwave-flash sameDomain=true loader=null bytesLoaded=true bytesTotal=true content=this url=string loaderURL=string parameters=[object Object] applicationDomain=[object ApplicationDomain] childAllowsParent=true parentAllowsChild=true sharedEvents=[object EventDispatcher]
+loaderInfo progress true false 0 true
+width=240 height=160 frameRate=12 swfVersion=15 actionScriptVersion=3 contentType=application/x-shockwave-flash sameDomain=true loader=null bytesLoaded=true bytesTotal=true content=this url=string loaderURL=string parameters=[object Object] applicationDomain=[object ApplicationDomain] childAllowsParent=true parentAllowsChild=true sharedEvents=[object EventDispatcher]
+loaderInfo complete true false 0 
+width=240 height=160 frameRate=12 swfVersion=15 actionScriptVersion=3 contentType=application/x-shockwave-flash sameDomain=true loader=null bytesLoaded=true bytesTotal=true content=this url=string loaderURL=string parameters=[object Object] applicationDomain=[object ApplicationDomain] childAllowsParent=true parentAllowsChild=true sharedEvents=[object EventDispatcher]
+enterFrame 1
+frameConstructed 1
+exitFrame 1
+enterFrame 2

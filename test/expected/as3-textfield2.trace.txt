@@ -1,0 +1,11 @@
+[object TextField] true hello label true 10 20 100 20 3 true true true
+input true false false false false false 0 none 0 5 1 true
+[object TextField] true instance1 unnamed true true
+changed second <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">changed</FONT></P>
+Times Roman 12 0 false left 0
+removed true 2
+removed at root true 3
+null 2 null false
+addedToStage true
+2 true
+(x=10, y=60, w=100, h=20) true false

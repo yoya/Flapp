@@ -1,0 +1,21 @@
+[object SimpleButton] true true false true true true true true true false true flash.display::SimpleButton
+40 20 (x=20, y=30, w=40, h=20) null null null [object Stage] [object Main] true 1 1
+null null null null 0 0 (x=0, y=0, w=0, h=0) true
+true true 60 40
+null 0 (x=6710906.4, y=6710916.8, w=0, h=0)
+40
+false false true
+true false false true
+null true true
+addChild true [object Shape] 0
+(x=6710906.4, y=6710916.8, w=0, h=0) 2
+null
+(x=0, y=0, w=0, h=0) (x=0, y=0, w=0, h=0) (x=6710886.4, y=6710886.4, w=0, h=0)
+(x=0, y=0, w=0, h=0) (x=6710896, y=6710916.8, w=0, h=0) (x=6710896, y=6710916.8, w=0, h=0)
+(x=13421782.4, y=3355473.2, w=0, h=0)
+(x=13421782.4, y=3355473.2, w=0, h=0) (x=0, y=0, w=0, h=0) (x=13421782.4, y=3355473.2, w=0, h=0)
+(x=6710886.4, y=6710886.4, w=0, h=0) (x=0, y=0, w=0, h=0)
+(x=6710906.4, y=6710886.4, w=0, h=0) (x=0, y=0, w=0, h=0)
+(x=0, y=0, w=0, h=0) (x=6710893.6, y=6710886.4, w=0, h=0)
+(x=-3355433.2, y=13421803.2, w=0, h=0)
+(x=13420772.8, y=3478899.2, w=0, h=0)
