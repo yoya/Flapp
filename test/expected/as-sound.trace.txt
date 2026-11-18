@@ -1,0 +1,24 @@
+typeof object true vol=100 pan=0 duration=undefined position=undefined ll=100 lr=0 rl=0 rr=100
+attach returns undefined duration=300 position=0
+bad attach duration=undefined position=undefined start=undefined
+vol 50 -> 50 ll=100 lr=0 rl=0 rr=100
+vol 150 -> 150 ll=100 lr=0 rl=0 rr=100
+vol -10 -> -10 ll=100 lr=0 rl=0 rr=100
+vol abc -> 0
+pan -100 -> -100 ll=100 lr=0 rl=0 rr=0
+pan 40 -> 40 ll=60 lr=0 rl=0 rr=100
+pan 200 -> 0 ll=-100 lr=0 rl=0 rr=100
+pan 0 -> 0 ll=100 lr=0 rl=0 rr=100
+setTransform -> vol=100 pan=90 ll=10 lr=20 rl=30 rr=40
+partial -> ll=100 lr=20 rl=30 rr=40
+reset -> ll=100 lr=0 rl=0 rr=100
+two global Sound objects share the volume: 20 20
+clip sound vol=100 duration=undefined
+clip 30 -> global 20 clip 30 another on same clip 30 by name 30
+start returns undefined position=0 stop returns undefined
+onLoad false
+loadSound returns undefined bytes=0/undefined
+complete 1 at end=true
+frame 10 done=1 position=300
+frame 12 stopped done=1
+frame 22 done=1

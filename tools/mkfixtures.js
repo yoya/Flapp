@@ -7,6 +7,11 @@
 // zws-hello.swf だけはここで生成しない（Node に LZMA 圧縮が無いため）。lzma-src.swf を
 // 次のコマンドで圧縮したものをコミットしている:
 //   python3 -c 'import lzma,struct;d=open("test/fixtures/lzma-src.swf","rb").read();c=lzma.compress(d[8:],format=lzma.FORMAT_ALONE);open("test/fixtures/zws-hello.swf","wb").write(b"ZWS"+d[3:8]+struct.pack("<I",len(c)-13)+c[:5]+c[13:])'
+//
+// 音のテスト用の素材（tools/assets/）は、0.3 秒・440 Hz・小さな音量の音 (22050 Hz モノラル) から次のように作った:
+//   tone.mp3        lame --quiet -r -s 22.05 -m m --bitwidth 16 --signed --little-endian -b 32 tone.raw tone.mp3
+//   tone-adpcm.flv  ffmpeg -f s16le -ar 22050 -ac 1 -i tone.raw -c:a adpcm_swf -f flv tone-adpcm.flv
+//                   （ADPCM の復号を ffmpeg の復号結果と突き合わせるため。test/sound.test.js）
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
@@ -934,6 +939,125 @@ export const fixtures = {
       PlaceObject2({ depth: 7, id: 19, name: 'hidden', matrix: { a: 0.5, d: 0.5, tx: 800, ty: 3800 } }),
       DoAction([PushString('hidden'), PushString('7'), PushString('0'), [0x23]]), // hidden._visible = 0
       ShowFrame(), End(),
+    ],
+  });
+}
+
+// --- 音 ---
+// テスト用の音: 440 Hz、小さな音量（実機で鳴らしても耳障りにならない程度）、両端をなだらかにしたもの。16 ビットのサンプル列。
+export function tone(rate, seconds, hz = 440) {
+  const n = Math.round(rate * seconds);
+  return Int16Array.from({ length: n }, (_, i) => Math.round(Math.sin((2 * Math.PI * hz * i) / rate) * 1600 * Math.min(1, i / 200, (n - i) / 200)));
+}
+const RATE_CODE = { 5512: 0, 11025: 1, 22050: 2, 44100: 3 };
+const soundFormat = (format, rate, bits16, stereo) => (format << 4) | (RATE_CODE[rate] << 2) | (bits16 ? 2 : 0) | (stereo ? 1 : 0);
+export const pcmBytes = (samples) => [...samples].flatMap((v) => [v & 0xff, (v >> 8) & 0xff]);
+// SWF の ADPCM に符号化する（size は 1 サンプルの符号のビット数、2〜5）。モノラルのみ。
+const ADPCM_STEPS = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+  157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411,
+  1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+  10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+];
+const ADPCM_INDEX = { 2: [-1, 2], 3: [-1, -1, 2, 4], 4: [-1, -1, -1, -1, 2, 4, 6, 8], 5: [-1, -1, -1, -1, -1, -1, -1, -1, 1, 2, 4, 6, 8, 10, 13, 16] };
+export function adpcmBytes(samples, size) {
+  const bits = new Bits().ub(2, size - 2);
+  let value = 0, index = 0;
+  samples.forEach((sample, n) => {
+    if (n % 4096 === 0) { // 4096 サンプルごとに、初期値（サンプルと表の位置）を置く
+      value = sample;
+      bits.sb(16, value).ub(6, index);
+      return;
+    }
+    const step = ADPCM_STEPS[index];
+    let diff = sample - value;
+    let code = 0;
+    if (diff < 0) {
+      code = 1 << (size - 1);
+      diff = -diff;
+    }
+    // 復号側と同じ計算で、差分にいちばん近い符号を選ぶ
+    let delta = step >> (size - 1);
+    for (let b = size - 2, s = step; b >= 0; b--, s >>= 1) {
+      if (diff >= s) {
+        code |= 1 << b;
+        diff -= s;
+        delta += s;
+      }
+    }
+    value = Math.max(-32768, Math.min(32767, value + (code & (1 << (size - 1)) ? -delta : delta)));
+    index = Math.max(0, Math.min(88, index + ADPCM_INDEX[size][code & ((1 << (size - 1)) - 1)]));
+    bits.ub(size, code);
+  });
+  return bits.bytes();
+}
+// DefineSound。data は符号化済みのバイト列。
+export const DefineSound = (id, format, rate, sampleCount, data, { bits16 = true, stereo = false } = {}) =>
+  tag(14, [...u16(id), soundFormat(format, rate, bits16, stereo), ...u32(sampleCount), ...data], true);
+// SOUNDINFO。envelope は [{ position, left, right }]（位置は 44100 Hz 換算、音量は 0〜32768）。
+const soundInfo = ({ stop = false, noMultiple = false, inPoint, outPoint, loops, envelope } = {}) => [
+  (stop ? 0x20 : 0) | (noMultiple ? 0x10 : 0) | (envelope ? 0x08 : 0) | (loops !== undefined ? 0x04 : 0) | (outPoint !== undefined ? 0x02 : 0) | (inPoint !== undefined ? 0x01 : 0),
+  ...(inPoint !== undefined ? u32(inPoint) : []), ...(outPoint !== undefined ? u32(outPoint) : []), ...(loops !== undefined ? u16(loops) : []),
+  ...(envelope ? [envelope.length, ...envelope.flatMap((e) => [...u32(e.position), ...u16(e.left), ...u16(e.right)])] : []),
+];
+const StartSound = (id, info) => tag(15, [...u16(id), ...soundInfo(info)]);
+const mp3 = [...readFileSync(new URL('assets/tone.mp3', import.meta.url))];
+const MP3_SAMPLES = 8064; // tone.mp3 は 576 サンプル × 14 フレーム
+
+// イベント音: フレームに置いた StartSound で鳴る音。PCM、ADPCM、MP3 と、繰り返し・音量の変化・停止の指定。
+fixtures['sound-event'] = swf({
+  version: 8, frames: 40,
+  tags: [
+    SetBackgroundColor(0xee, 0xee, 0xee),
+    DefineSound(1, 3, 22050, 6615, pcmBytes(tone(22050, 0.3))),
+    DefineSound(2, 1, 22050, 6615, adpcmBytes(tone(22050, 0.3, 660), 4)),
+    DefineSound(3, 2, 22050, MP3_SAMPLES, [...u16(0), ...mp3]),
+    DefineSound(4, 3, 11025, 2205, [...tone(11025, 0.2, 330)].map((v) => ((v >> 8) + 128) & 0xff), { bits16: false }),
+    DefineSound(5, 1, 11025, 2205, adpcmBytes(tone(11025, 0.2, 550), 2)),
+    StartSound(1), ShowFrame(), // 1
+    ...Array.from({ length: 5 }, ShowFrame),
+    StartSound(2, { loops: 2 }), ShowFrame(), // 7
+    ...Array.from({ length: 9 }, ShowFrame),
+    StartSound(3, { envelope: [{ position: 0, left: 32768, right: 0 }, { position: 8000, left: 0, right: 32768 }] }), ShowFrame(), // 17
+    ...Array.from({ length: 5 }, ShowFrame),
+    StartSound(4, { inPoint: 2000, outPoint: 6000, loops: 3 }), ShowFrame(), // 23
+    StartSound(4, { noMultiple: true }), StartSound(5), ShowFrame(), // 24: 4 は鳴っているので重ねない
+    ShowFrame(),
+    StartSound(4, { stop: true }), ShowFrame(), // 26: 4 を止める
+    ...Array.from({ length: 13 }, ShowFrame),
+    DoAction([[0x07]]), ShowFrame(), // 40: stop
+    End(),
+  ],
+});
+
+// ストリーム音: タイムラインの各フレームに音のデータ (SoundStreamBlock) を置く。フレームが進む間だけ鳴る。
+// 1〜8 フレームに ADPCM のデータがあり、10 フレーム目で 3 フレーム目へ戻って（途中から鳴らし直し）、2 周目の 6 フレーム目で止まる。
+const SoundStreamHead = (format, rate, samplesPerFrame, latencySeek) => tag(18, [
+  soundFormat(0, rate, true, false), soundFormat(format, rate, true, false), ...u16(samplesPerFrame), ...(format === 2 ? u16(latencySeek ?? 0) : []),
+]);
+const SoundStreamBlock = (data) => tag(19, data, true);
+{
+  const perFrame = 1838; // 22050 Hz / 12 fps を切り上げ
+  const all = tone(22050, (perFrame * 8) / 22050, 520);
+  const block = (n) => SoundStreamBlock(adpcmBytes(all.subarray(n * perFrame, (n + 1) * perFrame), 4));
+  // n = n + 1; if (n == 1) gotoAndPlay(3); を SWF 4 の命令で書く（2 周目はそのまま進む）
+  const loopOnce = DoAction([
+    PushString('n'), PushString('n'), [0x1c], PushString('1'), [0x0a], [0x1d],
+    PushString('n'), [0x1c], PushString('1'), [0x0e], [0x12], [0x9d, 2, 0, 10, 0],
+    PushString('3'), [0x9f, 1, 0, 1],
+  ]);
+  fixtures['sound-stream'] = swf({
+    version: 6, frames: 12, // SWF 6: 未定義の変数は数値の 0 として扱われる
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      SoundStreamHead(1, 22050, perFrame),
+      ...Array.from({ length: 5 }, (_, n) => [block(n), ShowFrame()]).flat(), // 1〜5
+      block(5), DoAction([PushString('n'), [0x1c], PushString('1'), [0x0e], [0x12], [0x9d, 2, 0, 1, 0], [0x07]]), ShowFrame(), // 6: 2 周目なら stop
+      block(6), ShowFrame(), block(7), ShowFrame(), // 7, 8
+      ShowFrame(), // 9: データなし
+      loopOnce, ShowFrame(), // 10
+      ShowFrame(), ShowFrame(),
+      End(),
     ],
   });
 }

@@ -14,6 +14,7 @@
 //     //         ... export sym              attachMovie 用の書き出し名を付ける（この場合は置かない）
 //     //         ... square 40               中身として 40px の正方形を持たせる
 //     //         ... at 20,30                置く位置（px）
+//     // sound: 9 export beep seconds 0.3    サウンド 9（小さな音量の 440 Hz、22050 Hz の PCM）を定義し、attachSound 用の名前を付ける
 //     // label: 3 loop                       ルートの 3 フレーム目にフレームラベル loop を付ける
 //     // label: 2 _over sprite 1             スプライト 1 の 2 フレーム目にラベルを付ける
 //   本文は「//// 」で始まる行で区切る。区切りが無ければ全体がルートの 1 フレーム目。
@@ -33,7 +34,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DefineSprite, End, PlaceObject2, ShowFrame, square, swf, tag, u16 } from './mkfixtures.js';
+import { DefineSound, DefineSprite, End, PlaceObject2, ShowFrame, pcmBytes, square, swf, tag, tone, u16 } from './mkfixtures.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'test/as');
@@ -57,9 +58,11 @@ function build(name) {
   const sprites = new Map(); // ID → { frames, name, depth, parent, exportName, squareSize }
   const labels = new Map(); // ルートのフレーム番号 → ラベル
   const spriteLabels = new Map(); // "スプライト ID:フレーム番号" → ラベル
+  const sounds = []; // { id, name, seconds }
   for (const line of source.split('\n')) {
     let m;
     if ((m = line.match(/^\/\/ swf: (\d+)/))) version = Number(m[1]);
+    if ((m = line.match(/^\/\/ sound: (\d+) export (\S+) seconds (\S+)/))) sounds.push({ id: Number(m[1]), name: m[2], seconds: Number(m[3]) });
     if ((m = line.match(/^\/\/ label: (\d+) (\S+) sprite (\d+)/))) spriteLabels.set(`${m[3]}:${m[1]}`, m[2]);
     else if ((m = line.match(/^\/\/ label: (\d+) (\S+)/))) labels.set(Number(m[1]), m[2]);
     if ((m = line.match(/^\/\/ sprite: (\d+)(.*)/))) {
@@ -110,6 +113,10 @@ function build(name) {
       clipActions: s.events?.map((name) => ({ events: EVENTS[name], code: actionBytes })),
     }));
   const tags = [];
+  for (const { id, name: exportName, seconds } of sounds) {
+    const samples = tone(22050, seconds);
+    tags.push(DefineSound(id, 3, 22050, samples.length, pcmBytes(samples)), tag(56, [...u16(1), ...u16(id), ...cstr(exportName)]));
+  }
   // 子として置かれるスプライトは、親より先に定義する。
   const level = (id) => (sprites.get(id)?.parent ? 1 + level(sprites.get(id).parent) : 0);
   const order = [...sprites.keys()].sort((a, b) => level(b) - level(a) || a - b);
