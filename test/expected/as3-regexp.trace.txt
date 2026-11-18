@@ -1,0 +1,37 @@
+/b+(c)?/g b+(c)? true false false false false 0 /a/b/gimsx /x/ // true object
+bbc,c 2 1 abbcabd bbc c 4
+b, 5 undefined true false 6
+null 0
+true false true true true false true true true false true false true
+-- syntax
+123 héllo_1 1 false abcab xyz 1-x2 null true true false true
+aa aaaa aaa aa a aab true true 0 abcd,a,bcd,
+b,,b ab,b 2 2 2 2 aa,a true x true
+true false true true true true Éé AbC false true false
+-- bad
+( false null (
+) false null )
+a** false null a**
+[a false null [a
+\ false null \
+a{2,1} false null a{2,1}
+(?<n false null (?<n
+\2(a) false null \2(a)
+*a false null *a
+(?i)A true a (?i)A
+(?#c)a true a (?#c)a
+-- lastIndex
+0::0,0::0,0::0,0::0,0::0,0::0
+true 3 false 0 true 1
+false 0
+0 2 true false true
+-- String
+b b,b null  false bc,bc a 1 X,x 0
+2 -1 1 0 2
+aXcabc aXcaXc aXcabc aXc. bac a[b]c a[a]c a[c]c a$c a$3c ab0c a[$&$`]c -a-b-c-
+a<bc|c|1|abcabc>a<bc|c|4|abcabc> a<b|1|abc>c a4c a[]c
+a,b,c a,1,b,2,c abc a,b,c a,b abc  1 a b  c a,b,,c
+-- probes
+ 1 aa ,b aXbXc --b- a-bc ,,b a,b,
+true true true false true true true true true false true false true true true ab true false
+false true true false true false true true true true true

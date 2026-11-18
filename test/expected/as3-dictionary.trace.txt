@@ -1,0 +1,15 @@
+one two three four class undefined undefined undefined undefined
+str str five five x x t t n n u u undefined undefined undefined
+FIVE true true false
+true false true true false true true
+true false undefined true true undefined true
+9 function,number,object,object,object,string,string,string,string
+FIVE,class,four,n,t,three,two,u,x
+TWO
+found TWO
+true true flash.utils::Dictionary [object Dictionary] undefined
+1 2 3 true true
+x 2 x
+true true true
+number:268435455,number:7,number:8,string:-1,string:07,string:268435456,string:4294967295,string:x
+true true true true undefined false false true

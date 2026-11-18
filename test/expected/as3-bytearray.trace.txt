@@ -1,0 +1,53 @@
+0 0 0 bigEndian 3 true true true flash.utils::ByteArray true []
+33 33 0 01ff2c1234fffe12345678fffffffffedcba983fc00000bfb999999999999a0100
+1 -1 44 4660 -2 305419896 -1 4275878552 1.5 -0.1 true false 33 0
+255 44 4660 65534 305419896 -1 -19088744 true
+EOFError 2030 true true 32
+0 33
+Error 2030
+-- endian
+littleEndian 3412785634120000c03f000000000000004002006162
+4660 305419896 1.5 2 ab
+13330 2018915346
+Error 2008
+bigEndian
+-- text
+000a68c3a96c6c6f20e3818261626378797ae982a0 21
+héllo あ abc xyz é あ 21
+0 0
+1 97 3 3
+1 5
+1 5
+14 日本語 text 日本語 text 日本語 text 14
+日 true 11
+-- index
+10 20 undefined undefined 2
+3 0a1405
+6 0a14050000ff 2
+ff03050000ff
+2 ff03 2
+ff030500
+1 1
+ff030507 4 4
+-- bytes
+010203040506 6
+0102030405060506
+01020304050605060203 10
+0102030405060506020306
+RangeError 2006 0102030405060506020306
+RangeError 2006
+03040506 0 6
+0304050600000102 2 8
+0303050600000102
+EOFError 2030 3
+0102010203040506020306
+-- compress
+true true 120
+hello hello hello hello, hello!  0 32
+hello hello hello hello, hello!  0
+hello hello hello hello, hello! hello hello hello hello, hello! hello hello hello hello, hello!  96 0
+abcabcabcabc raw deflate 24
+IOError 2058 not compressed 14
+IOError 2058 not compressed
+false
+0

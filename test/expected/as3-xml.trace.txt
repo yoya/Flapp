@@ -1,0 +1,38 @@
+xml true order order element 1 12 web false 0 xml true 2 XML XMLList
+2 apple 250 12 2 hello & <bye> hello & <bye> true  1 true 0 true true
+<order id="12" kind="web">|  <item id="1" price="100">apple</item>|  <item id="2" price="250">|    banana|    <b>ripe</b>|  </item>|  <note>hello &amp; &lt;bye&gt;</note>|  <empty/>|</order>
+<item id="1" price="100">apple</item>|<item id="2" price="250">|  banana|  <b>ripe</b>|</item>
+<item id="2" price="250">|  banana|  <b>ripe</b>|</item> / apple / <item id="1" price="100">apple</item>|<item id="2" price="250">|  banana|  <b>ripe</b>|</item> / <note>hello &amp; &lt;bye&gt;</note> / ripe / <b>ripe</b>
+4 2 1 4 1 4 2 apple 1 2 text true false true 0 1 -1
+true undefined true true true false true false true true order true id attribute text
+ripe 2 3 1212 1 9 9 250 1 apple 0 1 1
+item,item,note,empty
+0,1
+1,2 true
+true true 1001 101 200 12 true true false true true false true true false true false true true
+-- change
+<order id="13" kind="web" fresh="new">|  <item id="1" price="110">pear</item>|  <item id="2" price="250">|    banana|    <b>ripe</b>|  </item>|  <note>changed</note>|  <empty/>|  <extra>added</extra>|</order>
+<item id="2" price="250">|  first|  banana|  <i>italic</i>|  <c n="1"/>|</item> 6
+<order id="13" kind="web">|  <item id="2" price="250">|    first|    banana|    <i>italic</i>|    <c n="1"/>|  </item>|  <note>changed</note>|</order> 1
+ undefined
+firstest,item,before,note,after,last
+13 changed 99 copy false true true undefined
+true <order id="13" kind="web">|  <only/>|</order>
+<order id="13" kind="web">|  <a/>|  <b/>|</order>
+<root when="now">|  <a>|    <b>|      <c>1</c>|    </b>|  </a>|  <list>|    <item>one</item>|    <item>two</item>|    <item>three</item>|  </list>|</root>
+<person name="Ann" age="31">|  Ann &amp; "30"|  <in/>|</person> Ann 31
+-- lists and parsing
+2 13web true 2 <a>1</a>|<b>2</b> true xml
+3 1 text <a>1</a>|<b>2</b>|text 0 0 true false 3 2
+v solo solo element true <solo>|  <k>v</k>|</solo>
+TypeError 1086
+x "y" <AB> spaced   text 13 3 <doc a="x &quot;y&quot;" b="&lt;AB>">|  <p>spaced   text</p>|  <![CDATA[<raw> & stuff]]>|  <q/>|</doc> <raw> & stuff 0 0
+text plain plain text true 0 12 <a/> true false true true a & b a &amp; b
+1085 , 1085 , 1085 , 1088 , 1090 , 1090 , 1104 , 1088 , 1090 , 1085 , 1094 , 1091 , <1a/> , 1090 , <a>&amp;bogus;</a> , <a>&amp;</a> , 1088 , 1088 , 1095
+-- settings and namespaces
+true true true true 2
+<person name="Ann" age="31">|    Ann &amp; "30"|    <in/>|</person>
+<person name="Ann" age="31">Ann &amp; "30"<in/></person> <order id="13" kind="web"><a/><b/></order>
+4 1 comment processing-instruction <a>|  |  <!--c-->|  <?p d?>|  t|</a> false
+0 News t.png 10 http://example.com/atom::feed http://example.com/atom feed http://example.com/atom http://example.com/media m undefined true 2 http://example.com/media::thumb
+<feed xmlns="http://example.com/atom" xmlns:m="http://example.com/media">|  <title>News</title>|  <m:thumb url="t.png" m:w="10"/>|</feed> 2 2 u::n n http://example.com/atom true n p undefined

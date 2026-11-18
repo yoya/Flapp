@@ -1,0 +1,33 @@
+1 "a\"b\\c\n\t\u0001\u001fé/ " true null null null null 1.5e+300 -0.5 "" string
+[1,"a",null,null,[2,[3]],true,null,null] [] {} {"a":1} {} {} {"a":[1,{"b":2}]} [1,2] [null,null]
+{|  "a": [|    1,|    2|  ]|}
+[|--1,|--[|----2,|----{|------"b": 3|----}|--],|--[],|--{}|]
+true [|abcdefghij1|] [| {},| [],| [|  []| ]|] [1] [1] 1 null [null] {"a":1} {| "a": 1|}
+-- replacer
+{"b":2} {"a":{"c":2}} [{}] {"5":1}
+ replace (empty) string object false true
+ replace 0 string number true true
+ replace 1 string number true true
+ replace 2 string object true true
+ replace a string number false true
+[2,4,{"a":6}]
+{} [null] "x1"
+"custom:" ["custom:0"] {"key":"custom:key"} {"value":7} {} {"computed":"got"} string " {"prototype":{}} [{"prototype":{}}]
+TypeError 1129
+TypeError 1131
+-- parse
+1 aA|/"x 1,2,3 3 true,false, 150 0 true null 0 true
+2 s 3 true Object Array number Infinity 12345678901234567000
+1132,1132,1132,1132,1132,1,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132,1132
+null 1132
+7 -1.5 0 100 100 0
+ revive 0 string number true
+ revive 1 string number true
+ revive a string number false
+ revive 0 string number true
+ revive b string object false
+ revive 2 string object true
+ revive (empty) string object false
+[2,3,{"a":4,"b":[5]}]
+{"b":{"c":3}} [1,null,3] replaced
+4 [1,{"b":null}] 5
