@@ -101,6 +101,16 @@ export class SoundMixer {
     });
   }
 
+  /**
+   * 音の出力が（利用者の操作で）有効になったときに呼ぶ。流れの途中の音は、有効になる前に鳴らし始めた位置からずれているので、
+   * 止めて、今の位置から鳴らし直させる（タイムラインのストリーム音は次のフレームで、FLV の音声はその場で）。
+   */
+  resync() {
+    const restart = this.playing.filter((p) => p.restart);
+    this.stop((p) => p.stream || p.restart);
+    for (const p of restart) p.restart();
+  }
+
   /** 鳴り終わった音を片付け、鳴り終わりを通知する。フレームごとに呼ぶ。 */
   update() {
     const now = this.movie.now();
