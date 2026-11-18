@@ -1,5 +1,7 @@
 // SWF の基本データ型の読み取り（仕様 1 章）。入力は信頼できないものとして、範囲外の読み取りは必ず例外にする。
 
+import { byteString } from './legacy.js';
+
 export class SWFError extends Error {
   constructor(message) {
     super(message);
@@ -8,9 +10,13 @@ export class SWFError extends Error {
 }
 
 export class Reader {
-  /** @param {Uint8Array} bytes */
-  constructor(bytes) {
+  /**
+   * @param {Uint8Array} bytes
+   * @param {boolean} [byteStrings]  文字列を UTF-8 として読まず、バイト列のまま返す（SWF 5 以前。swf/legacy.js を参照）
+   */
+  constructor(bytes, byteStrings = false) {
     this.bytes = bytes;
+    this.byteStrings = byteStrings;
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     this.pos = 0; // 次に読むバイト位置
     this.bit = 0; // そのバイトの中で消費済みのビット数 (0〜7)
@@ -108,7 +114,8 @@ export class Reader {
     this.align();
     const end = this.bytes.indexOf(0, this.pos);
     if (end < 0) throw new SWFError(`unterminated string at offset ${this.pos}`);
-    const s = new TextDecoder().decode(this.bytes.subarray(this.pos, end));
+    const raw = this.bytes.subarray(this.pos, end);
+    const s = this.byteStrings ? byteString(raw) : new TextDecoder().decode(raw);
     this.pos = end + 1;
     return s;
   }

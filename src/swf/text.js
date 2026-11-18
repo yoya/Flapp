@@ -100,8 +100,8 @@ export function parseDefineText(tag) {
 }
 
 /** DefineEditText (37)。 */
-export function parseDefineEditText(tag) {
-  const r = new Reader(tag.body);
+export function parseDefineEditText(tag, byteStrings = false) {
+  const r = new Reader(tag.body, byteStrings);
   const edit = { id: r.u16(), bounds: r.rect() };
   const f1 = r.u8();
   const f2 = r.u8();

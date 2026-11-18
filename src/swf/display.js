@@ -8,13 +8,16 @@ export function parseSetBackgroundColor(tag) {
 
 /**
  * PlaceObject (4) / PlaceObject2 (26) / PlaceObject3 (70)。
- * 存在しない項目はプロパティ自体を持たない。クリップアクションは未解釈。
+ * 存在しない項目はプロパティ自体を持たない。
+ * @param {number} [version] SWF のバージョン（クリップアクションのイベントフラグの幅が変わる）
  * @returns {{ depth: number, move: boolean, characterId?: number, matrix?: object, cxform?: object,
  *             ratio?: number, name?: string, clipDepth?: number,
- *             filters?: object[], blendMode?: string, visible?: boolean }}
+ *             filters?: object[], blendMode?: string, visible?: boolean,
+ *             clipActions?: Array<{ events: number, keyCode?: number, code: Uint8Array }> }}
+ *   clipActions の events は CLIPEVENTFLAGS を下位バイトから並べた値（0x01 load, 0x02 enterFrame, 0x04 unload, ...）。
  */
-export function parsePlaceObject(tag) {
-  const r = new Reader(tag.body);
+export function parsePlaceObject(tag, version = 6) {
+  const r = new Reader(tag.body, version < 6);
   if (tag.code === 4) {
     const place = { characterId: r.u16(), depth: r.u16(), move: false, matrix: r.matrix() };
     if (r.remaining > 0) place.cxform = r.cxform(false);
@@ -37,6 +40,23 @@ export function parsePlaceObject(tag) {
   if (flags2 & 0x02) place.blendMode = BLEND_MODES[r.u8()] ?? 'normal';
   if ((flags2 & 0x04) && r.remaining > 0) r.u8(); // BitmapCache。フラグだけ立って値が無いファイルがある
   if (flags2 & 0x20) place.visible = r.u8() !== 0;
+  if (flags2 & 0x40) r.rgba(); // 不透明な背景色（未対応）
+  if (flags & 0x80) {
+    const eventFlags = () => (version >= 6 ? r.u32() : r.u16());
+    r.u16(); // Reserved
+    eventFlags(); // AllEventFlags
+    place.clipActions = [];
+    for (;;) {
+      const events = eventFlags();
+      if (events === 0) break;
+      const size = r.u32();
+      const action = { events };
+      const body = new Reader(r.bytesView(size));
+      if (events & 0x020000) action.keyCode = body.u8(); // KeyPress のときだけキーコードが付く
+      action.code = body.bytesView(body.remaining);
+      place.clipActions.push(action);
+    }
+  }
   return place;
 }
 
@@ -102,10 +122,11 @@ export function filterList(r) {
 export function parseDefineButton(tag) {
   if (tag.code !== 7 && tag.code !== 34) throw new SWFError(`tag ${tag.code} is not a DefineButton`);
   const r = new Reader(tag.body);
-  const button = { id: r.u16(), records: [] };
+  const button = { id: r.u16(), records: [], actions: [] };
+  let actionOffset = 0;
   if (tag.code === 34) {
     r.u8(); // TrackAsMenu
-    r.u16(); // ActionOffset
+    actionOffset = r.u16(); // 0 ならアクションなし
   }
   for (;;) {
     const flags = r.u8();
@@ -121,8 +142,33 @@ export function parseDefineButton(tag) {
     }
     button.records.push(rec);
   }
+  // アクション。cond は状態遷移の条件（BUTTON_COND のビットの和）、key は keyPress のキーコード（無ければ 0）。
+  if (tag.code === 7) {
+    // DefineButton: 条件は無く、ボタンの上でマウスを離したときに実行される。
+    button.actions.push({ cond: BUTTON_COND.release, key: 0, code: r.bytesView(r.remaining) });
+  } else if (actionOffset !== 0) {
+    for (;;) {
+      const size = r.u16(); // 次の BUTTONCONDACTION までのバイト数。0 は最後
+      const flags = r.u16();
+      if (size !== 0 && size < 4) break; // 壊れた長さ
+      const code = r.bytesView(size === 0 ? r.remaining : size - 4);
+      button.actions.push({ cond: flags & 0x01ff, key: flags >> 9, code });
+      if (size === 0) break;
+    }
+  }
   return button;
 }
+
+/** ボタンの状態遷移（BUTTONCONDACTION のフラグを、下位バイトを先にした 16 ビットで読んだ値）。 */
+export const BUTTON_COND = {
+  rollOver: 0x0001, // IdleToOverUp
+  rollOut: 0x0002, // OverUpToIdle
+  press: 0x0004, // OverUpToOverDown
+  release: 0x0008, // OverDownToOverUp
+  dragOut: 0x0010, // OverDownToOutDown
+  dragOver: 0x0020, // OutDownToOverDown
+  releaseOutside: 0x0040, // OutDownToIdle
+};
 
 /** RemoveObject (5) / RemoveObject2 (28) */
 export function parseRemoveObject(tag) {
