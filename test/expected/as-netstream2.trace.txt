@@ -1,0 +1,8 @@
+stream NetStream.Play.Start status step 0
+paused true true
+stream NetStream.Seek.Notify status step 1
+ after seek 0
+stream NetStream.Play.Stop status step 2
+ at stop 0.58 64 48
+ closed 0.583 4182 64 48
+missing NetStream.Play.StreamNotFound error 0 -1

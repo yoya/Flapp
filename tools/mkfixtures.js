@@ -1326,7 +1326,7 @@ export const callOtherClip = swf({
 });
 
 // --- ビデオ（仕様 14 章） ---
-const DefineVideoStream = (id, numFrames, width, height, codec, smoothing = false) =>
+export const DefineVideoStream = (id, numFrames, width, height, codec, smoothing = false) =>
   tag(60, [...u16(id), ...u16(numFrames), ...u16(width), ...u16(height), smoothing ? 1 : 0, codec]);
 const VideoFrame = (id, n, data) => tag(61, [...u16(id), ...u16(n), ...data], true);
 // 埋め込みのビデオを 1 フレームにつき 1 枚ずつ進めて、最後のフレームで止まるタイムライン。表示するフレームは ratio で指定する。

@@ -5,6 +5,7 @@ import { AVM2 } from '../avm2/vm.js';
 import { installFlash } from '../avm2/flash.js';
 import { MovieClipObject } from '../avm1/clip.js';
 import { TextFieldObject } from '../avm1/textfield.js';
+import { VideoScriptObject } from '../avm1/video.js';
 import { AVMFunction } from '../avm1/object.js';
 import { Drawing } from './drawing.js';
 import { SoundMixer, buildStream } from './sound.js';
@@ -144,7 +145,7 @@ export class Movie {
    *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
    *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
    *   audio: 音の出力（player/sound.js の冒頭を参照。ブラウザでは audio/webaudio.js）。省略すると音は出ない
-   *   media: (url) => Uint8Array | Promise<Uint8Array> | null   AS3 の NetStream.play(url) が再生する FLV ファイルを返す関数。
+   *   media: (url) => Uint8Array | Promise<Uint8Array> | null   NetStream.play(url) が再生する FLV ファイルを返す関数。
    *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
    *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
    *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
@@ -255,6 +256,7 @@ export class Movie {
     this.#guard(() => this.avm?.runTimers());
     const as3 = this.avm2?.display;
     this.#guard(() => as3?.runStreams()); // 終わりまで再生した NetStream の通知
+    this.#guard(() => this.avm?.runStreams());
     as3?.runTimers();
     this.clips = this.clips.filter((clip) => (clip.listed = !clip.removed));
     const clips = this.clips.slice();
@@ -852,7 +854,7 @@ export class Movie {
           this.#define({ type: 'sound', ...sound });
         } else if (tag.code === 60) {
           const video = parseDefineVideoStream(tag);
-          if (!decodable(video.codec)) this.warn(`video ${video.id}: codec ${video.codec} is not supported (it will not be shown)`);
+          if (video.numFrames > 0 && !decodable(video.codec)) this.warn(`video ${video.id}: codec ${video.codec} is not supported (it will not be shown)`);
           this.#define({ type: 'video', ...video, frames: new Map() });
         } else if (tag.code === 61) {
           // フレームのデータは、ビデオのキャラクタに番号つきで集める。どれを表示するかは、置くときの ratio で決まる。
@@ -1164,6 +1166,21 @@ export class TextField extends DisplayObject {
 export class VideoObject extends DisplayObject {
   #sequence = null;
   #paths = null; // { image, width, height, list }
+  #object = null;
+
+  /** スクリプト（ActionScript 1 / 2）から見たこのビデオ。AVM1 が無ければ undefined。 */
+  scriptObject() {
+    if (!this.movie.avm) return undefined;
+    return (this.#object ??= new VideoScriptObject(this.movie.avm, this));
+  }
+
+  dotPath() {
+    return `${this.parent.dotPath()}.${this.name}`;
+  }
+
+  slashPath() {
+    return `${this.parent.parent ? this.parent.slashPath() : ''}/${this.name}`;
+  }
 
   constructor(movie, character, depth, desc, parent) {
     super(character, depth, desc, parent);
@@ -1357,7 +1374,7 @@ export class MovieClip extends DisplayObject {
   childByName(name, caseInsensitive) {
     const fold = (s) => (caseInsensitive ? this.movie.lower(s) : s);
     const wanted = fold(name);
-    const matches = (child) => (child instanceof MovieClip || child instanceof TextField) && fold(child.name) === wanted;
+    const matches = (child) => (child instanceof MovieClip || child instanceof TextField || child instanceof VideoObject) && fold(child.name) === wanted;
     for (const child of this.children.values()) if (matches(child)) return child;
     for (const child of this.limbo ?? []) if (matches(child)) return child;
     return undefined;

@@ -15,6 +15,7 @@
 //     //         ... square 40               中身として 40px の正方形を持たせる
 //     //         ... at 20,30                置く位置（px）
 //     // sound: 9 export beep seconds 0.3    サウンド 9（小さな音量の 440 Hz、22050 Hz の PCM）を定義し、attachSound 用の名前を付ける
+//     // video: 20 name vid depth 5 size 64x48 at 10,10  ビデオ 20（中身の無い Video オブジェクト）を、ルートの 1 フレーム目に置く
 //     // label: 3 loop                       ルートの 3 フレーム目にフレームラベル loop を付ける
 //     // label: 2 _over sprite 1             スプライト 1 の 2 フレーム目にラベルを付ける
 //   本文は「//// 」で始まる行で区切る。区切りが無ければ全体がルートの 1 フレーム目。
@@ -34,7 +35,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DefineSound, DefineSprite, End, PlaceObject2, ShowFrame, pcmBytes, square, swf, tag, tone, u16 } from './mkfixtures.js';
+import { DefineSound, DefineSprite, DefineVideoStream, End, PlaceObject2, ShowFrame, pcmBytes, square, swf, tag, tone, u16 } from './mkfixtures.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'test/as');
@@ -59,10 +60,14 @@ function build(name) {
   const labels = new Map(); // ルートのフレーム番号 → ラベル
   const spriteLabels = new Map(); // "スプライト ID:フレーム番号" → ラベル
   const sounds = []; // { id, name, seconds }
+  const videos = []; // { id, name, depth, size, at }
   for (const line of source.split('\n')) {
     let m;
     if ((m = line.match(/^\/\/ swf: (\d+)/))) version = Number(m[1]);
     if ((m = line.match(/^\/\/ sound: (\d+) export (\S+) seconds (\S+)/))) sounds.push({ id: Number(m[1]), name: m[2], seconds: Number(m[3]) });
+    if ((m = line.match(/^\/\/ video: (\d+) name (\S+) depth (\d+) size (\d+)x(\d+) at (\d+),(\d+)/))) {
+      videos.push({ id: Number(m[1]), name: m[2], depth: Number(m[3]), size: [Number(m[4]), Number(m[5])], at: [Number(m[6]), Number(m[7])] });
+    }
     if ((m = line.match(/^\/\/ label: (\d+) (\S+) sprite (\d+)/))) spriteLabels.set(`${m[3]}:${m[1]}`, m[2]);
     else if ((m = line.match(/^\/\/ label: (\d+) (\S+)/))) labels.set(Number(m[1]), m[2]);
     if ((m = line.match(/^\/\/ sprite: (\d+)(.*)/))) {
@@ -117,6 +122,8 @@ function build(name) {
     const samples = tone(22050, seconds);
     tags.push(DefineSound(id, 3, 22050, samples.length, pcmBytes(samples)), tag(56, [...u16(1), ...u16(id), ...cstr(exportName)]));
   }
+  // 中身の無いビデオ（オーサリングツールが作る Video オブジェクトと同じく、フレーム数 0）。
+  for (const { id, size } of videos) tags.push(DefineVideoStream(id, 0, size[0], size[1], 0));
   // 子として置かれるスプライトは、親より先に定義する。
   const level = (id) => (sprites.get(id)?.parent ? 1 + level(sprites.get(id).parent) : 0);
   const order = [...sprites.keys()].sort((a, b) => level(b) - level(a) || a - b);
@@ -137,7 +144,8 @@ function build(name) {
   }
   for (let n = 1; n <= rootFrames; n++) {
     const label = labels.has(n) ? [tag(43, cstr(labels.get(n)))] : []; // FrameLabel
-    tags.push(...frame('', n, [...label, ...(n === 1 ? childrenOf(0) : [])]));
+    const placed = n === 1 ? videos.map((v) => PlaceObject2({ depth: v.depth, id: v.id, name: v.name, matrix: { tx: v.at[0] * 20, ty: v.at[1] * 20 } })) : [];
+    tags.push(...frame('', n, [...label, ...(n === 1 ? childrenOf(0) : []), ...placed]));
   }
   tags.push(End());
 

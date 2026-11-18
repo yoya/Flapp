@@ -743,7 +743,7 @@ export class AVM1 {
           break;
         }
         case 0x44: push(typeOf(pop())); break;
-        case 0x45: { const t = pop(); push(t?.isMovieClip ? t.targetPath() : undefined); break; }
+        case 0x45: { const t = pop(); push(t?.isMovieClip || t?.isVideo ? t.targetPath() : undefined); break; }
         case 0x46: case 0x55: { // Enumerate / Enumerate2
           const obj = op === 0x46 ? this.getVariable(frame, str()) : pop();
           push(undefined);

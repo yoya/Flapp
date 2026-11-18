@@ -172,7 +172,7 @@ export function toStr(vm, v) {
     case 'undefined': return vm.version >= 7 ? 'undefined' : '';
     default: {
       if (v === null) return 'null';
-      if (v.isMovieClip || v.isTextField) return v.targetPath();
+      if (v.isMovieClip || v.isTextField || v.isVideo) return v.targetPath();
       if (v instanceof AVMFunction) return '[type Function]';
       if (v.primitive !== undefined) return toStr(vm, v.primitive);
       const fn = v.get('toString');
