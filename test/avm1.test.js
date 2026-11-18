@@ -91,3 +91,16 @@ test('別のクリップのフレームを call すると、呼ばれた側の�
   assert.deepEqual([card.matrix.tx, card.matrix.ty], [3000, 2000]);
   assert.deepEqual([movie.root.matrix.tx, movie.root.matrix.ty], [0, 0]);
 });
+
+test('getURL は移動せず、要求された URL だけを記録する', async () => {
+  // getURL("http://example.com/a", "_blank")（GetURL）と、スタックから取る形（GetURL2、POST）
+  const strings = [...cstr('http://example.com/a'), ...cstr('_blank')];
+  const getURL = [0x83, ...u16(strings.length), ...strings];
+  const seen = [];
+  const movie = await movieWith([[getURL, push('next.swf'), push('/clip'), [0x9a, 1, 0, 0x82]]], { onRequest: (r) => seen.push(r.url) });
+  assert.deepEqual(movie.requests, [
+    { kind: 'getURL', url: 'http://example.com/a', target: '_blank', method: '' },
+    { kind: 'loadMovie', url: 'next.swf', target: '/clip', method: 'POST' },
+  ]);
+  assert.deepEqual(seen, ['http://example.com/a', 'next.swf']);
+});

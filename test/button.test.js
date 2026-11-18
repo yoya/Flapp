@@ -5,22 +5,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Movie } from '../src/player/movie.js';
-import { realTrace } from './helpers.js';
+import { realTrace, replayInput } from './helpers.js';
 
-const KEYS = { ArrowLeft: 1, Enter: 13 }; // SWF のキーコード。ほかは文字コード
 const load = () => Movie.load(readFileSync(new URL('fixtures/button-events.swf', import.meta.url)));
 const upState = (movie, id) => movie.clips.find((c) => c.character.id === id).sortedChildren().map((c) => c.character.id);
 
 test('ボタン: 入力の手順どおりにアクションが実行される', async () => {
   const movie = await load();
   const steps = JSON.parse(readFileSync(new URL('fixtures/button-events.input.json', import.meta.url), 'utf8'));
-  for (const [kind, a, b] of steps) {
-    if (kind === 'move') movie.mouseMove(a * 20, b * 20);
-    else if (kind === 'down') movie.mouseDown();
-    else if (kind === 'up') movie.mouseUp();
-    else movie.keyDown(KEYS[a] ?? a.charCodeAt(0));
-    movie.advance();
-  }
+  replayInput(movie, steps);
   assert.deepEqual(movie.traces, realTrace(readFileSync(new URL('expected/button-events.input.trace.txt', import.meta.url))));
   // 手順が意図どおりに働いていること（何も起きずに一致しているのではないこと）も確かめる。
   for (const line of ['A press', 'A releaseOutside', 'B dragOut', 'C release', 'D key z', 'E key y']) assert.ok(movie.traces.includes(line), line);
@@ -53,6 +46,6 @@ test('ボタン: ルートが見えなければ、どのボタンも反応しな
   movie.mouseMove(70 * 20, 50 * 20);
   movie.mouseDown();
   movie.mouseUp();
-  movie.keyDown(97);
+  movie.keyDown(65);
   assert.deepEqual(movie.traces, []);
 });

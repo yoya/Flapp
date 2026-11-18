@@ -1,0 +1,15 @@
+pair hit true false true true true
+clips false true true inside true true outside false false
+now a=20,20 b=120,20 drop a=[] b=[]
+a start a=20,20 b=120,20
+now a=20,20 b=120,20 drop a=[] b=[]
+now a=40,50 b=120,20 drop a=[] b=[]
+now a=120,30 b=120,20 drop a=[/b] b=[]
+a stop a=120,30 b=120,20 drop=[/b]
+now a=120,30 b=120,20 drop a=[/b] b=[]
+b start a=120,30 b=120,20
+now a=120,30 b=120,20 drop a=[/b] b=[]
+now a=120,30 b=180,60 drop a=[/b] b=[]
+now a=120,30 b=100,60 drop a=[/b] b=[/pair/left]
+b stop a=120,30 b=100,60 drop=[/pair/left] eval=_level0.pair.left
+now a=120,30 b=100,60 drop a=[/b] b=[/pair/left]

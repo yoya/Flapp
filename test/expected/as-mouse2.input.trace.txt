@@ -1,0 +1,22 @@
+initial enabled=true hand=true trackAsMenu=undefined focus=undefined
+state a=1 b=1 c=1 enabled a=true b=true hand=true
+state a=2 b=1 c=1 enabled a=true b=true hand=true
+state a=3 b=1 c=1 enabled a=true b=true hand=true
+state a=2 b=1 c=1 enabled a=true b=true hand=true
+state a=3 b=1 c=1 enabled a=true b=true hand=true
+a release frame=2
+state a=2 b=1 c=1 enabled a=true b=true hand=true
+state a=1 b=1 c=1 enabled a=true b=true hand=true
+b press frame=1
+state a=1 b=1 c=1 enabled a=true b=true hand=true
+state a=1 b=1 c=1 enabled a=true b=true hand=true
+c rollOver frame=2
+state a=1 b=1 c=2 enabled a=true b=true hand=true
+c rollOut frame=2
+state a=1 b=1 c=2 enabled a=true b=true hand=true
+state a=1 b=1 c=2 enabled a=false b=false hand=true
+state a=1 b=1 c=2 enabled a=false b=false hand=true
+state a=1 b=1 c=2 enabled a=false b=false hand=true
+state a=1 b=1 c=2 enabled a=true b=true hand=true
+b press frame=1
+state a=1 b=1 c=2 enabled a=true b=true hand=true

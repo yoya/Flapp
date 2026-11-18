@@ -1,0 +1,20 @@
+typeof object true object
+initial: rgb=0 ra=100 rb=0 ga=100 gb=0 ba=100 bb=0 aa=100 ab=0
+setRGB(0x336699): rgb=3368601 ra=0 rb=51 ga=0 gb=102 ba=0 bb=153 aa=100 ab=0
+alpha 100
+setTransform all: rgb=-12545 ra=50 rb=100 ga=25 gb=-50 ba=0 bb=255 aa=79.6875 ab=10
+alpha 79.6875
+setTransform {ra:33.3}: rgb=-12545 ra=33.203125 rb=100 ga=25 gb=-50 ba=0 bb=255 aa=79.6875 ab=10
+setTransform big: rgb=-76545 ra=33.203125 rb=300 ga=25 gb=-300 ba=0 bb=255 aa=1000 ab=0
+_alpha=50: rgb=-76545 ra=33.203125 rb=300 ga=25 gb=-300 ba=0 bb=255 aa=50 ab=0
+setRGB(-1): rgb=16777215 ra=0 rb=255 ga=0 gb=255 ba=0 bb=255 aa=50 ab=0
+setRGB(0x1ffffff): rgb=16777215 ra=0 rb=255 ga=0 gb=255 ba=0 bb=255 aa=50 ab=0
+setRGB(undefined): rgb=0 ra=0 rb=0 ga=0 gb=0 ba=0 bb=0 aa=50 ab=0
+setRGB("255"): rgb=255 ra=0 rb=0 ga=0 gb=0 ba=0 bb=255 aa=50 ab=0
+setTransform(undefined): rgb=255 ra=0 rb=0 ga=0 gb=0 ba=0 bb=255 aa=50 ab=0
+keys ab aa bb ba gb ga rb ra 
+by name: rgb=255 ra=0 rb=0 ga=0 gb=0 ba=0 bb=255 aa=50 ab=0
+åxçê : êÈåæÇ≥ÇÍÇƒÇ¢Ç»Ç¢ïœêîÇéQè∆ÇµÇƒÇ¢Ç‹Ç∑ 'nothing'
+no target: undefined undefined undefined
+bad name: undefined undefined
+root: rgb=66051 ra=0 rb=1 ga=0 gb=2 ba=0 bb=3 aa=100 ab=0

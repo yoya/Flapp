@@ -114,11 +114,12 @@ test('テキストフィールド: 字形が無ければ端末フォント、HTM
   assert.deepEqual(editTextToPaths({ ...base, text: '' }, () => undefined), []);
 });
 
-test('テキストは図形として置ける。フォントは置けない', async () => {
+test('テキストは置ける。フォントは置けない', async () => {
   const movie = await Movie.load(fixtures.text);
   assert.deepEqual(movie.warnings, []);
-  assert.deepEqual(movie.root.sortedChildren().map((c) => [c.character.id, c.character.type, c.character.paths.length]), [
-    [10, 'shape', 5], [11, 'shape', 4], [12, 'shape', 3], [13, 'shape', 7],
+  // 静的テキストは図形、テキストフィールドは内容を変えられる表示オブジェクトになる。
+  assert.deepEqual(movie.root.sortedChildren().map((c) => [c.character.id, c.character.type, (c.character.paths ?? c.paths()).length]), [
+    [10, 'shape', 5], [11, 'shape', 4], [12, 'shape', 3], [13, 'edittext', 7],
   ]);
   assert.equal(movie.dictionary.get(1).type, 'font');
 });

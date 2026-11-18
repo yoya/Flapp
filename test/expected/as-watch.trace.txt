@@ -1,0 +1,23 @@
+watch returns true true false false
+watch a: 1 -> 5 user=U this.a=1
+a=10
+watch a: 10 -> 6 user=U this.a=10
+a=12
+watch b: undefined -> 1 user=undefined this.a=12
+b=2
+c=3
+watch a: undefined -> 10 user=U this.a=undefined
+after delete a=20
+unwatch true false false
+a=7
+no return 2 -> 9
+b=[undefined]
+q.x=2 p.x=1 own=true
+resolve zzz
+resolve a
+resolve f
+zzz! a! string
+1
+resolve method
+undefined
+[undefined]

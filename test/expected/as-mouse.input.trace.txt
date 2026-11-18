@@ -1,0 +1,72 @@
+typeof Mouse=object hide=1 show=0 hide=1 hide=0 show=0
+a onRollOver
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 40,40
+a onPress a 20,20
+c clip mouseUp
+a onMouseUp
+listener up
+a onRelease
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 40,40
+a onPress a 20,20
+a onDragOut
+a onDragOver
+a onDragOut
+c clip mouseUp
+a onMouseUp
+listener up
+a onReleaseOutside
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 120,40
+c clip mouseUp
+a onMouseUp
+listener up
+b onRelease
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 120,40
+c clip mouseUp
+a onMouseUp
+listener up
+a onRollOver
+a onRollOut
+c on rollOver
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 40,120
+c on press c
+c clip mouseUp
+a onMouseUp
+listener up
+c on release
+c on rollOut
+d onMouseDown hit=true
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 120,120
+c clip mouseUp
+a onMouseUp
+listener up
+d onMouseDown hit=false
+c clip mouseDown c
+a onMouseDown
+root onMouseDown
+listener down 200,80
+c clip mouseUp
+a onMouseUp
+listener up

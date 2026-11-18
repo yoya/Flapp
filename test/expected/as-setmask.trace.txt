@@ -1,0 +1,2 @@
+setMask returns true
+mask visible true function

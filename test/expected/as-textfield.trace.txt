@@ -1,0 +1,48 @@
+typeof object [_level0.tf] instanceof true depth=1 name=tf target=/tf parent=_level0
+pos 10,20 size 100x40 vis=true alpha=100 rot=0 xs=100,100
+text=[] length=0 type=dynamic html=false multiline=false wordWrap=false selectable=true
+border=false background=false password=false embedFonts=false autoSize=none maxChars=null
+textColor=0 borderColor=0 backgroundColor=16777215 variable=null restrict=null condenseWhite=false mouseWheelEnabled=true
+scroll=1 maxscroll=1 hscroll=0 maxhscroll=0 bottomScroll=1 textWidth=0 textHeight=0
+text=[hello] length=5 html=[hello] sized=true,true
+number -> [123] string
+undefined -> [undefined]
+null -> [null]
+lines -> length=5 codes=13,13
+textColor=16711680
+textColor=16777215
+type=input
+type=input
+type=dynamic
+autoSize=left
+autoSize=center
+autoSize=right
+autoSize=none
+autoSize=none
+set: true true 1193046 255 5 true false
+maxChars 0 -> null
+maxChars -3 -> -3
+moved 50,20 200x10 xs=100
+scaled 400x10 xs=200
+警告 : 宣言されていない変数を参照しています 'v'
+bound: variable=v v=[undefined] text=[start]
+after v set: text=[from var]
+after text set: v=[to var]
+format object true: Times Roman 12 16777215 false false false left 0 0 0 0 [] [] false 
+new format: Times Roman 12 16777215 false false false left 0 0 0 0 [] [] false 
+constructed: Arial 20 255 true false true center 1 2 3 4 [http://x/] [_blank] null null
+empty: null null null null null null null null null null null [null] [null] null null
+after setTextFormat: Arial 20 255 true false true center 1 2 3 4 [http://x/] [_blank] false  | new: Times Roman 12 16777215 false false false left 0 0 0 0 [] [] false 
+after text change: Times Roman 12 16777215 false false false left 0 0 0 0 [] [] false 
+after setNewTextFormat: Arial 20 255 true false true center 1 2 3 4 [http://x/] [_blank] false 
+root keys: names f2 fmtText fmt v $version tf 
+frame 2: text=[again] v=[again]
+same frame: text=[second]
+recreated: [] 10
+警告 : 宣言されていない変数を参照しています 'other'
+警告 : 宣言されていない変数を参照しています 'other'
+警告 : 宣言されていない変数を参照しています 'other'
+警告 : 'other' にはプロパティ 'text' がありません
+removed: [undefined] undefined [undefined]
+createTextField returns _level0.ret
+frame 3: text=[] v=[second]

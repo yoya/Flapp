@@ -1,0 +1,24 @@
+add true true remove true false add true
+8 20 17 46 40 35 13 27 36
+45 37 34 33 39 16 32 9 38
+before: code=0 ascii=0 typeof Key=object
+a clip keyDown 65 a
+listener down code=65 ascii=97
+a clip keyUp 65
+listener up code=65 ascii=97
+a clip keyDown 13 a
+listener down code=13 ascii=13
+a clip keyUp 13
+listener up code=13 ascii=13
+a clip keyDown 37 a
+listener down code=37 ascii=0
+a clip keyUp 37
+listener up code=37 ascii=0
+a clip keyDown 32 a
+listener down code=32 ascii=32
+a clip keyUp 32
+listener up code=32 ascii=32
+a clip keyDown 90 a
+listener down code=90 ascii=122
+a clip keyUp 90
+listener up code=90 ascii=122

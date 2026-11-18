@@ -1,0 +1,26 @@
+typeof object true true status=0 loaded=undefined type=1 name=null value=null
+toString <a x="1" y="2"><b>text</b><c /><d>t1<e />t2</d></a>
+concat <a x="1" y="2"><b>text</b><c /><d>t1<e />t2</d></a>
+a: name=a type=1 value=null x=1 y=2 children=3 has=true typeof childNodes=object true
+b: b child type=3 [text] name=null next=c prev=null parent=a last=d has=false
+d: 3 [t1] e [t2] parent of root=null null
+attributes: x=1 y=2 
+white: 5 2 [ x ] <a><b> x </b><c /></a> ignoreWhite=false
+entities: [<&">'] [<x> & ' " A  ] <a t="&lt;&amp;&quot;&gt;&apos;">&lt;x&gt; &amp; &apos; &quot; A  </a>
+cdata: 2 [<raw> & stuff] <a>&lt;raw&gt; &amp; stufftail</a>
+decl: [<?xml version="1.0"?>] [<!DOCTYPE note SYSTEM "n.dtd">] <?xml version="1.0"?><!DOCTYPE note SYSTEM "n.dtd"><a /> children=1
+built: <root name="a&lt;b&gt;&quot;c&quot;" id="1">hi &lt;there&gt; &amp; &quot;you&quot;</root> [hi <there> & "you"] 3 true 1
+insert: <root name="a&lt;b&gt;&quot;c&quot;" id="1"><first />hi &lt;there&gt; &amp; &quot;you&quot;<second /></root>
+move: <root name="a&lt;b&gt;&quot;c&quot;" id="1"><first />hi &lt;there&gt; &amp; &quot;you&quot;<second /></root>
+remove: <root name="a&lt;b&gt;&quot;c&quot;" id="1"><first />hi &lt;there&gt; &amp; &quot;you&quot;</root> parent=null
+clone: <root name="a&lt;b&gt;&quot;c&quot;" id="1"><first />hi &lt;there&gt; &amp; &quot;you&quot;</root> | <root name="a&lt;b&gt;&quot;c&quot;" id="1" /> parent=null same=false
+edit: <renamed name="a&lt;b&gt;&quot;c&quot;" id="1"><first />changed</renamed> clone still <root name="a&lt;b&gt;&quot;c&quot;" id="1"><first />hi &lt;there&gt; &amp; &quot;you&quot;</root>
+status: -9 -6 -10 -6 0 -5 -2 0 0
+bad: <a><b /></a> | text only | <a /><b />
+XMLNode: <el /> plain 1 null object
+parseXML: <z k="v" /> 1 0
+content: application/x-www-form-urlencoded undefined undefined function function
+load returns true loaded=false
+self closing: <a /> <a>  </a> A a:b
+xml onLoad false loaded=false status=0
+frame 4

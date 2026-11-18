@@ -1,0 +1,21 @@
+// Stage と System.capabilities（実行する機械で変わる値は型だけ確かめる）
+trace("typeof " + typeof Stage + " " + typeof System + " " + typeof System.capabilities);
+trace("stage " + Stage.width + "x" + Stage.height + " scaleMode=" + Stage.scaleMode + " align=[" + Stage.align + "] showMenu=" + Stage.showMenu);
+Stage.scaleMode = "noScale"; trace("noScale -> " + Stage.scaleMode + " " + Stage.width + "x" + Stage.height);
+Stage.scaleMode = "EXACTFIT"; trace("EXACTFIT -> " + Stage.scaleMode);
+Stage.scaleMode = "bogus"; trace("bogus -> " + Stage.scaleMode);
+Stage.scaleMode = "noBorder"; trace("noBorder -> " + Stage.scaleMode);
+Stage.scaleMode = "showAll";
+Stage.align = "TL"; trace("TL -> [" + Stage.align + "]");
+Stage.align = "rb"; trace("rb -> [" + Stage.align + "]");
+Stage.align = "xyzL"; trace("xyzL -> [" + Stage.align + "]");
+Stage.align = ""; trace("empty -> [" + Stage.align + "]");
+Stage.showMenu = false; trace("showMenu " + Stage.showMenu);
+Stage.width = 999; trace("width is read only: " + Stage.width);
+var l = new Object(); l.onResize = function() { trace("resize"); };
+trace("listener " + Stage.addListener(l) + " " + Stage.removeListener(l) + " " + Stage.removeListener(l));
+var cap = System.capabilities;
+trace("version " + cap.version + " " + (cap.version == $version) + " playerType " + cap.playerType + " manufacturer " + cap.manufacturer);
+trace("types " + typeof cap.os + " " + typeof cap.language + " " + typeof cap.screenResolutionX + " " + typeof cap.screenDPI + " " + typeof cap.hasAudio + " " + typeof cap.isDebugger + " " + typeof cap.serverString + " " + typeof cap.screenColor + " " + typeof cap.pixelAspectRatio);
+trace("flags " + cap.hasAudio + " " + cap.hasMP3 + " " + cap.hasVideoEncoder + " " + cap.hasAccessibility + " " + cap.hasPrinting + " " + cap.hasScreenBroadcast + " " + cap.hasScreenPlayback + " " + cap.hasStreamingAudio + " " + cap.hasStreamingVideo + " " + cap.hasEmbeddedVideo + " " + cap.hasAudioEncoder + " " + cap.avHardwareDisable + " " + cap.localFileReadDisable + " " + cap.screenColor + " " + cap.pixelAspectRatio);
+trace("useCodepage " + System.useCodepage + " " + typeof System.security + " " + typeof System.setClipboard + " " + typeof System.showSettings);

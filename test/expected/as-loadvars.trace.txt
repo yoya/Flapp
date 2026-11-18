@@ -1,0 +1,21 @@
+typeof object true [] loaded=undefined contentType=application/x-www-form-urlencoded
+toString f=1%2E5&e=true&d=null&c=undefined&b=x%20y%26z%3D1&a=1
+decode A=[B] t=[] s=[] r=[a b] q=[hello world] p=[2] 
+bytes undefined undefined
+load returns true loaded=false false
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ðŽQÆ‚µ‚Ä‚¢‚Ü‚· 'nothing'
+mcl object add=true loadClip=true bad target=false
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ðŽQÆ‚µ‚Ä‚¢‚Ü‚· 'nothing'
+progress object number undefined
+so object true data=object size=0
+flush true size>0 true
+again same=true n=42 list=1,2,3
+after clear n=undefined size=0
+bad [object Object] null
+end of frame 1
+frame 2
+lv2 onLoad false loaded=false bytes=0/undefined
+lv3 onData [undefined] undefined
+mcl error _level0.holder URLNotFound
+frame 3 holder=_level0.holder frames=0
+frame 12

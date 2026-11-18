@@ -1,0 +1,2 @@
+pair hit true false true true true
+clips false true true inside true true outside false false

@@ -2,10 +2,10 @@
 // trace() の出力が実機（Flash Player デバッガ版）の出力 (test/expected/as-*.trace.txt) と一致することを確かめる。
 // SWF と期待値の作り直しは `node tools/mkas.js` と `npm run oracle`。
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { Movie } from '../src/player/movie.js';
-import { realTrace } from './helpers.js';
+import { realTrace, replayInput } from './helpers.js';
 
 const FRAMES = 40; // 実機の出力は再生開始から数秒後（12 fps で 30 フレーム前後）に取っている
 
@@ -17,11 +17,18 @@ for (const file of readdirSync(dir).filter((f) => /^as-.*\.swf$/.test(f)).sort()
     let time = 0;
     const encoding = name.endsWith('-sjis') ? 'shift_jis' : undefined; // SWF 5 以前の文字コード
     const movie = await Movie.load(readFileSync(new URL(file, dir)), { now: () => time, random: () => 0.5, encoding });
-    for (let i = 0; i < FRAMES; i++) {
-      time += 1000 / movie.frameRate;
-      movie.advance();
+    // 入力の手順 (<名前>.input.json) があれば、それを与えたときの出力を、同じ入力を実機へ送って取った trace と比べる。
+    const input = new URL(`${name}.input.json`, dir);
+    const withInput = existsSync(input);
+    if (withInput) {
+      replayInput(movie, JSON.parse(readFileSync(input, 'utf8')), 3); // 実機では 1 手順が 0.25 秒（12 fps で 3 フレーム）
+    } else {
+      for (let i = 0; i < FRAMES; i++) {
+        time += 1000 / movie.frameRate;
+        movie.advance();
+      }
     }
-    const expected = realTrace(readFileSync(new URL(`expected/${name}.trace.txt`, import.meta.url)), encoding);
+    const expected = realTrace(readFileSync(new URL(`expected/${name}.${withInput ? 'input.' : ''}trace.txt`, import.meta.url)), encoding);
     assert.deepEqual(movie.traces, expected);
   });
 }

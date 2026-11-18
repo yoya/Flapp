@@ -22,3 +22,26 @@ export function realTrace(bytes, encoding = 'utf-8') {
   }
   return lines;
 }
+
+// 入力の手順のキー名 → [仮想キーコード, 文字コード]。ここに無い 1 文字のキーは、その文字（英字は大文字のコード）として扱う。
+const KEYS = { Enter: [13, 13], ArrowLeft: [37, 0], ArrowUp: [38, 0], ArrowRight: [39, 0], ArrowDown: [40, 0], ' ': [32, 32] };
+
+/**
+ * <名前>.input.json の手順をムービーに与える（実機へは tools/oracle-input.js が同じ手順を送る）。
+ * 実機では手順の間にもフレームが進むので、1 手順ごとに frames 回フレームを進める。
+ * @param {import('../src/player/movie.js').Movie} movie
+ * @param {Array<[string, ...any]>} steps  ["move", x, y] / ["down"] / ["up"] / ["key", 名前]（座標はステージの px）
+ */
+export function replayInput(movie, steps, frames = 1) {
+  for (const [kind, a, b] of steps) {
+    if (kind === 'move') movie.mouseMove(a * 20, b * 20);
+    else if (kind === 'down') movie.mouseDown();
+    else if (kind === 'up') movie.mouseUp();
+    else if (kind === 'key') {
+      const [code, ascii] = KEYS[a] ?? [a.toUpperCase().charCodeAt(0), a.charCodeAt(0)];
+      movie.keyDown(code, ascii);
+      movie.keyUp(code);
+    }
+    for (let i = 0; i < frames; i++) movie.advance();
+  }
+}

@@ -1,0 +1,9 @@
+[
+  ["key", "a"],
+  ["move", 40, 40], ["key", "a"], ["down"], ["key", "a"], ["move", 200, 80], ["key", "a"], ["move", 40, 40], ["key", "a"], ["up"], ["key", "a"],
+  ["move", 120, 40], ["key", "a"], ["down"], ["key", "a"], ["up"], ["key", "a"],
+  ["move", 40, 120], ["key", "a"], ["down"], ["up"], ["move", 200, 80], ["key", "a"],
+  ["key", "z"],
+  ["move", 40, 40], ["key", "a"], ["down"], ["up"], ["move", 120, 40], ["down"], ["up"], ["key", "a"],
+  ["key", "z"], ["down"], ["up"], ["key", "a"]
+]

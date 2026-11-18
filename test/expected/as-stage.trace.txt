@@ -1,0 +1,17 @@
+typeof object object object
+stage 240x160 scaleMode=showAll align=[] showMenu=true
+noScale -> noScale 240x160
+EXACTFIT -> exactFit
+bogus -> showAll
+noBorder -> noBorder
+TL -> [LT]
+rb -> [RB]
+xyzL -> [L]
+empty -> []
+showMenu false
+width is read only: 240
+listener true true false
+version MAC 35,0,0,61 true playerType StandAlone manufacturer Macromedia Macintosh
+types string string number number boolean boolean string string number
+flags true true true false true false false true true true true false false color 1
+useCodepage false object function function
