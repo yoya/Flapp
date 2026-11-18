@@ -2,8 +2,14 @@
 //
 // AS3 のオブジェクト obj と、プレイヤーの表示オブジェクト d は 1 対 1 で結び付く（obj.display === d、d.as3 === obj）。
 // 位置やフレームなどの状態はプレイヤー側が持ち、ここのクラスはそれを読み書きするだけ。
+import { installBitmap } from './bitmap.js';
+import { installBytes } from './bytes.js';
 import { installGeom } from './geom.js';
+import { installMedia } from './media.js';
+import { installNet } from './net.js';
+import { installText } from './text.js';
 import { ASArray, ASClass, ASFunction, ASObject, publicKey } from './object.js';
+import { installUtils } from './utils.js';
 
 const DEG = 180 / Math.PI;
 
@@ -20,6 +26,9 @@ export function installFlash(vm, movie, types) {
   const display = (vm.display = { stage: null, frameListeners: new Set() });
   // ハンドラやコンストラクタの中で捕まえられなかった例外は、警告として残す（実機のデバッガ版は、その内容をログに書く）。
   const report = (text) => movie.warn(`uncaught error: ${text}`);
+
+  installUtils(vm);
+  installBytes(vm);
 
   // --- イベント ---
   c.Event = vm.defineClass({
@@ -49,9 +58,9 @@ export function installFlash(vm, movie, types) {
     },
   });
   // 派生のイベント。fields は、コンストラクタの 4 番目以降の引数に対応する項目と、その既定値・変換（読み取り用のプロパティにもなる）。
-  const eventClass = (name, fields, constants, defaultBubbles = false) => {
+  const eventClass = (name, fields, constants, defaultBubbles = false, base = c.Event) => {
     const klass = vm.defineClass({
-      name: `flash.events::${name}`, base: c.Event,
+      name: `flash.events::${name}`, base,
       construct: (self, [type, bubbles = defaultBubbles, cancelable, ...rest]) => {
         vm.call(c.Event.constructorFn, self, [type, bubbles, cancelable]);
         fields.forEach(([key, initial, convert], i) => { self.event[key] = rest[i] === undefined ? initial : convert(rest[i]); });
@@ -96,6 +105,15 @@ export function installFlash(vm, movie, types) {
     ['ctrlKey', false, bool], ['altKey', false, bool], ['shiftKey', false, bool],
   ], { KEY_DOWN: 'keyDown', KEY_UP: 'keyUp' }, true);
   c.TimerEvent = eventClass('TimerEvent', [], { TIMER: 'timer', TIMER_COMPLETE: 'timerComplete' });
+  // 読み込みや通信にかかわるイベント（外部の読み込みはしないので、届くのは失敗の通知だけ）。
+  const text = [['text', '', str]];
+  const errorFields = [['text', '', str], ['errorID', 0, (v) => vm.toInt32(v)]];
+  c.TextEvent = eventClass('TextEvent', text, { LINK: 'link', TEXT_INPUT: 'textInput' });
+  c.ErrorEvent = eventClass('ErrorEvent', errorFields, { ERROR: 'error' }, false, c.TextEvent);
+  c.IOErrorEvent = eventClass('IOErrorEvent', errorFields, { IO_ERROR: 'ioError' }, false, c.ErrorEvent);
+  c.SecurityErrorEvent = eventClass('SecurityErrorEvent', errorFields, { SECURITY_ERROR: 'securityError' }, false, c.ErrorEvent);
+  c.ProgressEvent = eventClass('ProgressEvent', [['bytesLoaded', 0, num], ['bytesTotal', 0, num]], { PROGRESS: 'progress', SOCKET_DATA: 'socketData' });
+  c.HTTPStatusEvent = eventClass('HTTPStatusEvent', [['status', 0, (v) => vm.toInt32(v)]], { HTTP_STATUS: 'httpStatus' });
 
   // current に登録されたリスナーのうち、段階 phase（1: キャプチャ、2: ターゲット、3: バブリング）で呼ぶものを呼ぶ。
   // リスナーの中の例外は、ほかのリスナーや dispatchEvent の呼び出し元には伝わらない。
@@ -126,6 +144,8 @@ export function installFlash(vm, movie, types) {
     return !e.prevented;
   };
   display.dispatch = dispatch;
+  display.send = (target, klass, args) => send(target, klass, args);
+  display.later = (fn) => addTimer(1000 / movie.frameRate + 0.01, true, fn); // 1 フレームぶんの時間が過ぎた後で fn を呼ぶ
   // プレイヤーが起こすイベントを作って届ける。
   const send = (target, klass, args, fill) => vm.run(() => {
     const event = vm.construct(klass, args);
@@ -172,18 +192,34 @@ export function installFlash(vm, movie, types) {
         fire(target, 'mouseOver', true, old);
       }
     }
-    if (!target || !type) return;
-    fire(target, type, true);
-    if (type === 'mouseDown') pressed = target;
-    if (type === 'mouseUp') {
-      if (pressed === target) fire(target, 'click', true);
-      pressed = null;
+    if (target && type) {
+      fire(target, type, true);
+      if (type === 'mouseDown') pressed = target;
+      if (type === 'mouseUp') {
+        if (pressed === target) fire(target, 'click', true);
+        pressed = null;
+      }
     }
+    // スクリプトが作ったボタン（new SimpleButton）の見た目: 乗っていれば over、その上で押していれば down、それ以外は up。
+    // タイムラインに置かれたボタンの見た目は、プレイヤー側（movie.js）が切り替える。
+    const button = target?.display?.states && target.display.enabled !== false ? target.display : null;
+    if (lit && lit !== button) showState(lit, 'up');
+    if (button) showState(button, down && pressed === target ? 'down' : 'over');
+    lit = button;
+  };
+  let lit = null; // 見た目が up 以外になっているボタン
+  // ボタンの表示オブジェクト d の見た目を state にする（その状態の表示オブジェクトだけを子にする）。
+  const showState = (d, state = d.buttonState) => {
+    d.buttonState = state;
+    const want = d.states[state];
+    for (const child of d.sortedChildren()) if (child !== want) d.detachChild(child);
+    // 状態の表示オブジェクトが、ほかのところ（addChild された先）にあるなら、取り戻さない（そのボタンには何も表示されない。実機で確認）。
+    if (want && !want.parent) d.insertChild(want);
   };
   /** キーの押し下げ・解放を伝える。フォーカスを持つものが無いので、ステージが相手になる。 */
   display.key = (type, keyCode, charCode) => send(display.stage, c.KeyboardEvent, [type, true, false, charCode, keyCode]);
   /** マウスが、手の形のカーソルを出すもの（buttonMode のスプライト）の上にあるか。 */
-  display.handCursor = () => !!over?.display?.buttonMode && over.display.useHandCursor !== false;
+  display.handCursor = () => (!!over?.display?.buttonMode || (!!over?.display?.states && over.display.enabled !== false)) && over.display.useHandCursor !== false;
 
   // --- タイマー ---
   const timers = new Map(); // id → { next, interval, once, fire }
@@ -269,7 +305,11 @@ export function installFlash(vm, movie, types) {
   const xform = (d) => {
     if (!d.xform) {
       const m = d.matrix;
-      d.xform = { xscale: Math.hypot(m.a, m.b) * 100, yscale: Math.hypot(m.c, m.d) * 100, rotation: Math.atan2(m.b + 0, m.a) * DEG, skew: Math.atan2(-m.c + 0, m.d) - Math.atan2(m.b + 0, m.a) };
+      // 回転も傾きも無ければ、拡大率は行列の成分そのもの（負にもなる）。それ以外で裏返っている（行列式が負の）ときは、
+      // 縦の拡大率が負になる（どちらも実機で確認）。
+      const flip = m.a * m.d - m.b * m.c < 0 ? -1 : 1;
+      d.xform = m.b === 0 && m.c === 0 ? { xscale: m.a * 100, yscale: m.d * 100, rotation: 0, skew: 0 }
+        : { xscale: Math.hypot(m.a, m.b) * 100, yscale: flip * Math.hypot(m.c, m.d) * 100, rotation: Math.atan2(m.b + 0, m.a) * DEG, skew: Math.atan2(-m.c * flip + 0, m.d * flip) - Math.atan2(m.b + 0, m.a) };
     }
     return d.xform;
   };
@@ -277,27 +317,35 @@ export function installFlash(vm, movie, types) {
     const t = Object.assign(xform(d), values);
     const rx = t.rotation / DEG;
     const ry = rx + t.skew;
-    d.setMatrix({ a: (t.xscale / 100) * Math.cos(rx), b: (t.xscale / 100) * Math.sin(rx), c: (-t.yscale / 100) * Math.sin(ry), d: (t.yscale / 100) * Math.cos(ry), tx: d.matrix.tx, ty: d.matrix.ty });
+    // 拡大率や回転から作る行列の成分は、1/65536 刻みの固定小数点数で計算される（実機で確認: 拡大率は切り捨て、
+    // 三角関数は四捨五入、その積は四捨五入）。傾きのある行列では、実機の値とわずかに違う（実機の計算の精度が低い）。
+    const mul = (scale, trig) => Math.round((Math.trunc(scale * 655.36) * Math.round(trig * 65536)) / 65536) / 65536;
+    d.setMatrix({ a: mul(t.xscale, Math.cos(rx)), b: mul(t.xscale, Math.sin(rx)), c: mul(-t.yscale, Math.sin(ry)), d: mul(t.yscale, Math.cos(ry)), tx: d.matrix.tx, ty: d.matrix.ty });
   };
   const size = (d, axis) => { const b = d.boundsInParent?.(); return b ? (axis === 'x' ? b.xmax - b.xmin : b.ymax - b.ymin) / 20 : 0; };
+  const geom = installGeom(vm, onStage);
   c.DisplayObject = vm.defineClass({
     name: 'flash.display::DisplayObject', base: c.EventDispatcher, allocate,
-    methods: installGeom(vm), // localToGlobal、getBounds、hitTestPoint など
+    methods: geom.methods, // localToGlobal、getBounds、hitTestPoint など
     getters: {
+      transform: geom.getTransform,
       x: (self) => D(self).matrix.tx / 20, y: (self) => D(self).matrix.ty / 20,
       scaleX: (self) => xform(D(self)).xscale / 100, scaleY: (self) => xform(D(self)).yscale / 100,
       rotation: (self) => xform(D(self)).rotation,
       alpha: (self) => (D(self).cxform?.am ?? 256) / 256,
       visible: (self) => D(self).visible,
       name: (self) => D(self).name,
-      parent: (self) => (D(self).parent ? display.wrap(D(self).parent) : onStage(D(self)) ? display.stage : null),
+      // ボタンの状態として使われているものには、親が無い。
+      parent: (self) => (D(self).parent?.states ? null : D(self).parent ? display.wrap(D(self).parent) : onStage(D(self)) ? display.stage : null),
       // ステージに直接入れたものの root は、ステージになる。
       root: (self) => (onStage(D(self)) ? display.wrap(topOf(D(self))) : null),
       stage: (self) => (onStage(D(self)) ? display.stage : null),
+      loaderInfo: (self) => (onStage(D(self)) ? display.loaderInfo() : null),
       width: (self) => size(D(self), 'x'), height: (self) => size(D(self), 'y'),
       mouseX: (self) => D(self).globalToLocal(movie.mouse.x, movie.mouse.y).x / 20, mouseY: (self) => D(self).globalToLocal(movie.mouse.x, movie.mouse.y).y / 20,
     },
     setters: {
+      transform: geom.setTransform,
       // 位置は twips に切り捨てて持つ（AVM1 と同じ）。
       x: (self, v) => { const n = num(v); if (!Number.isNaN(n)) D(self).setMatrix({ ...D(self).matrix, tx: Math.trunc(n * 20) }); },
       y: (self, v) => { const n = num(v); if (!Number.isNaN(n)) D(self).setMatrix({ ...D(self).matrix, ty: Math.trunc(n * 20) }); },
@@ -318,6 +366,9 @@ export function installFlash(vm, movie, types) {
     getters: { mouseEnabled: (self) => D(self).mouseEnabled ?? true, doubleClickEnabled: () => false, tabEnabled: () => false },
     setters: { mouseEnabled: (self, v) => { D(self).mouseEnabled = vm.toBoolean(v); }, doubleClickEnabled: () => {}, tabEnabled: () => {} },
   });
+
+  installText(vm, movie);
+  installBitmap(vm, movie);
 
   // --- 子の出し入れ ---
   const container = (self) => D(self);
@@ -471,10 +522,11 @@ export function installFlash(vm, movie, types) {
     }
     return self.graphics;
   };
+  const media = installMedia(vm, movie);
   c.Sprite = vm.defineClass({
     name: 'flash.display::Sprite', base: c.DisplayObjectContainer,
-    getters: { graphics, buttonMode: (self) => D(self).buttonMode ?? false, useHandCursor: (self) => D(self).useHandCursor ?? true },
-    setters: { buttonMode: (self, v) => { D(self).buttonMode = vm.toBoolean(v); }, useHandCursor: (self, v) => { D(self).useHandCursor = vm.toBoolean(v); } },
+    getters: { graphics, buttonMode: (self) => D(self).buttonMode ?? false, useHandCursor: (self) => D(self).useHandCursor ?? true, soundTransform: media.getSoundTransform },
+    setters: { buttonMode: (self, v) => { D(self).buttonMode = vm.toBoolean(v); }, useHandCursor: (self, v) => { D(self).useHandCursor = vm.toBoolean(v); }, soundTransform: media.setSoundTransform },
   });
   // フレームの指定（番号かラベル）をフレーム番号にする。
   const frameOf = (d, spec) => {
@@ -513,12 +565,52 @@ export function installFlash(vm, movie, types) {
   });
   c.Shape = vm.defineClass({ name: 'flash.display::Shape', base: c.DisplayObject, getters: { graphics } });
   c.MorphShape = vm.defineClass({ name: 'flash.display::MorphShape', base: c.DisplayObject });
-  c.SimpleButton = vm.defineClass({ name: 'flash.display::SimpleButton', base: c.InteractiveObject });
+  // SimpleButton。new で作ったものは、4 つの状態（up / over / down と、当たり判定用の hitTest）の表示オブジェクトを持つ。
+  // タイムラインに置かれたボタンは、状態の中身をプレイヤー側が持つので、ここからは状態を取り出せない（null になる）。
+  const stateOf = (v, name) => {
+    if (v === null || v === undefined) return null;
+    if (!(v instanceof ASObject) || !v.display?.worldMatrix) vm.throwError('TypeError', 1034, `Type Coercion failed: cannot convert ${vm.className(v)} to flash.display.DisplayObject. (${name})`);
+    return v.display;
+  };
+  const state = (name) => [
+    (self) => { const d = D(self).states?.[name]; return d ? display.wrap(d) : null; },
+    (self, v) => {
+      const d = D(self);
+      if (!d.states) return;
+      const next = stateOf(v, name);
+      if (next?.parent && next.parent !== d) next.parent.detachChild(next); // ほかの親からは外れる
+      d.states[name] = next;
+      showState(d);
+    },
+  ];
+  const states = { upState: state('up'), overState: state('over'), downState: state('down'), hitTestState: state('hit') };
+  c.SimpleButton = vm.defineClass({
+    name: 'flash.display::SimpleButton', base: c.InteractiveObject,
+    construct: (self, [up = null, over = null, down = null, hit = null]) => {
+      const d = D(self);
+      if (d.character.button) return; // タイムラインに置かれたボタン
+      d.states = { up: null, over: null, down: null, hit: null };
+      d.buttonState = 'up';
+      [up, over, down, hit].forEach((v, i) => { if (v !== null && v !== undefined) states[['upState', 'overState', 'downState', 'hitTestState'][i]][1](self, v); });
+    },
+    getters: {
+      ...Object.fromEntries(Object.entries(states).map(([name, [get]]) => [name, get])),
+      enabled: (self) => D(self).enabled ?? true, useHandCursor: (self) => D(self).useHandCursor ?? true, trackAsMenu: (self) => D(self).trackAsMenu ?? false,
+      soundTransform: media.getSoundTransform,
+    },
+    setters: {
+      ...Object.fromEntries(Object.entries(states).map(([name, [, set]]) => [name, set])),
+      // 無効にすると、見た目が up のまま変わらなくなる（マウスのイベントは届く）。
+      enabled: (self, v) => { const d = D(self); d.enabled = vm.toBoolean(v); if (!d.enabled && d.states) showState(d, 'up'); },
+      useHandCursor: (self, v) => { D(self).useHandCursor = vm.toBoolean(v); }, trackAsMenu: (self, v) => { D(self).trackAsMenu = vm.toBoolean(v); },
+      soundTransform: media.setSoundTransform,
+    },
+  });
   c.Stage = vm.defineClass({
     name: 'flash.display::Stage', base: c.DisplayObjectContainer,
     getters: {
       stageWidth: () => (movie.frameSize.xmax - movie.frameSize.xmin) / 20, stageHeight: () => (movie.frameSize.ymax - movie.frameSize.ymin) / 20,
-      frameRate: () => movie.frameRate, parent: () => null, stage: (self) => self, root: (self) => self, name: () => null,
+      frameRate: () => movie.frameRate, parent: () => null, stage: (self) => self, root: (self) => self, name: () => null, loaderInfo: () => display.loaderInfo(true),
       mouseX: () => movie.mouse.x / 20, mouseY: () => movie.mouse.y / 20, x: () => 0, y: () => 0,
       scaleMode: (self) => self.scaleMode ?? 'showAll', align: (self) => self.align ?? '', focus: () => null,
     },
@@ -534,6 +626,7 @@ export function installFlash(vm, movie, types) {
     if (klass) return klass;
     if (d.character.button) return c.SimpleButton;
     if (d instanceof types.MovieClip) return c.MovieClip;
+    if (d instanceof types.TextField) return c.TextField;
     return d.character.type === 'morph' ? c.MorphShape : c.Shape;
   };
   /** 表示オブジェクト d に対応する AS3 のオブジェクトを作る（コンストラクタはまだ呼ばない）。 */
@@ -548,11 +641,13 @@ export function installFlash(vm, movie, types) {
   /** コンストラクタを呼ぶ（子が作られた後）。名前があれば、親の同名のプロパティに入れる。 */
   display.construct = (d) => {
     // クリップ以外（図形など）は、イベントを聞くものがいなければ AS3 のオブジェクトを作らずに済ませる。
-    if (!d.as3 && !heard(d, 'added')) return;
+    // テキストフィールドは、名前で参照されるので必ず作る。
+    const field = d instanceof types.TextField;
+    if (!d.as3 && !field && !heard(d, 'added')) return;
     const fresh = !d.as3;
     const obj = display.wrap(d);
     if (!fresh && obj.klass.constructorFn) vm.run(() => vm.call(obj.klass.constructorFn, obj, []), report);
-    if (!fresh) display.named(d, obj);
+    if (!fresh || field) display.named(d, obj);
     if (heard(d, 'added')) send(obj, c.Event, ['added', true]);
     if (onStage(d) && obj.listeners?.get('addedToStage')?.length) send(obj, c.Event, ['addedToStage']);
   };
@@ -623,5 +718,6 @@ export function installFlash(vm, movie, types) {
     staticValues: { sandboxType: 'localWithFile', LOCAL_WITH_FILE: 'localWithFile', LOCAL_WITH_NETWORK: 'localWithNetwork', LOCAL_TRUSTED: 'localTrusted', REMOTE: 'remote' },
     staticMethods: { allowDomain: () => {}, allowInsecureDomain: () => {}, loadPolicyFile: () => {} },
   });
+  installNet(vm, movie);
   void ASArray;
 }

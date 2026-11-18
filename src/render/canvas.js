@@ -115,6 +115,23 @@ export class CanvasRenderer {
     else if (movie.root.visible) this.#drawContent(ctx, movie.root, concat(twipsToPixels, movie.root.matrix), concatCx(IDENTITY_CX, movie.root.cxform), false);
   }
 
+  /** Movie.load の rasterize オプションに渡す関数（AS3 の BitmapData.draw が、表示オブジェクトを画像にするのに使う）。 */
+  rasterizer() {
+    return (movie, d, m, width, height) => this.#rasterize(movie, d, m, width, height);
+  }
+
+  /**
+   * 表示オブジェクト d の中身を、幅 width・高さ height の画像に描いて、その RGBA を返す。
+   * m は、d の座標（ピクセル）から画像の画素への行列。d 自身の位置や変形は使わない。
+   */
+  #rasterize(movie, d, m, width, height) {
+    const sub = new CanvasRenderer(new OffscreenCanvas(width, height));
+    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded });
+    sub.base = { a: m.a / 20, b: m.b / 20, c: m.c / 20, d: m.d / 20, tx: m.tx, ty: m.ty };
+    sub.#drawContent(sub.ctx, d, sub.base, IDENTITY_CX, false);
+    return sub.ctx.getImageData(0, 0, width, height).data;
+  }
+
   // children[start] 以降のうち、深度が maxDepth 以下のものを描く。描き終えた位置を返す。
   #drawChildren(ctx, children, start, maxDepth, matrix, cx, mask) {
     let i = start;
@@ -311,7 +328,7 @@ export class CanvasRenderer {
     }
     const space = op.spaceMatrix;
     if (style.type === 'bitmap') {
-      const def = this.movie.dictionary.get(style.bitmapId);
+      const def = style.bitmap ?? this.movie.dictionary.get(style.bitmapId); // スクリプトが作ったビットマップは、直接持っている
       const source = space && def?.type === 'bitmap' && this.#bitmapSource(def, cx);
       if (!source) return; // 未定義・未復号のビットマップは描かない
       ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
@@ -407,10 +424,16 @@ export class CanvasRenderer {
   // 色変換を反映した画像と、描画時に掛けるアルファを返す。まだ復号されていなければ null。
   #bitmapSource(def, cx) {
     let image = this.bitmaps.get(def);
+    // スクリプトが画素を書き換えたビットマップ（version が進んでいる）は、画像を作り直す。
+    if (image && def.version !== undefined && image.version !== def.version) {
+      image = null;
+      this.tinted.delete(def);
+    }
     if (!image) {
       if (!def.rgba) return null;
       image = new OffscreenCanvas(def.width, def.height);
       image.getContext('2d').putImageData(new ImageData(def.rgba, def.width, def.height), 0, 0);
+      image.version = def.version;
       this.bitmaps.set(def, image);
     }
     if (!cx) return { image, alpha: 1 };

@@ -1,11 +1,13 @@
-// flash.geom の Point と Rectangle、それを使う表示オブジェクトのメソッド（座標の変換、外接矩形、当たり判定）。
+// flash.geom の Point、Rectangle、Matrix、ColorTransform、Transform と、
+// それを使う表示オブジェクトのメソッド（座標の変換、外接矩形、当たり判定）。
 import { ASObject, publicKey } from './object.js';
 
 /**
- * Point と Rectangle を定義する。戻り値は、DisplayObject に持たせるメソッド（クラスの定義のときに渡す）。
+ * クラスを定義する。戻り値は、DisplayObject に持たせるメソッドと、transform プロパティの読み書き（クラスの定義のときに渡す）。
  * @param {import('./vm.js').AVM2} vm
+ * @param {(d: object) => boolean} onStage  表示オブジェクトがステージに載っているか
  */
-export function installGeom(vm) {
+export function installGeom(vm, onStage) {
   const c = vm.classes;
   const num = (v) => vm.toNumber(v);
   const key = { x: publicKey('x'), y: publicKey('y'), width: publicKey('width'), height: publicKey('height') };
@@ -108,6 +110,149 @@ export function installGeom(vm) {
     },
   });
 
+  // --- Matrix ---
+  const MATRIX = ['a', 'b', 'c', 'd', 'tx', 'ty'];
+  const field = (obj, name) => num(obj.values.get(publicKey(name)));
+  const M = (obj) => ({ a: field(obj, 'a'), b: field(obj, 'b'), c: field(obj, 'c'), d: field(obj, 'd'), tx: field(obj, 'tx'), ty: field(obj, 'ty') });
+  const put = (obj, values) => { for (const [name, v] of Object.entries(values)) obj.values.set(publicKey(name), num(v)); };
+  const matrix = (m) => vm.construct(c.Matrix, MATRIX.map((name) => m[name]));
+  // 先に m、次に n を掛けた行列。計算の順序は実機に合わせてある（丸め誤差の出方まで同じになるように）。
+  const multiply = (m, n) => {
+    const out = { a: m.a * n.a, b: 0, c: 0, d: m.d * n.d, tx: m.tx * n.a + n.tx, ty: m.ty * n.d + n.ty };
+    if (m.b !== 0 || m.c !== 0 || n.b !== 0 || n.c !== 0) {
+      out.a += m.b * n.c;
+      out.d += m.c * n.b;
+      out.b += m.a * n.b + m.b * n.d;
+      out.c += m.c * n.a + m.d * n.c;
+      out.tx += m.ty * n.c;
+      out.ty += m.tx * n.b;
+    }
+    return out;
+  };
+  // Matrix と ColorTransform のメソッドは、実機では ActionScript で書かれている。null を渡すと、null の参照の誤りになる。
+  const given = (obj, klass) => {
+    if (obj === null || obj === undefined) vm.throwError('TypeError', 1009, 'Cannot access a property or method of a null object reference.');
+    return need(obj, klass, 'value');
+  };
+  const box = (sx, sy, rotation, tx, ty) => {
+    const cos = Math.cos(rotation), sin = Math.sin(rotation);
+    return rotation === 0 ? { a: sx, b: 0, c: 0, d: sy, tx, ty } : { a: cos * sx, b: sin * sy, c: -sin * sx, d: cos * sy, tx, ty };
+  };
+  c.Matrix = vm.defineClass({
+    name: 'flash.geom::Matrix',
+    slots: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
+    construct: (self, [a = 1, b = 0, cc = 0, d = 1, tx = 0, ty = 0]) => put(self, { a, b, c: cc, d, tx, ty }),
+    methods: {
+      clone: (self) => matrix(M(self)),
+      concat: (self, [m]) => put(self, multiply(M(self), M(given(m, c.Matrix)))),
+      // 逆行列。回転も傾きも無ければ、拡大率の逆数を取るだけ（0 なら無限大になる）。それ以外で行列式が 0 なら、単位行列になる。
+      invert: (self) => {
+        const m = M(self);
+        if (m.b === 0 && m.c === 0) {
+          const a = 1 / m.a, d = 1 / m.d;
+          return put(self, { a, b: 0, c: 0, d, tx: -a * m.tx, ty: -d * m.ty });
+        }
+        const det = m.a * m.d - m.b * m.c;
+        if (det === 0) return put(self, { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
+        const inv = 1 / det;
+        const a = m.d * inv, b = -m.b * inv, cc = -m.c * inv, d = m.a * inv;
+        return put(self, { a, b, c: cc, d, tx: -(a * m.tx + cc * m.ty), ty: -(b * m.tx + d * m.ty) });
+      },
+      identity: (self) => put(self, { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }),
+      rotate: (self, [angle]) => { const cos = Math.cos(num(angle)), sin = Math.sin(num(angle)); put(self, multiply(M(self), { a: cos, b: sin, c: -sin, d: cos, tx: 0, ty: 0 })); },
+      scale: (self, [sx, sy]) => put(self, multiply(M(self), { a: num(sx), b: 0, c: 0, d: num(sy), tx: 0, ty: 0 })),
+      translate: (self, [dx, dy]) => put(self, { tx: field(self, 'tx') + num(dx), ty: field(self, 'ty') + num(dy) }),
+      transformPoint: (self, [p]) => { const m = M(self); const x = get(given(p, c.Point), 'x'), y = get(p, 'y'); return point(m.a * x + m.c * y + m.tx, m.b * x + m.d * y + m.ty); },
+      deltaTransformPoint: (self, [p]) => { const m = M(self); const x = get(given(p, c.Point), 'x'), y = get(p, 'y'); return point(m.a * x + m.c * y, m.b * x + m.d * y); },
+      createBox: (self, [sx, sy, rotation = 0, tx = 0, ty = 0]) => put(self, box(num(sx), num(sy), num(rotation), num(tx), num(ty))),
+      // グラデーション用の行列: 1638.4 px 四方の基準の箱を、指定の大きさと位置に合わせる。
+      createGradientBox: (self, [width, height, rotation = 0, tx = 0, ty = 0]) => put(self, box(num(width) / 1638.4, num(height) / 1638.4, num(rotation), num(tx) + num(width) / 2, num(ty) + num(height) / 2)),
+      copyFrom: (self, [m]) => put(self, M(given(m, c.Matrix))),
+      setTo: (self, [a, b, cc, d, tx, ty]) => put(self, { a, b, c: cc, d, tx, ty }),
+      toString: (self) => `(${MATRIX.map((name) => `${name}=${vm.toStr(field(self, name))}`).join(', ')})`,
+    },
+  });
+
+  // --- ColorTransform ---
+  const COLOR = ['redMultiplier', 'greenMultiplier', 'blueMultiplier', 'alphaMultiplier', 'redOffset', 'greenOffset', 'blueOffset', 'alphaOffset'];
+  const colorTransform = (values) => vm.construct(c.ColorTransform, values);
+  c.ColorTransform = vm.defineClass({
+    name: 'flash.geom::ColorTransform',
+    slots: Object.fromEntries(COLOR.map((name, i) => [name, i < 4 ? 1 : 0])),
+    construct: (self, args) => { COLOR.forEach((name, i) => self.values.set(publicKey(name), args[i] === undefined ? (i < 4 ? 1 : 0) : num(args[i]))); },
+    getters: { color: (self) => ((field(self, 'redOffset') << 16) | (field(self, 'greenOffset') << 8) | field(self, 'blueOffset')) >>> 0 },
+    setters: {
+      // color を設定すると、RGB の倍率が 0 になり、加算値がその色になる。
+      color: (self, v) => {
+        const rgb = vm.toUint32(v);
+        put(self, { redMultiplier: 0, greenMultiplier: 0, blueMultiplier: 0, redOffset: (rgb >> 16) & 0xff, greenOffset: (rgb >> 8) & 0xff, blueOffset: rgb & 0xff });
+      },
+    },
+    methods: {
+      // この変換の後に second を適用したものにする。
+      concat: (self, [second]) => {
+        given(second, c.ColorTransform);
+        for (const ch of ['red', 'green', 'blue', 'alpha']) {
+          put(self, {
+            [`${ch}Offset`]: field(self, `${ch}Offset`) + field(self, `${ch}Multiplier`) * field(second, `${ch}Offset`),
+            [`${ch}Multiplier`]: field(self, `${ch}Multiplier`) * field(second, `${ch}Multiplier`),
+          });
+        }
+      },
+      toString: (self) => `(${COLOR.map((name) => `${name}=${vm.toStr(field(self, name))}`).join(', ')})`,
+    },
+  });
+
+  // --- Transform（表示オブジェクトの transform プロパティ） ---
+  // 行列と色変換は表示オブジェクトが持つ。ここから読むと写しが返り、代入すると表示オブジェクトに反映される。
+  const cxOf = (cx) => (cx ? [cx.rm / 256, cx.gm / 256, cx.bm / 256, cx.am / 256, cx.ra, cx.ga, cx.ba, cx.aa] : [1, 1, 1, 1, 0, 0, 0, 0]);
+  const worldCx = (d) => {
+    let out = [1, 1, 1, 1, 0, 0, 0, 0];
+    for (let a = d; a; a = a.parent) {
+      const cx = cxOf(a.cxform); // 親の変換を、後から掛ける
+      out = [0, 1, 2, 3].map((i) => out[i] * cx[i]).concat([0, 1, 2, 3].map((i) => out[i + 4] * cx[i] + cx[i + 4]));
+    }
+    return out;
+  };
+  c.Transform = vm.defineClass({
+    name: 'flash.geom::Transform',
+    getters: {
+      // matrix に null を代入した後は、null が読める（行列そのものは変わらない。実機で確認）。
+      matrix: (self) => { const m = self.target.matrix; return self.target.matrixHidden ? null : matrix({ ...m, tx: m.tx / 20, ty: m.ty / 20 }); },
+      colorTransform: (self) => colorTransform(cxOf(self.target.cxform)),
+      // ステージに載っていないものは、親の変形を含まず、自分の行列の全体が 5 倍されたものになる（実機で確認）。
+      concatenatedMatrix: (self) => {
+        const staged = onStage(self.target);
+        const m = staged ? self.target.worldMatrix() : self.target.matrix;
+        const k = staged ? 1 : 5;
+        return matrix({ a: m.a * k, b: m.b * k, c: m.c * k, d: m.d * k, tx: (m.tx / 20) * k, ty: (m.ty / 20) * k });
+      },
+      concatenatedColorTransform: (self) => colorTransform(worldCx(self.target)),
+      pixelBounds: (self) => {
+        const b = self.target.bounds(self.target.worldMatrix());
+        if (!b) return rectangle(0, 0, 0, 0);
+        const x = Math.floor(b.xmin / 20), y = Math.floor(b.ymin / 20);
+        return rectangle(x, y, Math.ceil(b.xmax / 20) - x, Math.ceil(b.ymax / 20) - y);
+      },
+    },
+    setters: {
+      // 拡大と回転は単精度の浮動小数点数で、位置は twips に切り捨てて持つ。色変換の倍率は 1/256 刻みに、加算値は整数に切り捨てる（実機で確認）。
+      matrix: (self, v) => {
+        self.target.matrixHidden = v === null || v === undefined;
+        if (self.target.matrixHidden) return;
+        const m = M(need(v, c.Matrix, 'value'));
+        self.target.setMatrix({ a: Math.fround(m.a), b: Math.fround(m.b), c: Math.fround(m.c), d: Math.fround(m.d), tx: Math.trunc(m.tx * 20), ty: Math.trunc(m.ty * 20) });
+        self.target.xform = null; // 拡大率と回転は、行列から取り直す
+      },
+      colorTransform: (self, v) => {
+        need(v, c.ColorTransform, 'value');
+        const [rm, gm, bm, am, ra, ga, ba, aa] = COLOR.map((name) => field(v, name));
+        self.target.setCxform({ rm: Math.trunc(rm * 256), gm: Math.trunc(gm * 256), bm: Math.trunc(bm * 256), am: Math.trunc(am * 256), ra: Math.trunc(ra), ga: Math.trunc(ga), ba: Math.trunc(ba), aa: Math.trunc(aa) });
+      },
+    },
+  });
+  const transformOf = (self) => Object.assign(new ASObject(c.Transform), { target: self.display });
+
   // --- 表示オブジェクトのメソッド ---
   const D = (self) => self.display;
   const displayOf = (obj, name) => {
@@ -115,8 +260,16 @@ export function installGeom(vm) {
     if (!(obj instanceof ASObject) || !obj.display?.worldMatrix) vm.throwError('TypeError', 1034, `Type Coercion failed: cannot convert ${vm.className(obj)} to flash.display.DisplayObject.`);
     return obj.display;
   };
-  // 外接矩形（twips）を Rectangle にする。中身が無いものは、幅も高さも 0 で、位置が 6710886.4（0x8000000 twips）になる（実機の値）。
-  const boundsRect = (b) => (b ? rectangle(b.xmin / 20, b.ymin / 20, (b.xmax - b.xmin) / 20, (b.ymax - b.ymin) / 20) : rectangle(0x8000000 / 20, 0x8000000 / 20, 0, 0));
+  // 外接矩形（twips）を Rectangle にする。中身が無いものは幅も高さも 0 で、位置は、自分の座標系なら (0, 0)、
+  // ほかの座標系なら「自分の座標系の (0x8000000, 0x8000000) twips」をそこへ移した点になる（単精度で計算される。実機で確認）。
+  const EMPTY_AT = 0x8000000;
+  const boundsRect = (b, d, target) => {
+    if (b) return rectangle(b.xmin / 20, b.ymin / 20, (b.xmax - b.xmin) / 20, (b.ymax - b.ymin) / 20);
+    if (target === d) return rectangle(0, 0, 0, 0);
+    const m = d.worldMatrix();
+    const p = target.globalToLocal(m.a * EMPTY_AT + m.c * EMPTY_AT + m.tx, m.b * EMPTY_AT + m.d * EMPTY_AT + m.ty);
+    return rectangle(Math.fround(p.x) / 20, Math.fround(p.y) / 20, 0, 0);
+  };
   const space = (self, target) => (target === null || target === undefined ? D(self) : displayOf(target, 'targetCoordinateSpace'));
   const methods = {
     localToGlobal: (self, [p]) => {
@@ -129,8 +282,8 @@ export function installGeom(vm) {
       return point(q.x / 20, q.y / 20);
     },
     // target の座標系での外接矩形。getRect は線の太さを含めない。
-    getBounds: (self, [target]) => boundsRect(D(self).boundsIn(space(self, target))),
-    getRect: (self, [target]) => boundsRect(D(self).boundsIn(space(self, target), true)),
+    getBounds: (self, [target]) => { const to = space(self, target); return boundsRect(D(self).boundsIn(to), D(self), to); },
+    getRect: (self, [target]) => { const to = space(self, target); return boundsRect(D(self).boundsIn(to, true), D(self), to); },
     // 点はステージの座標。shapeFlag が真なら実際の形で、偽なら外接矩形で判定する。
     hitTestPoint: (self, [x, y, shapeFlag]) => {
       const px = num(x) * 20, py = num(y) * 20;
@@ -144,5 +297,15 @@ export function installGeom(vm) {
       return !!a && !!b && a.xmin < b.xmax && b.xmin < a.xmax && a.ymin < b.ymax && b.ymin < a.ymax;
     },
   };
-  return methods;
+  return {
+    methods,
+    getTransform: transformOf,
+    // d.transform = t: 相手の行列と色変換を写す。
+    setTransform: (self, v) => {
+      const from = need(v, c.Transform, 'value').target;
+      self.display.setMatrix({ ...from.matrix });
+      self.display.xform = null;
+      self.display.setCxform(from.cxform ? { ...from.cxform } : null);
+    },
+  };
 }

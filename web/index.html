@@ -104,7 +104,7 @@
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
-      movie = await Movie.load(bytes, { trace, onRequest, audio, encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      movie = await Movie.load(bytes, { trace, onRequest, audio, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;

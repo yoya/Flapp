@@ -142,6 +142,8 @@ export class Movie {
    *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
    *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
    *   audio: 音の出力（player/sound.js の冒頭を参照。ブラウザでは audio/webaudio.js）。省略すると音は出ない
+   *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
+   *             ブラウザでは CanvasRenderer の rasterizer()）。省略すると、表示オブジェクトの draw は警告を残して何もしない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
    *   encoding: SWF 5 以前の文字列の文字コード（'shift_jis' など、TextDecoder が受け付ける名前）。省略すると 'windows-1252'。
    *             SWF 6 以降は常に UTF-8 なので使わない。SWF 5 以前では、クリップの名前などはバイト列のままの文字列になる
@@ -150,7 +152,10 @@ export class Movie {
   static async load(bytes, options = {}) {
     const movie = new Movie(await parseSWF(bytes, options), options);
     await movie.#decodeBitmaps();
-    if (movie.avm2) movie.#framePhase(); // AS3: 1 フレーム目の frameConstructed、フレームスクリプト、exitFrame
+    if (movie.avm2) {
+      movie.#framePhase(); // AS3: 1 フレーム目の frameConstructed、フレームスクリプト、exitFrame
+      movie.#guard(() => movie.avm2.display.loaded()); // 読み込みが済んだことを loaderInfo に伝える
+    }
     movie.runActions(); // 1 フレーム目のアクション
     return movie;
   }
@@ -166,7 +171,8 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize } = {}) {
+    this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
     this.boundFields = new Set(); // 変数と連動しているテキストフィールド
     this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
     this.#bitmapPixelBudget = maxBitmapPixels;
@@ -382,6 +388,18 @@ export class Movie {
       let hit = null;
       if (!(child instanceof MovieClip) || child.leaf) {
         if (child.hitPoint(x, y)) hit = child instanceof TextField && child.mouseEnabled !== false ? child : PASS;
+      } else if (child.states) {
+        // スクリプトが作ったボタン: 当たり判定用の状態の形で決める。その表示オブジェクトは表示リストに無いので、判定の間だけボタンの子として扱う。
+        const area = child.states.hit;
+        if (area) {
+          const parent = area.parent;
+          area.parent = child;
+          try {
+            if (area.hitPoint(x, y)) hit = child.mouseEnabled !== false ? child : PASS;
+          } finally {
+            area.parent = parent;
+          }
+        }
       } else if (child.character.button) {
         const local = child.globalToLocal(x, y);
         if (child.character.button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0))) hit = child.mouseEnabled !== false ? child : PASS;
@@ -475,6 +493,7 @@ export class Movie {
 
   // enabled が偽のボタンやクリップは、マウスに反応しない。
   #enabled(clip) {
+    if (clip.enabled === false) return false; // AS3 の SimpleButton.enabled
     const object = clip.scriptObject();
     return !object || toBool(this.avm, object.get('enabled') ?? true);
   }
@@ -557,6 +576,17 @@ export class Movie {
       if (frame !== undefined) target.gotoFrame(frame, false);
     }
     this.fire(target, event);
+  }
+
+  /** AS3: new TextField() の表示オブジェクト（幅も高さも 100 px。表示リストの外に作る）を作って、as3 と結び付ける。 */
+  newTextField(as3) {
+    const character = { type: 'edittext', id: -2, order: -1, bounds: { xmin: 0, xmax: 2000, ymin: 0, ymax: 2000 }, edit: null, fontName: undefined };
+    const field = new TextField(this, character, 0, PLACE_DEFAULTS, null);
+    field.name = this.nextInstanceName();
+    field.removed = true;
+    field.as3 = as3;
+    as3.display = field;
+    return field;
   }
 
   /** テキストフィールドの状態 edit（DefineEditText と同じ形）を描画命令にする。 */
@@ -902,6 +932,11 @@ export class DisplayObject {
     this.filters = desc.filters; // null はフィルタなし
     this.blendMode = desc.blendMode;
     this.visible = desc.visible;
+  }
+
+  /** AS3: 表示リストに戻ったときに呼ばれる。 */
+  revive() {
+    this.removed = false;
   }
 
   /** スクリプトからの変形の変更。 */
@@ -1257,13 +1292,34 @@ export class MovieClip extends DisplayObject {
     return (this.#drawing ??= new Drawing());
   }
 
+  /**
+   * AS3 の Bitmap: 表示するビットマップ（{ width, height, rgba, version }。スクリプトが画素を書き換える）を設定する。null で外す。
+   * 描画命令は、そのビットマップで塗った矩形 1 つ（図形のビットマップの塗りと同じ形式。ビットマップは bitmapId ではなく直接持つ）。
+   */
+  setPicture(bitmap, smooth) {
+    if (!bitmap) {
+      // ビットマップの無い Bitmap は、大きさ 0 の矩形として扱われる（中身の無いスプライトとは違う）。
+      this.picture = { bounds: { xmin: 0, xmax: 0, ymin: 0, ymax: 0 }, paths: [] };
+      return;
+    }
+    const w = bitmap.width * 20, h = bitmap.height * 20;
+    this.picture = {
+      bounds: { xmin: 0, xmax: w, ymin: 0, ymax: h },
+      paths: [{
+        kind: 'fill', evenOdd: false, style: { type: 'bitmap', bitmap, matrix: { a: 20, b: 0, c: 0, d: 20, tx: 0, ty: 0 }, repeat: false, smooth },
+        path: [['M', 0, 0], ['L', w, 0], ['L', w, h], ['L', 0, h], ['Z']],
+      }],
+    };
+  }
+
   /** 描画 API で描いた内容（無ければ null）。子より下に描かれる。 */
   drawingPaths() {
+    if (this.picture) return this.picture.paths;
     return this.#drawing ? this.#drawing.paths() : null;
   }
 
   bounds(m, edges = false) {
-    const own = edges ? this.#drawing?.edgeBounds : this.#drawing?.bounds;
+    const own = this.picture ? this.picture.bounds : edges ? this.#drawing?.edgeBounds : this.#drawing?.bounds;
     let b = own ? transformBounds(own, m) : null;
     for (const child of this.children.values()) b = union(b, child.bounds(concat(m, child.matrix), edges));
     return b;
