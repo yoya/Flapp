@@ -1,0 +1,16 @@
+inner 1 _level0.a.inner _level0.a _level0 /a/inner
+a 1 this=_level0.a parent=_level0 root=_level0
+b 1 sees a.local=a-var _level0.a.inner
+root 1
+_level0.a _level0.b _level0.a.inner movieclip a a
+b 2
+inner 2
+a enterFrame 2
+a 2 a-var 0
+root enterFrame 1 frame 2
+root 2 2 2 2
+a enterFrame 2
+root enterFrame 2 frame 3
+root 3
+a enterFrame 2
+root enterFrame 3 frame 3

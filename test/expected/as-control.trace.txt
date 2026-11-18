@@ -1,0 +1,27 @@
+-- if / loops
+023 i=4
+13
+10 20 21 
+-- switch
+one / string one / two or three / other
+bc
+-- for in
+third second first 
+fourth=4 first=10 third=3 second=20 
+extra 2 1 0 
+[]
+-- with
+10 12
+-- try / catch / finally
+finally 0
+ok
+finally 1
+caught string str
+finally 2
+caught object 42
+inner finally
+outer caught 1
+ab
+msg | msg | true
+-- labels of truthiness
+FTFTTFFFTT

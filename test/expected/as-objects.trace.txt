@@ -1,0 +1,36 @@
+-- constructors
+cat speaks animal 4 true true
+true false false
+-- inheritance
+rex speaks (woof) animal 12 rex
+true true true false
+true false true
+-- enumeration with inheritance
+kind learn speak tricks legs name 
+kind speak legs name 
+-- property flags
+ac 2
+1
+false
+3
+abc__proto__constructor 200 true
+-- addProperty
+10
+50 100
+fixed
+-- toString / valueOf
+custom!
+43
+42
+84
+custom! 42 true true
+[object Object] [object Object] true
+-- object literal / dynamic access
+1 2 three three undefined
+d1
+警告 : 'lit' にはプロパティ 'value' がありません
+found undefined
+-- __proto__ and Object
+yes false true
+1 object true true
+object true true

@@ -1,0 +1,8 @@
+number true undefined undefined
+tick 1 xy undefined
+tick 2 xy undefined
+tick 3 xy undefined
+cleared
+method 1 m
+method 2 m
+timeout once

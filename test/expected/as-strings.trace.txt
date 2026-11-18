@@ -1,0 +1,28 @@
+-- basics
+12 HW[]|72 NaN
+HELLO, WORLD hello, world
+4 8 -1 8 4 0
+-- substring family
+Hello|World|Hello|He|||
+Hello|World|World|Wo|||
+Hello|World|World|Wor|||
+-- split / concat
+a,b,c
+3 3 1 a,b
+a+b+c 1 2
+abcd1truenull
+-- conversion
+55 25 abcnull abcundefined 123.456 123
+Hi! あ 12354 3
+ff 11111111 -ff 0 73
+-- comparison
+true true true false false
+-- escape
+a%20b%26c%3Dd%2Fe%3Ff%2Bg a b&c
+%E6%97%A5%E6%9C%AC 日本
+-- wrapper
+7 w WRAPPED object string true
+-- chained
+trimme cba X
+-- numbers in strings
+123 33 2 1 1 0.3

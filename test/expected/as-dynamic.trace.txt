@@ -1,0 +1,30 @@
+-- createEmptyMovieClip
+_level0.empty _level0.empty 5 0 1 0 movieclip
+6 0
+_level0.empty.child _level0.empty _level0.empty.child 2
+-- attachMovie
+_level0.s1 30 10 s1
+50 init 30
+警告 : 宣言されていない変数を参照しています 's3'
+undefined undefined
+ [movieclip] _level0.s1b _level0.s1b
+-- duplicateMovieClip
+_level0.dup 50 90 undefined 20
+_level0.dup2 50
+-- removeMovieClip
+警告 : 'dup' にはプロパティ '_x' がありません
+[] movieclip undefined [undefined]
+[_level0.dup2]
+-- frame scripts of attached clips
+attached 1
+-- drawing
+two frame 1 _level0.t _level0
+two frame 2
+0 0
+52 32
+125 100 0 125 0 100
+20 0 true false
+-- registerClass
+Ball constructor ball1
+I am ball1 / ball true true 30
+undefined

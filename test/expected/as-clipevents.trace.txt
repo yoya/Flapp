@@ -1,0 +1,17 @@
+load _level0.mc mc 1
+mc frame 1 n=0
+root 1
+enterFrame 1 frame 2
+onEnterFrame method 1
+mc frame 2
+root 2
+enterFrame 2 frame 1
+onEnterFrame method 2
+mc frame 1 n=2
+root 3
+removed [_level0.mc]
+unload _level0.mc n=2
+onUnload method mc
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'mc'
+root 4 [undefined]
+root 5

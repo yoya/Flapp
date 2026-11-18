@@ -1,0 +1,35 @@
+-- basics
+3 NaN 3 undefined
+undefined
+8 function [type Function]
+-- arguments
+3:1:3:true
+0:undefined:undefined:true
+10
+-- scope / closures
+local global
+1 2 1 3
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'hidden'
+5 undefined
+param global
+3 3
+-- this
+obj
+undefined
+_level0 true
+-- call / apply
+hi obj!
+yo obj?
+hey otherundefined
+undefined objundefined
+-- recursion
+3628800 2.43290200817664e+18 1.5511210043331e+25
+610
+-- function properties
+hello object true
+function true function
+-- nested definitions and hoisting
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'later'
+undefined
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'notYet'
+undefined

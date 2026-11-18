@@ -1,0 +1,47 @@
+// 演算子
+trace("-- arithmetic");
+trace(7 + 3 + " " + (7 - 3) + " " + 7 * 3 + " " + 7 / 2 + " " + 7 % 3 + " " + -7 % 3 + " " + 7.5 % 2);
+trace(5 / 0 + " " + -5 / 0 + " " + 0 / 0 + " " + 5 % 0);
+var i = 5;
+trace(i++ + " " + i + " " + ++i + " " + i-- + " " + --i);
+i += 3; i *= 2; i -= 1; i /= 3; i %= 4;
+trace(i);
+var t = "a";
+t += 1; t += true; t += null;
+trace(t);
+trace(-"5" + " " + -true + " " + -"x" + " " + -null);
+trace("-- bitwise");
+trace((5 & 3) + " " + (5 | 3) + " " + (5 ^ 3) + " " + (~5) + " " + (1 << 4) + " " + (-16 >> 2) + " " + (-16 >>> 28));
+trace((1 << 31) + " " + (1 << 32) + " " + (4294967295 | 0) + " " + (3.7 | 0) + " " + (-3.7 | 0) + " " + ("12" | 0));
+trace((0xFFFFFFFF >>> 0) + " " + (0x80000000 >> 31) + " " + (1.5 << 1) + " " + (NaN | 0) + " " + (undefined & 1));
+trace("-- logical");
+trace((1 && 2) + " " + (0 && 2) + " " + (1 || 2) + " " + (0 || 2) + " " + ("" || "x") + " " + (null && 1));
+var calls = "";
+function side(v) { calls += v; return v; }
+side(0) && side(1);
+side(1) || side(2);
+side(0) || side(3);
+trace(calls);
+trace(1 ? "a" : "b");
+trace(0 ? "a" : 1 ? "b" : "c");
+trace("-- string");
+trace("abc" + "def" + 1 + 2 + " " + (1 + 2 + "abc"));
+trace(("abc" < "abd") + " " + ("abc" == "ABC") + " " + ("a" + "b" == "ab"));
+trace("-- typeof / instanceof / delete");
+var arr = [1, 2];
+var obj = {a: 1};
+trace((arr instanceof Array) + " " + (arr instanceof Object) + " " + (obj instanceof Array) + " " + (obj instanceof Object));
+function Cls() {}
+var c = new Cls();
+trace((c instanceof Cls) + " " + (c instanceof Object) + " " + (5 instanceof Number) + " " + (new Number(5) instanceof Number));
+trace(delete obj.a);
+trace(obj.a);
+trace(delete obj.nothing);
+var keep = 1;
+trace(delete keep);
+trace("-- comma / precedence");
+var x = (1, 2, 3);
+trace(x);
+trace(2 + 3 * 4 - 6 / 2);
+trace((2 + 3) * (4 - 6) / 2);
+trace(1 + 2 < 4 && 3 > 2 == true);

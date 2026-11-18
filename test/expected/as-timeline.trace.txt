@@ -1,0 +1,16 @@
+f1 1/8 8
+f2
+f3 count=1
+after goto 2
+f2
+f3 count=2
+f4
+after label goto 5
+f5 (label)
+f6 6
+f6 after prevFrame 5
+f5 (label)
+f8
+clamped 8
+no label 8
+zero 8

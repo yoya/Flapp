@@ -1,0 +1,22 @@
+// Math と数値
+trace("-- constants");
+trace(Math.PI + " " + Math.E + " " + Math.LN2 + " " + Math.LN10 + " " + Math.LOG2E + " " + Math.LOG10E + " " + Math.SQRT2 + " " + Math.SQRT1_2);
+trace("-- rounding");
+trace(Math.round(2.5) + " " + Math.round(-2.5) + " " + Math.round(2.4) + " " + Math.round(-2.6) + " " + Math.round(0.49999) + " " + Math.round("7.5"));
+trace(Math.floor(2.7) + " " + Math.floor(-2.7) + " " + Math.ceil(2.1) + " " + Math.ceil(-2.1) + " " + Math.floor(5) + " " + Math.ceil(NaN));
+trace("-- basic");
+trace(Math.abs(-5) + " " + Math.abs(5.5) + " " + Math.abs("-3") + " " + Math.sqrt(16) + " " + Math.sqrt(2) + " " + Math.sqrt(-1) + " " + Math.pow(2, 10) + " " + Math.pow(2, 0.5) + " " + Math.pow(-8, 1/3));
+trace(Math.min(1, 2) + " " + Math.max(1, 2) + " " + Math.min(-1, "5") + " " + Math.max(1, NaN) + " " + Math.min() + " " + Math.max() + " " + Math.min(3) + " " + Math.max(1, 2, 3));
+trace("-- trig");
+trace(Math.sin(0) + " " + Math.sin(Math.PI / 2) + " " + Math.sin(Math.PI) + " " + Math.cos(0) + " " + Math.cos(Math.PI) + " " + Math.tan(Math.PI / 4));
+trace(Math.atan2(1, 1) + " " + Math.atan2(-1, -1) + " " + Math.atan(1) + " " + Math.asin(1) + " " + Math.acos(1) + " " + Math.asin(2));
+trace(Math.exp(1) + " " + Math.exp(0) + " " + Math.log(Math.E) + " " + Math.log(0) + " " + Math.log(-1) + " " + Math.log(10));
+trace("-- random");
+var r = Math.random();
+trace((r >= 0 && r < 1) + " " + typeof r + " " + (random(1) == 0) + " " + (random(10) < 10));
+trace("-- Number");
+trace(Number.MAX_VALUE + " " + Number.MIN_VALUE + " " + Number.NaN + " " + Number.POSITIVE_INFINITY + " " + Number.NEGATIVE_INFINITY);
+trace((1.005).toString() + " " + (1e21).toString() + " " + (12345.6789).toString() + " " + (0.1 + 0.7) + " " + (1.1 * 3) + " " + (9007199254740993));
+trace(int(3.7) + " " + int(-3.7) + " " + int("12abc") + " " + int("abc") + " " + 7 % 2.5 + " " + (2e308));
+trace(NaN + " " + Infinity + " " + (-Infinity) + " " + typeof NaN + " " + (Infinity - Infinity) + " " + (Infinity * 0));
+trace(1e2 + " " + 1.0 + " " + 0x10 + " " + 1.50 + " " + .5 + " " + 5e-1 + " " + 12345678.9 + " " + 0.1234567890123456789);
