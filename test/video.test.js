@@ -386,6 +386,39 @@ test('VP6: インターレースのアルファの面は、同じデータを色
   assert.ok(fields > 0); // フィールドごとに符号化したマクロブロックがある
 });
 
+test('VP6: matchPlayer を指定すると、インターレースのストリームを実機と同じに映さない', async () => {
+  const size = { width: 62, height: 44 };
+  const frames = (name) => new Map(parseFLV(asset(name)).video.map((t, n) => [n, t.data.subarray(1)]));
+  // 既定では、ffmpeg と同じに復号して映す。
+  const shown = embeddedSequence('vp6', frames('video-vp6i.flv'), () => {}, size).show(0);
+  assert.deepEqual(shown.rgba, vp6Shown(vp6Reference('video-vp6i.yuv.gz')[0]));
+  // 埋め込みのビデオ: 枠が黒くなる。アルファ付きは、何も映らない。警告は 1 回だけ。
+  const warnings = [];
+  const hidden = embeddedSequence('vp6', frames('video-vp6i.flv'), (m) => warnings.push(m), size, true);
+  for (const n of [0, 3, 7]) assert.deepEqual([hidden.show(n).width, hidden.show(n).height, ...new Set(hidden.show(n).rgba)], [62, 44, 0, 255]);
+  assert.deepEqual(warnings, ['interlaced VP6 is not shown (as in the real player)']);
+  assert.equal(embeddedSequence('vp6a', frames('video-vp6ai.flv'), () => {}, size, true).show(7), null);
+  // FLV: 何も映らない。
+  for (const name of ['video-vp6i.flv', 'video-vp6ai.flv']) {
+    const h = Object.assign(host(), { matchPlayer: true });
+    const playback = new FlvPlayback(h, parseFLV(asset(name)));
+    playback.play(0);
+    h.time = 520;
+    assert.equal(playback.image(), null);
+    assert.deepEqual(h.warnings, ['video: interlaced VP6 is not shown (as in the real player)']);
+    const plain = new FlvPlayback(host(), parseFLV(asset(name)));
+    plain.play(0);
+    assert.deepEqual([plain.image().width, plain.image().height], [62, 44]);
+  }
+  // インターレースでないストリームには、影響しない。オプションは Movie.load から渡る。
+  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true });
+  for (let i = 0; i < 10; i++) movie.advance();
+  assert.equal(movie.matchPlayer, true);
+  assert.deepEqual(movie.root.sortedChildren()[0].image().rgba, vp6Shown(vp6Reference('video-vp6.yuv.gz')[7]));
+  assert.deepEqual(movie.warnings, []);
+  assert.equal((await Movie.load(fixtures['video-vp6'])).matchPlayer, false);
+});
+
 test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止まらない復号にならない）', () => {
   // でたらめに壊すのは、インターレースのストリーム（復号の経路がいちばん多い）。
   const frames = parseFLV(asset('video-vp6i.flv')).video.map((t) => t.data.subarray(1));

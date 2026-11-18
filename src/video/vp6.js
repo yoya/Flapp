@@ -1454,7 +1454,8 @@ export class VP6Decoder {
   /**
    * @param {Uint8Array} data  VP6 のフレーム。アルファ付きなら、色のデータの長さ（3 バイト）、色のデータ、アルファのデータ
    * @returns {{ width: number, height: number, stride: number, y: Uint8ClampedArray, cb: Uint8ClampedArray, cr: Uint8ClampedArray,
-   *   alpha: Uint8ClampedArray | null }}  width と height は符号化された大きさ（16 の倍数。表示する範囲は、入れ物の側が決める）。
+   *   alpha: Uint8ClampedArray | null, interlaced: boolean }}  width と height は符号化された大きさ（16 の倍数。表示する範囲は、
+   *   入れ物の側が決める）。interlaced は、インターレースのストリームか（実機は映さない）。
    *   輝度とアルファは 1 行 stride バイト、色差は stride / 2 バイト。配列は、後の decode で書き換わる
    */
   decode(data) {
@@ -1475,7 +1476,7 @@ export class VP6Decoder {
       [alphaPlane] = this.alpha.decodeFrame(data, alphaStart, data.length);
       if (this.alpha.mbWidth !== color.mbWidth || this.alpha.mbHeight !== color.mbHeight) throw new VideoError('vp6: the alpha plane has a different size');
     }
-    return { width: color.mbWidth * 16, height: color.mbHeight * 16, stride: color.mbWidth * 16, y, cb, cr, alpha: alphaPlane };
+    return { width: color.mbWidth * 16, height: color.mbHeight * 16, stride: color.mbWidth * 16, y, cb, cr, alpha: alphaPlane, interlaced: color.interlaced === 1 };
   }
 }
 

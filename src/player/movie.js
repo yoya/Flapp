@@ -148,6 +148,8 @@ export class Movie {
    *   media: (url) => Uint8Array | Promise<Uint8Array> | null   NetStream.play(url) が再生する FLV ファイルを返す関数。
    *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
    *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
+   *   matchPlayer: true にすると、復号はできるが実機の Flash Player が映さないもの（インターレースの VP6）を、実機と同じに映さない。
+   *             既定は false（復号できるものは映す）
    *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
    *             ブラウザでは CanvasRenderer の rasterizer()）。省略すると、表示オブジェクトの draw は警告を残して何もしない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
@@ -177,8 +179,9 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false } = {}) {
     this.media = media ?? null;
+    this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
     this.boundFields = new Set(); // 変数と連動しているテキストフィールド
@@ -1197,7 +1200,7 @@ export class VideoObject extends DisplayObject {
     if (this.source) return this.source.image();
     const { codec, frames } = this.character;
     if (!frames?.size || !decodable(codec)) return null;
-    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`), this.character);
+    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`), this.character, this.movie.matchPlayer);
     return this.#sequence.show(this.ratio);
   }
 

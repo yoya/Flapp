@@ -25,17 +25,21 @@ const DECODERS = {
   vp6a: () => new VP6Decoder(true),
 };
 
+// 真っ黒な絵。
+function black(width, height) {
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+  return rgba;
+}
+
 // VP6 の絵（YUV と、あればアルファ）を、表示する大きさに切り取って RGBA にする。色の扱いは、実機の画面に合わせてある:
 // - 輝度は 16〜235、色差は 16〜240 に収めてから RGB にする。
 // - アルファ付きの色は、アルファを掛けた値で入っている。アルファより明るい色は、アルファまでに抑えられる。
 //   ここでは掛ける前の色に戻す（戻した値が 255 を超えるぶんは 255 に丸まるので、抑えたのと同じ結果になる）。
 function vp6Image(picture, width, height) {
-  const rgba = new Uint8ClampedArray(width * height * 4);
   // 符号化された大きさより広い枠には、何も映らない（実機は、枠を黒く塗る）。
-  if (width > picture.width || height > picture.height) {
-    for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
-    return rgba;
-  }
+  if (width > picture.width || height > picture.height) return black(width, height);
+  const rgba = new Uint8ClampedArray(width * height * 4);
   const { stride, y, cb, cr, alpha } = picture;
   for (let py = 0, i = 0; py < height; py++) {
     for (let px = 0; px < width; px++, i += 4) {
@@ -65,10 +69,13 @@ class FrameSequence {
    * @param {(message: string) => void} warn
    * @param {{ width: number, height: number } | null} [box]  VP6 の埋め込みビデオ: 絵を切り取る大きさ。
    *   無ければ（FLV）、パケットの先頭の 1 バイトが、右と下から削る画素数
+   * @param {boolean} [matchPlayer]  実機が映さないもの（インターレースの VP6）を、実機と同じに映さないか（Movie.load の同名のオプション）
    */
-  constructor(codec, packet, keyBefore, warn, box = null) {
+  constructor(codec, packet, keyBefore, warn, box = null, matchPlayer = false) {
     this.codec = codec;
     this.box = box;
+    this.matchPlayer = matchPlayer;
+    this.hidden = false; // 実機に合わせて映していない（警告は 1 回だけ）
     this.packet = packet;
     this.keyBefore = keyBefore;
     this.warn = warn;
@@ -98,7 +105,17 @@ class FrameSequence {
           const coded = this.decoder.decode(this.box ? data : data.subarray(1));
           pixels -= coded.width * coded.height;
           picture = this.box ?? { width: coded.width - (data[0] >> 4), height: coded.height - (data[0] & 15) };
-          rgba = vp6Image(coded, picture.width, picture.height);
+          if (this.matchPlayer && coded.interlaced) {
+            // 実機は、インターレースの VP6 を映さない。埋め込みのビデオは枠が黒くなり（アルファ付きは何も映らない）、
+            // FLV は何も映らない（どれも実機で確認）。復号は続けるが、絵は使わない。
+            if (!this.hidden) this.warn('interlaced VP6 is not shown (as in the real player)');
+            this.hidden = true;
+            if (!this.box || this.codec === 'vp6a') {
+              this.image = null;
+              continue;
+            }
+            rgba = black(picture.width, picture.height);
+          } else rgba = vp6Image(coded, picture.width, picture.height);
         } else {
           picture = this.decoder.decode(data);
           pixels -= picture.width * picture.height;
@@ -120,8 +137,9 @@ class FrameSequence {
 /**
  * SWF に埋め込まれたビデオ（DefineVideoStream と VideoFrame）のフレーム列。
  * @param {{ width: number, height: number }} size  DefineVideoStream の幅と高さ
+ * @param {boolean} [matchPlayer]  Movie.load の同名のオプション
  */
-export function embeddedSequence(codec, frames, warn, size) {
+export function embeddedSequence(codec, frames, warn, size, matchPlayer = false) {
   // Screen Video のフレームは、先頭に FLV のビデオタグと同じ 1 バイト（フレームの種類とコーデック）が付いている。
   // 仕様書の表には無いが、実機はこの 1 バイトが無いと何も表示しない（実機で確認）。
   const packet = codec === 'screen' ? (n) => frames.get(n)?.subarray(1) : (n) => frames.get(n);
@@ -145,7 +163,7 @@ export function embeddedSequence(codec, frames, warn, size) {
   };
   // VP6 のデータには、FLV のような先頭の 1 バイトは無い。絵は、DefineVideoStream の大きさに切り取られる（どちらも実機で確認）。
   const box = codec === 'vp6' || codec === 'vp6a' ? { width: size.width, height: size.height } : null;
-  return new FrameSequence(codec, packet, keyBefore, warn, box);
+  return new FrameSequence(codec, packet, keyBefore, warn, box, matchPlayer);
 }
 
 const AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
@@ -216,7 +234,7 @@ function flvSound(flv, warn) {
  */
 export class FlvPlayback {
   /**
-   * @param {{ now: () => number, sounds: object, warn: (message: string) => void }} movie
+   * @param {{ now: () => number, sounds: object, warn: (message: string) => void, matchPlayer?: boolean }} movie
    * @param {object} flv  parseFLV の結果
    */
   constructor(movie, flv) {
@@ -229,7 +247,7 @@ export class FlvPlayback {
     this.fed = 0; // ホストのデコーダに入れ終えたフレームの数
     if (decodable(codec) || codec === 'screen2') {
       const keyBefore = (target) => { for (let n = target; n > 0; n--) if (flv.video[n]?.key) return n; return 0; };
-      this.sequence = new FrameSequence(codec, (n) => flv.video[n]?.data, keyBefore, warn);
+      this.sequence = new FrameSequence(codec, (n) => flv.video[n]?.data, keyBefore, warn, null, movie.matchPlayer ?? false);
     } else if (codec === 'avc') {
       // 設定（シーケンスヘッダ）を渡してデコーダを開く。絵になるフレームだけを、復号の順に並べておく。
       const header = flv.video.find((t) => t.packetType === 0);
