@@ -90,7 +90,11 @@ function lineStyleArray(r, version) {
   return styles;
 }
 
-function shapeRecords(r, version) {
+/**
+ * SHAPE / SHAPEWITHSTYLE のレコード列（NumFillBits / NumLineBits から EndShapeRecord まで）。
+ * フォントのグリフ (SHAPE) もこの形式。version は DefineShape の版（スタイル差し替え時の色の形式に使う）。
+ */
+export function shapeRecords(r, version) {
   r.align();
   let fillBits = r.ub(4);
   let lineBits = r.ub(4);
