@@ -74,6 +74,11 @@ export class AVMObject {
       const v = o.ownGet(name, receiver);
       if (v !== NONE) return v;
     }
+    // どこにも無ければ、__resolve(名前) があればその返り値になる。
+    if (name !== '__resolve') {
+      const resolve = this.get('__resolve');
+      if (resolve instanceof AVMFunction) return this.vm.call(resolve, receiver, [name]);
+    }
     return undefined;
   }
 
@@ -92,6 +97,12 @@ export class AVMObject {
     if (name === '__proto__') {
       this.proto = value instanceof AVMObject ? value : null;
       return;
+    }
+    // watch されていれば、代入する値は fn(名前, 古い値, 新しい値, user) の返り値になる。削除しても watch は残る。
+    const watch = this.watches?.get(this.key(name));
+    if (watch) {
+      const slot = this.props.get(this.key(name));
+      value = this.vm.call(watch.fn, receiver, [name, slot && !slot.get ? slot.value : undefined, value, watch.user]);
     }
     if (this.ownSet(name, value, receiver)) return;
     // 継承元に setter があればそれを呼ぶ。無ければ自分に作る。

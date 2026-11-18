@@ -1,5 +1,5 @@
 // スクリプトから見たムービークリップ。表示リスト上のクリップ (player/movie.js の MovieClip) を包む。
-import { toInt32, toNumber, toStr } from './convert.js';
+import { toBool, toInt32, toNumber, toStr } from './convert.js';
 import { AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, NONE } from './object.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
@@ -44,7 +44,13 @@ function normalizeRotation(v) {
 }
 
 // 特別なプロパティ（_x など）。get / set は表示オブジェクト c に対する操作。
-const MAGIC = {
+const rootOf = (c) => {
+  let top = c;
+  while (top.parent) top = top.parent;
+  return top;
+};
+
+export const MAGIC = {
   // 位置は twips、アルファは 1/256 単位の整数に切り捨てて持つ（_x = 2.999 は 2.95、_alpha = 33 は 32.8125 と読める）。
   _x: { get: (c) => c.matrix.tx / 20, set: (c, v) => c.setMatrix({ ...c.matrix, tx: Math.trunc(v * 20) }) },
   _y: { get: (c) => c.matrix.ty / 20, set: (c, v) => c.setMatrix({ ...c.matrix, ty: Math.trunc(v * 20) }) },
@@ -79,7 +85,8 @@ const MAGIC = {
   _name: { get: (c) => c.name, set: (c, v, vm, raw) => { c.name = toStr(vm, raw); }, raw: true },
   _target: { get: (c) => c.slashPath() },
   _url: { get: () => '' },
-  _droptarget: { get: () => '' },
+  // ドラッグ中にマウスが動くたびに、その位置にあるいちばん手前のクリップのパスが入る（player/movie.js）。ドラッグをやめても残る。
+  _droptarget: { get: (c) => c.dropTarget ?? '' },
   _quality: { get: () => 'HIGH', set: () => {} },
   _highquality: { get: () => 1, set: () => {} },
   _focusrect: { get: () => 1, set: () => {} },
@@ -87,8 +94,9 @@ const MAGIC = {
   _xmouse: { get: (c) => c.mouseLocal().x / 20 },
   _ymouse: { get: (c) => c.mouseLocal().y / 20 },
   _parent: { get: (c) => c.parent?.scriptObject() },
-  _root: { get: (c) => c.movie.root.scriptObject() },
-  _level0: { get: (c) => c.movie.root.scriptObject() },
+  // ルートは親をたどって求める（ルート自身を作っている最中は、まだ movie.root が無い）。
+  _root: { get: (c) => rootOf(c).scriptObject() },
+  _level0: { get: (c) => rootOf(c).scriptObject() },
 };
 
 export class MovieClipObject extends AVMObject {
@@ -191,6 +199,9 @@ export class MovieClipObject extends AVMObject {
 export function installMovieClip(vm) {
   const proto = new AVMObject(vm, vm.objectProto);
   vm.movieClipProto = proto;
+  // ボタンのように反応するかどうかの既定値（インスタンスごとに代入して変えられる）
+  proto.define('enabled', true, HIDDEN);
+  proto.define('useHandCursor', true, HIDDEN);
   const clipOf = (self) => (self?.isMovieClip && !self.clip.removed ? self.clip : null);
   const num = (v) => toNumber(vm, v);
   const depthArg = (v) => Math.trunc(num(v)) + DEPTH_OFFSET;
@@ -231,8 +242,10 @@ export function installMovieClip(vm) {
       if (b) for (const [name, key] of [['xMin', 'xmin'], ['xMax', 'xmax'], ['yMin', 'ymin'], ['yMax', 'ymax']]) out.set(name, b[key] / 20);
       return out;
     },
-    hitTest: (self, [x, y]) => {
-      // 相手のクリップ、またはステージ座標の点との、外接矩形どうしの判定（形状での判定は未対応）
+    hitTest: (self, [x, y, shapeFlag]) => {
+      // 相手のクリップとは外接矩形どうしで判定する。ステージ座標の点とは、shapeFlag が真なら中身の形、偽なら外接矩形で判定する。
+      // （形での判定は、実機では縁から 0.25 px ほどの範囲で結果がずれる。また実機は最後に描画した時点の形で判定する。）
+      if (!x?.isMovieClip && toBool(vm, shapeFlag)) return self.clip.hitPoint(num(x) * 20, num(y) * 20);
       const mine = self.clip.boundsIn(self.clip.movie.root);
       if (!mine) return false;
       if (x?.isMovieClip) {
@@ -256,13 +269,33 @@ export function installMovieClip(vm) {
     lineTo: (self, [x, y]) => { self.clip.drawing().lineTo(num(x) * 20, num(y) * 20); },
     curveTo: (self, [cx, cy, x, y]) => { self.clip.drawing().curveTo(num(cx) * 20, num(cy) * 20, num(x) * 20, num(y) * 20); },
     // --- 外部の読み込みや移動は行わない ---
-    getURL: () => {},
-    loadMovie: () => {},
-    loadVariables: () => {},
-    unloadMovie: () => {},
-    startDrag: () => {},
-    stopDrag: () => {},
-    setMask: () => {},
+    // 外部への移動・読み込みは行わず、要求があったことだけを伝える。
+    // 読み込みは行わない。実機で読み込みに失敗したときと同じく、次のフレームの後でクリップが空になる。
+    unloadMovie: (self) => { self.clip.unload(); },
+    getURL: (self, [url, target, method]) => { vm.request({ kind: 'getURL', url: toStr(vm, url), target: target === undefined ? '' : toStr(vm, target), method: method === undefined ? '' : toStr(vm, method) }); },
+    loadMovie: (self, [url, method]) => {
+      vm.request({ kind: 'loadMovie', url: toStr(vm, url), target: self.targetPath(), method: method === undefined ? '' : toStr(vm, method) });
+      vm.later(() => self.clip.unload());
+    },
+    loadVariables: (self, [url, method]) => { vm.request({ kind: 'loadVariables', url: toStr(vm, url), target: self.targetPath(), method: method === undefined ? '' : toStr(vm, method) }); },
+    startDrag: (self, [lock, left, top, right, bottom]) => {
+      const bounds = bottom === undefined ? undefined : { left: num(left) * 20, top: num(top) * 20, right: num(right) * 20, bottom: num(bottom) * 20 };
+      self.clip.movie.startDrag(self.clip, toBool(vm, lock), bounds);
+    },
+    stopDrag: (self) => { self.clip.movie.stopDrag(); },
+    // 空のテキストフィールドを作る。SWF 8 以降は作ったフィールドを返す。
+    createTextField: (self, [name, depth, x, y, width, height]) => {
+      const field = self.clip.createTextField(toStr(vm, name), depthArg(depth), Math.round(num(x) * 20), Math.round(num(y) * 20), Math.round(num(width) * 20), Math.round(num(height) * 20));
+      return vm.version >= 8 ? field?.scriptObject() : undefined;
+    },
+    // 自分を mask の形で切り抜く。mask のクリップ自体は描かれなくなる。null などを渡すと外す。
+    setMask: (self, [mask]) => {
+      const { clip } = self;
+      if (clip.maskedBy) clip.maskedBy.maskFor = null;
+      clip.maskedBy = mask?.isMovieClip && mask.clip !== clip ? mask.clip : null;
+      if (clip.maskedBy) clip.maskedBy.maskFor = clip;
+      return true;
+    },
   };
   for (const [name, fn] of Object.entries(methods)) {
     // 表示リストから外れたクリップに対する呼び出しは何もしない。

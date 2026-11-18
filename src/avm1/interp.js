@@ -50,6 +50,9 @@ class SuperObject extends AVMObject {
   }
 }
 
+/** プレイヤーの版。$version と System.capabilities.version の値（実機のデバッガ版が返す文字列）。 */
+export const PLAYER_VERSION = 'MAC 35,0,0,61';
+
 export class AVM1 {
   /**
    * @param {object} options
@@ -60,8 +63,19 @@ export class AVM1 {
    *   maxSteps / maxAllocations: 1 回のスクリプト実行で許す命令数・割り当て数
    *   maxDepth: 関数呼び出しの深さの上限（実機は 256）
    *   legacy: SWF 5 以前の文字列の扱い（LegacyText）。SWF 6 以降は null
+   *   stage: { width, height }   ステージの大きさ (px)。Stage.width / height の値
+   *   language: System.capabilities.language の値（'ja' など）
+   *   request: ({ kind, url, target, method }) => void   getURL / loadMovie / loadVariables の要求の通知先。
+   *            通知するだけで、移動も読み込みもしない
    */
-  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null } = {}) {
+  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
+    this.request = request;
+    this.listeners = { Mouse: [], Key: [], Stage: [] }; // addListener で登録されたオブジェクト
+    this.currentTarget = null;
+    this.pending = []; // later() で予約した処理（読み込み失敗の通知など）。プレイヤーが次のフレームの後で実行する
+    this.environment = { width: stage.width, height: stage.height, language };
+    this.key = { code: 0, ascii: 0, down: new Set() }; // 最後に押されたキーと、押されているキー
+    this.mouseVisible = true; // Mouse.hide() / Mouse.show()
     this.version = version;
     this.legacy = legacy; // SWF 5 以前: 文字列はバイト列のまま（swf/legacy.js の LegacyText）。それ以外は null
     this.caseInsensitive = version < 7;
@@ -158,6 +172,31 @@ export class AVM1 {
         this.steps = Infinity;
         this.allocations = Infinity;
       }
+    }
+  }
+
+  /** キーの状態を更新する（Key.getCode / getAscii / isDown 用）。 */
+  keyEvent(code, ascii, down) {
+    if (down) {
+      this.key.code = code;
+      this.key.ascii = ascii;
+      this.key.down.add(code);
+    } else {
+      this.key.code = code;
+      this.key.down.delete(code);
+    }
+  }
+
+  /** 処理を予約する。次のフレームのスクリプトが済んだ後に実行される（実機で読み込みの失敗が届く時機）。 */
+  later(fn) {
+    if (this.pending.length < 10000) this.pending.push(fn);
+  }
+
+  /** Mouse / Key のリスナーの method を、登録順に呼ぶ。 */
+  broadcast(name, method) {
+    for (const listener of this.listeners[name].slice()) {
+      const fn = listener.get(method);
+      if (fn instanceof AVMFunction) this.invoke(fn, listener, []);
     }
   }
 
@@ -351,6 +390,17 @@ export class AVM1 {
    * stack は with や try のブロックと共有する。
    */
   execute(code, start, end, frame, stack) {
+    // 実行中のタイムライン。new Color("名前") のように、ネイティブの関数がパスの起点として使う。
+    const outer = this.currentTarget;
+    this.currentTarget = frame.target;
+    try {
+      return this.#execute(code, start, end, frame, stack);
+    } finally {
+      this.currentTarget = outer;
+    }
+  }
+
+  #execute(code, start, end, frame, stack) {
     const view = new DataView(code.buffer, code.byteOffset, code.byteLength);
     const pop = () => (stack.length ? stack.pop() : undefined);
     const push = (v) => stack.push(v);
@@ -396,7 +446,11 @@ export class AVM1 {
         case 0x08: break; // ToggleQuality
         case 0x09: break; // StopSounds
         case 0x81: clip()?.gotoFrame(view.getUint16(data, true) + 1, false); break; // GotoFrame
-        case 0x83: break; // GetURL: 外部への移動・読み込みは行わない
+        case 0x83: { // GetURL: 外部への移動・読み込みは行わず、要求があったことだけを伝える
+          const [url, next] = string(data);
+          this.request({ kind: 'getURL', url, target: string(next)[0], method: '' });
+          break;
+        }
         case 0x8a: break; // WaitForFrame: 全フレーム読み込み済みなので飛ばさない
         case 0x8b: { // SetTarget
           const [path] = string(data);
@@ -558,15 +612,27 @@ export class AVM1 {
           break;
         }
         case 0x25: this.#targetOf(frame, pop())?.removeSelf?.(); break; // RemoveSprite
-        case 0x27: { // StartDrag: 引数だけ消費する（ドラッグは未対応）
-          pop();
-          pop();
-          if (toBool(this, pop())) for (let i = 0; i < 4; i++) pop();
+        case 0x27: { // StartDrag
+          const t = this.#targetOf(frame, pop());
+          const lock = toBool(this, pop());
+          let bounds;
+          if (toBool(this, pop())) {
+            const bottom = num(), right = num(), top = num(), left = num();
+            bounds = { left: left * 20, top: top * 20, right: right * 20, bottom: bottom * 20 };
+          }
+          if (t?.isMovieClip) t.clip.movie.startDrag(t.clip, lock, bounds);
           break;
         }
-        case 0x28: break; // EndDrag
+        case 0x28: clip()?.clip.movie.stopDrag(); break; // EndDrag
         case 0x8d: pop(); break; // WaitForFrame2
-        case 0x9a: pop(); pop(); break; // GetURL2: 外部への移動・読み込みは行わない
+        case 0x9a: { // GetURL2: 外部への移動・読み込みは行わず、要求があったことだけを伝える
+          const flags = code[data];
+          const target = toStr(this, pop());
+          const url = toStr(this, pop());
+          const kind = flags & 0x01 ? 'loadVariables' : flags & 0x02 ? 'loadMovie' : 'getURL';
+          this.request({ kind, url, target, method: ['', 'GET', 'POST'][flags >> 6] ?? '' });
+          break;
+        }
         case 0x9f: { // GotoFrame2
           const flags = code[data];
           const spec = pop();

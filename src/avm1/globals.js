@@ -1,5 +1,10 @@
 // AVM1 の組み込みオブジェクトと大域関数。
 import { installMovieClip } from './clip.js';
+import { installDate } from './date.js';
+import { installStage } from './stage.js';
+import { installTextField } from './textfield.js';
+import { installNet } from './net.js';
+import { installXML } from './xml.js';
 import { numberToString, toBool, toInt32, toNumber, toStr } from './convert.js';
 import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, MAX_ARRAY_LENGTH, READ_ONLY } from './object.js';
 
@@ -11,7 +16,7 @@ export function defineMethods(vm, obj, methods) {
 }
 
 // クラス（コンストラクタ関数とプロトタイプ）を作って _global に置く。
-function defineClass(vm, name, proto, call, construct) {
+export function defineClass(vm, name, proto, call, construct) {
   const ctor = vm.native(call, construct);
   ctor.define('prototype', proto, HIDDEN);
   proto.define('constructor', ctor, HIDDEN);
@@ -46,6 +51,13 @@ export function installGlobals(vm) {
       return false;
     },
     isPropertyEnumerable: (_, self, [name]) => self instanceof AVMObject && self.ownKeys().includes(str(name)),
+    // watch: 代入のたびに fn(名前, 古い値, 新しい値, user) を呼び、その返り値を代入する。関数が無ければ false。
+    watch: (_, self, [name, fn, user]) => {
+      if (!(self instanceof AVMObject) || !(fn instanceof AVMFunction)) return false;
+      (self.watches ??= new Map()).set(self.key(str(name)), { fn, user });
+      return true;
+    },
+    unwatch: (_, self, [name]) => self instanceof AVMObject && !!self.watches?.delete(self.key(str(name))),
     addProperty: (_, self, [name, getter, setter]) => {
       if (!(self instanceof AVMObject) || !(getter instanceof AVMFunction) || str(name) === '') return false;
       self.defineAccessor(str(name), getter, setter instanceof AVMFunction ? setter : null);
@@ -260,35 +272,7 @@ export function installGlobals(vm) {
   });
   g.define('Math', math, DONT_ENUM);
 
-  // --- Date（現在時刻と、年月日などの読み出しだけ） ---
-  const dateProto = new AVMObject(vm, vm.objectProto);
-  const time = (self) => (self instanceof AVMObject && typeof self.time === 'number' ? self.time : NaN);
-  const field = (fn) => (_, self) => {
-    const t = time(self);
-    return Number.isNaN(t) ? NaN : fn(new Date(t));
-  };
-  defineMethods(vm, dateProto, {
-    getTime: (_, self) => time(self),
-    valueOf: (_, self) => time(self),
-    getFullYear: field((d) => d.getFullYear()),
-    getYear: field((d) => d.getFullYear() - 1900),
-    getMonth: field((d) => d.getMonth()),
-    getDate: field((d) => d.getDate()),
-    getDay: field((d) => d.getDay()),
-    getHours: field((d) => d.getHours()),
-    getMinutes: field((d) => d.getMinutes()),
-    getSeconds: field((d) => d.getSeconds()),
-    getMilliseconds: field((d) => d.getMilliseconds()),
-    getTimezoneOffset: field((d) => d.getTimezoneOffset()),
-    toString: field((d) => d.toString()),
-  });
-  const newDate = (args, proto) => {
-    const obj = new AVMObject(vm, proto);
-    const n = args.map(num);
-    obj.time = n.length === 0 ? Date.now() : n.length === 1 ? n[0] : new Date(n[0], n[1], n[2] ?? 1, n[3] ?? 0, n[4] ?? 0, n[5] ?? 0, n[6] ?? 0).getTime();
-    return obj;
-  };
-  defineClass(vm, 'Date', dateProto, (_, __, args) => str(newDate(args, dateProto)), (_, args, proto) => newDate(args, proto));
+  installDate(vm);
 
   // --- Error ---
   const errorProto = new AVMObject(vm, vm.objectProto);
@@ -317,6 +301,44 @@ export function installGlobals(vm) {
     });
     return id;
   };
+
+  // --- Mouse と Key ---
+  // どちらも登録したリスナーへイベントを配る。イベントはプレイヤー (player/movie.js) が vm.broadcast で起こす。
+  for (const name of ['Mouse', 'Key', 'Stage']) {
+    const object = new AVMObject(vm, vm.objectProto);
+    const list = vm.listeners[name];
+    defineMethods(vm, object, {
+      addListener: (_, __, [listener]) => {
+        if (!(listener instanceof AVMObject)) return false;
+        if (!list.includes(listener) && list.length < 1000) list.push(listener);
+        return true;
+      },
+      removeListener: (_, __, [listener]) => {
+        const at = list.indexOf(listener);
+        if (at >= 0) list.splice(at, 1);
+        return at >= 0;
+      },
+    });
+    g.define(name, object, DONT_ENUM);
+  }
+  // hide / show は、呼ぶ前にカーソルが見えていたかを 1 / 0 で返す（実機で確認）。
+  const cursor = (visible) => () => {
+    const before = vm.mouseVisible ? 1 : 0;
+    vm.mouseVisible = visible;
+    return before;
+  };
+  defineMethods(vm, g.get('Mouse'), { hide: cursor(false), show: cursor(true) });
+  defineMethods(vm, g.get('Key'), {
+    getCode: () => vm.key.code,
+    getAscii: () => vm.key.ascii,
+    isDown: (_, __, [code]) => vm.key.down.has(toInt32(vm, code)),
+    isToggled: () => false,
+  });
+  const KEYS = {
+    BACKSPACE: 8, CAPSLOCK: 20, CONTROL: 17, DELETEKEY: 46, DOWN: 40, END: 35, ENTER: 13, ESCAPE: 27, HOME: 36, INSERT: 45,
+    LEFT: 37, PGDN: 34, PGUP: 33, RIGHT: 39, SHIFT: 16, SPACE: 32, TAB: 9, UP: 38,
+  };
+  for (const [name, code] of Object.entries(KEYS)) g.get('Key').define(name, code, HIDDEN);
 
   // --- 大域関数と定数 ---
   g.define('NaN', NaN, DONT_ENUM);
@@ -357,4 +379,8 @@ export function installGlobals(vm) {
   });
 
   installMovieClip(vm);
+  installStage(vm);
+  installTextField(vm);
+  installNet(vm);
+  installXML(vm);
 }

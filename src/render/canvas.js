@@ -108,9 +108,9 @@ export class CanvasRenderer {
     this.movie = movie;
     this.scale = scale;
     const twipsToPixels = { a: scale / 20, b: 0, c: 0, d: scale / 20, tx: (-xmin * scale) / 20, ty: (-ymin * scale) / 20 };
-    const drawn = movie.root.drawingPaths();
-    if (drawn) this.#drawShape(ctx, drawn, twipsToPixels, IDENTITY_CX, false);
-    this.#drawChildren(ctx, movie.root.sortedChildren(), 0, Infinity, twipsToPixels, IDENTITY_CX, false);
+    this.base = twipsToPixels;
+    // ルートにもスクリプトが位置や色変換を設定できる（_root._x など）。
+    if (movie.root.visible) this.#drawContent(ctx, movie.root, concat(twipsToPixels, movie.root.matrix), concatCx(IDENTITY_CX, movie.root.cxform), false);
   }
 
   // children[start] 以降のうち、深度が maxDepth 以下のものを描く。描き終えた位置を返す。
@@ -138,6 +138,24 @@ export class CanvasRenderer {
 
   #drawObject(ctx, child, parentMatrix, parentCx, mask) {
     if (!child.visible) return;
+    // setMask で他のクリップのマスクになっているクリップは、それ自体は描かれない。
+    if (!mask && child.maskFor && !child.maskFor.removed && child.maskFor.maskedBy === child) return;
+    // setMask でマスクを付けられたクリップは、マスクのクリップの形で切り抜く。
+    const masker = mask ? null : child.maskedBy;
+    if (masker && !masker.removed) {
+      const content = this.#acquireLayer();
+      child.maskedBy = null; // 中身を描く間だけ外す（再帰でここへ戻らないように）
+      this.#drawObject(content.ctx, child, parentMatrix, parentCx, false);
+      child.maskedBy = masker;
+      const shape = this.#acquireLayer();
+      const parent = masker.parent ? concat(this.base, masker.parent.worldMatrix()) : this.base;
+      this.#drawContent(shape.ctx, masker, concat(parent, masker.matrix), OPAQUE_CX, true); // マスクは _visible が偽でも効く
+      this.#composite(content.ctx, shape, 'destination-in');
+      this.#composite(ctx, content, 'source-over');
+      this.#releaseLayer(shape);
+      this.#releaseLayer(content);
+      return;
+    }
     const m = concat(parentMatrix, child.matrix);
     const cx = concatCx(parentCx, child.cxform);
     // マスクの形を描くときは、ブレンドとフィルタは意味を持たない。
@@ -198,6 +216,8 @@ export class CanvasRenderer {
       this.#drawChildren(ctx, child.sortedChildren(), 0, Infinity, m, cx, mask);
     } else if (child.character.type === 'shape') {
       this.#drawShape(ctx, child.character.paths, m, cx, mask);
+    } else if (child.character.type === 'edittext') {
+      this.#drawShape(ctx, child.paths(), m, cx, mask);
     } else if (child.character.type === 'morph') {
       this.#drawShape(ctx, child.character.pathsAt(child.ratio), m, cx, mask);
     }

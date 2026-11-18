@@ -176,7 +176,7 @@ const GUTTER = 40; // テキストフィールドの内側の余白（2px）
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
 
 // HTML テキストを素の文字列にする。段落と改行タグは改行にし、書式タグは捨てる。
-function plainText(html) {
+export function plainText(html) {
   return html
     .replace(/<br\s*\/?>|<\/p>/gi, '\r')
     .replace(/<[^>]*>/g, '')
@@ -191,13 +191,16 @@ function plainText(html) {
 export function editTextToPaths(edit, getFont) {
   const ops = [];
   const { xmin, xmax, ymin, ymax } = edit.bounds;
+  // 定義では「枠あり」が背景と枠線の両方を意味する。スクリプトからは別々に切り替えられ、色も変えられる。
+  const box = [['M', xmin, ymin], ['L', xmax, ymin], ['L', xmax, ymax], ['L', xmin, ymax], ['Z']];
+  if (edit.background ?? edit.border) {
+    ops.push({ kind: 'fill', style: { type: 'solid', color: edit.backgroundColor ?? { r: 255, g: 255, b: 255, a: 255 } }, evenOdd: true, path: box });
+  }
   if (edit.border) {
-    const box = [['M', xmin, ymin], ['L', xmax, ymin], ['L', xmax, ymax], ['L', xmin, ymax], ['Z']];
-    ops.push({ kind: 'fill', style: { type: 'solid', color: { r: 255, g: 255, b: 255, a: 255 } }, evenOdd: true, path: box });
     ops.push({
       kind: 'stroke', path: box,
       // 枠は極細線（どの倍率でも 1 デバイスピクセル）。
-      style: { width: 1, color: { r: 0, g: 0, b: 0, a: 255 }, startCap: 'round', endCap: 'round', join: 'round', noClose: false },
+      style: { width: 1, color: edit.borderColor ?? { r: 0, g: 0, b: 0, a: 255 }, startCap: 'round', endCap: 'round', join: 'round', noClose: false },
     });
   }
   let content = edit.html ? plainText(edit.text) : edit.text;
@@ -240,7 +243,7 @@ export function editTextToPaths(edit, getFont) {
     if (!outlines) {
       ops.push({
         kind: 'text', text: line, x: start, y: top, width: right - start, align: edit.align, size: edit.height,
-        family: font?.name ?? '', bold: font?.bold ?? false, italic: font?.italic ?? false, color: edit.color,
+        family: font?.name ?? edit.fontName ?? '', bold: edit.bold ?? font?.bold ?? false, italic: edit.italic ?? font?.italic ?? false, color: edit.color,
       });
       return;
     }

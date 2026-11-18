@@ -1,17 +1,19 @@
 // 辞書（キャラクタ定義）、表示リスト、タイムラインの進行、スクリプトの実行順（仕様 3・5・13 章）。
 // 描画や DOM には依存しない。
-import { AVM1 } from '../avm1/interp.js';
+import { AVM1, PLAYER_VERSION } from '../avm1/interp.js';
 import { MovieClipObject } from '../avm1/clip.js';
+import { TextFieldObject } from '../avm1/textfield.js';
 import { AVMFunction } from '../avm1/object.js';
 import { Drawing } from './drawing.js';
 import { parseBitmap } from '../swf/bitmap.js';
 import { BUTTON_COND, parseDefineButton, parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
 import { parseDefineMorphShape } from '../swf/morph.js';
 import { parseSWF } from '../swf/parse.js';
+import { toBool, toStr } from '../avm1/convert.js';
 import { LegacyText } from '../swf/legacy.js';
 import { Reader } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
-import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, textToPaths } from '../swf/text.js';
+import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
 import { shapeToPaths } from '../shape/paths.js';
 
 const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
@@ -24,8 +26,20 @@ const MAX_NESTING = 255;
 const DYNAMIC_DEPTH = 16384; // これ以上の深度はスクリプトが作ったクリップ用
 const MAX_TRACES = 10000;
 // クリップイベントのフラグ（PlaceObject2 の CLIPEVENTFLAGS を下位バイトから並べた値）。
-const EVENT = { load: 0x01, enterFrame: 0x02, unload: 0x04 };
-const EVENT_METHOD = { load: 'onLoad', enterFrame: 'onEnterFrame', unload: 'onUnload' };
+const EVENT = {
+  load: 0x01, enterFrame: 0x02, unload: 0x04, mouseMove: 0x08, mouseDown: 0x10, mouseUp: 0x20, keyDown: 0x40, keyUp: 0x80,
+  press: 0x0400, release: 0x0800, releaseOutside: 0x1000, rollOver: 0x2000, rollOut: 0x4000, dragOver: 0x8000, dragOut: 0x010000,
+};
+const EVENT_METHOD = {
+  load: 'onLoad', enterFrame: 'onEnterFrame', unload: 'onUnload', mouseMove: 'onMouseMove', mouseDown: 'onMouseDown', mouseUp: 'onMouseUp',
+  press: 'onPress', release: 'onRelease', releaseOutside: 'onReleaseOutside', rollOver: 'onRollOver', rollOut: 'onRollOut',
+  dragOver: 'onDragOver', dragOut: 'onDragOut',
+};
+// これらのどれかを持つクリップは、ボタンと同じようにマウスに反応する。
+const BUTTON_EVENTS = ['press', 'release', 'releaseOutside', 'rollOver', 'rollOut', 'dragOver', 'dragOut'];
+const BUTTON_FLAGS = BUTTON_EVENTS.reduce((flags, name) => flags | EVENT[name], 0);
+// Key.getCode() の値（仮想キーコード）→ ボタンの keyPress のキーコード。ここに無いキーは文字コードで照合する。
+const BUTTON_KEY = { 37: 1, 39: 2, 36: 3, 35: 4, 45: 5, 46: 6, 8: 8, 13: 13, 38: 14, 40: 15, 33: 16, 34: 17, 9: 18, 27: 19 };
 const concat = (p, l) => ({
   a: p.a * l.a + p.c * l.b, b: p.b * l.a + p.d * l.b, c: p.a * l.c + p.c * l.d, d: p.b * l.c + p.d * l.d,
   tx: p.a * l.tx + p.c * l.ty + p.tx, ty: p.b * l.tx + p.d * l.ty + p.ty,
@@ -98,12 +112,16 @@ function crossings(path, px, py) {
   return n;
 }
 
+// 図形の塗りのどれかが、点 (x, y) を含むか。
+const insidePaths = (paths, x, y) => paths.some((op) => op.kind === 'fill' && crossings(op.path, x, y) % 2 === 1);
+
 export class Movie {
   #over = null; // マウスが乗っているボタン
   #pressed = null; // マウスを押したときに乗っていたボタン（離すまで、他のボタンは反応しない）
   #pressedInside = false; // 押したまま、そのボタンの上にいるか
   #mouseDown = false;
-  #mouseInside = false; // マウスがステージの上にあるか（最初の mouseMove までは外にある扱い）
+  #mouseInside = false;
+  #drag = null; // startDrag で引きずっているクリップ { clip, bounds, dx, dy } // マウスがステージの上にあるか（最初の mouseMove までは外にある扱い）
 
   /**
    * @param {Uint8Array | ArrayBuffer} bytes
@@ -115,6 +133,9 @@ export class Movie {
    *   now: () => number       getTimer() 用の経過ミリ秒。省略すると読み込みからの実時間
    *   random: () => number    乱数。省略すると Math.random
    *   avm: AVM1 の上限（maxSteps, maxAllocations, maxDepth）
+   *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
+   *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
+   *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
    *   encoding: SWF 5 以前の文字列の文字コード（'shift_jis' など、TextDecoder が受け付ける名前）。省略すると 'windows-1252'。
    *             SWF 6 以降は常に UTF-8 なので使わない。SWF 5 以前では、クリップの名前などはバイト列のままの文字列になる
    *             （swf/legacy.js を参照）。trace の出力と表示する文字は、この文字コードで Unicode に直す。
@@ -135,7 +156,9 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252' } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en' } = {}) {
+    this.boundFields = new Set(); // 変数と連動しているテキストフィールド
+    this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
     this.#bitmapPixelBudget = maxBitmapPixels;
     this.version = swf.version;
     this.legacy = swf.version < 6 ? new LegacyText(encoding) : null; // SWF 5 以前の文字列の扱い
@@ -164,6 +187,13 @@ export class Movie {
         else if (this.traces.length < MAX_TRACES) this.traces.push(shown);
       },
       legacy: this.legacy,
+      stage: { width: (swf.frameSize.xmax - swf.frameSize.xmin) / 20, height: (swf.frameSize.ymax - swf.frameSize.ymin) / 20 },
+      language,
+      request: (req) => {
+        const shown = this.legacy ? { ...req, url: this.legacy.decode(req.url), target: this.legacy.decode(req.target) } : req;
+        if (this.requests.length < MAX_TRACES) this.requests.push(shown);
+        onRequest?.(shown);
+      },
       now: now ?? (() => Date.now() - started),
       random,
       ...avm,
@@ -180,11 +210,19 @@ export class Movie {
    * このフレームで新しく作られるクリップは、1 フレーム目を表示したままにする。
    */
   advance() {
+    const due = this.avm?.pending.splice(0) ?? []; // 前のフレームまでに予約された処理（読み込み失敗の通知など）
     this.#guard(() => this.avm?.runTimers());
     this.clips = this.clips.filter((clip) => !clip.removed);
     const clips = this.clips.slice();
     for (let i = clips.length - 1; i >= 0; i--) if (!clips[i].removed && !clips[i].unloadPending) clips[i].tick();
     this.runActions();
+    for (const fn of due) this.#guard(fn);
+    this.runActions();
+    // 変数と連動するテキストフィールドに、変数の値を反映する。
+    for (const field of this.boundFields) {
+      if (field.removed) this.boundFields.delete(field);
+      else this.#guard(() => field.pull());
+    }
     this.#updateButtons(); // マウスが動かなくても、ボタンの方が現れたり消えたりする
   }
 
@@ -192,8 +230,13 @@ export class Movie {
 
   /** マウスの位置（ステージ座標、twips）を伝える。 */
   mouseMove(x, y) {
+    const moved = !this.#mouseInside || x !== this.mouse.x || y !== this.mouse.y;
     this.mouse = { x, y };
     this.#mouseInside = true;
+    if (moved) {
+      this.#dragTo();
+      this.#broadcast('mouseMove', 'Mouse', 'onMouseMove');
+    }
     this.#updateButtons();
   }
 
@@ -203,13 +246,15 @@ export class Movie {
     this.#updateButtons();
   }
 
+  // 実機の順序: 全クリップの mouseDown（新しいクリップから、ルートが最後）→ Mouse のリスナー → 押されたものの press。
   mouseDown() {
     this.#updateButtons();
     this.#mouseDown = true;
+    this.#broadcast('mouseDown', 'Mouse', 'onMouseDown');
     if (this.#over) {
       this.#pressed = this.#over;
       this.#pressedInside = true;
-      this.#buttonEvent(this.#pressed, BUTTON_COND.press, 'down');
+      this.#buttonEvent(this.#pressed, 'press', 'down');
     }
     this.runActions();
   }
@@ -217,9 +262,10 @@ export class Movie {
   mouseUp() {
     this.#updateButtons();
     this.#mouseDown = false;
+    this.#broadcast('mouseUp', 'Mouse', 'onMouseUp');
     if (this.#pressed) {
-      if (this.#pressedInside) this.#buttonEvent(this.#pressed, BUTTON_COND.release, 'over');
-      else this.#buttonEvent(this.#pressed, BUTTON_COND.releaseOutside, 'up');
+      if (this.#pressedInside) this.#buttonEvent(this.#pressed, 'release', 'over');
+      else this.#buttonEvent(this.#pressed, 'releaseOutside', 'up');
       this.#over = this.#pressedInside ? this.#pressed : null;
       this.#pressed = null;
     }
@@ -228,11 +274,15 @@ export class Movie {
   }
 
   /**
-   * キーが押されたことを伝える。code は SWF のキーコード（印字できる文字は ASCII コード、
-   * 1 ← / 2 → / 3 Home / 4 End / 5 Insert / 6 Delete / 8 Backspace / 13 Enter / 14 ↑ / 15 ↓ / 16 PageUp / 17 PageDown / 18 Tab / 19 Esc）。
+   * キーが押されたことを伝える。
+   * @param {number} code   仮想キーコード（Key.getCode() の値。A は 65、Enter は 13、← は 37 など）
+   * @param {number} [ascii] 文字コード（Key.getAscii() の値）。省略すると、英字は小文字、数字と空白はそのままの文字とみなす
    */
-  keyDown(code) {
-    // 同じキーに反応するボタンがいくつあっても、実行されるのは表示順でいちばん下（奥）の 1 つだけ（実機で確認）。
+  keyDown(code, ascii = code >= 65 && code <= 90 ? code + 32 : (code >= 48 && code <= 57) || code === 32 ? code : 0) {
+    this.avm?.keyEvent(code, ascii, true);
+    this.#broadcast('keyDown', 'Key', 'onKeyDown');
+    // ボタンの keyPress。同じキーに反応するボタンがいくつあっても、実行されるのは表示順でいちばん下（奥）の 1 つだけ（実機で確認）。
+    const key = BUTTON_KEY[code] ?? ascii;
     const find = (clip) => {
       if (!clip.visible) return null;
       for (const child of clip.sortedChildren()) {
@@ -240,38 +290,126 @@ export class Movie {
         if (!child.character.button) {
           const found = find(child);
           if (found) return found;
-        } else if (child.visible && child.character.button.actions.some((action) => action.key === code)) {
+        } else if (child.visible && child.character.button.actions.some((action) => action.key === key)) {
           return child;
         }
       }
       return null;
     };
-    const button = code ? find(this.root) : null;
-    for (const action of button?.character.button.actions ?? []) if (action.key === code) this.queueAction(button.parent, action.code);
+    const button = key ? find(this.root) : null;
+    for (const action of button?.character.button.actions ?? []) if (action.key === key) this.queueAction(button.parent, action.code);
     this.runActions();
   }
 
-  /** マウスが乗っているボタン（無ければ null）。カーソルの形を変えるのに使う。 */
+  /** キーが離されたことを伝える。 */
+  keyUp(code) {
+    this.avm?.keyEvent(code, 0, false);
+    this.#broadcast('keyUp', 'Key', 'onKeyUp');
+    this.runActions();
+  }
+
+  /** マウスが乗っているボタン、またはボタンのように反応するクリップ（無ければ null）。カーソルの形を変えるのに使う。 */
   get hoverButton() {
     return this.#over;
   }
 
-  // マウス位置にあるいちばん手前のボタン。ボタンでない図形は、上に重なっていてもボタンを隠さない。
+  // 全クリップにイベントを配り（新しいクリップから、ルートが最後）、続けて Mouse / Key のリスナーを呼ぶ。
+  #broadcast(event, object, method) {
+    if (!this.avm) return;
+    for (let i = this.clips.length - 1; i >= 0; i--) if (!this.clips[i].removed) this.fire(this.clips[i], event);
+    this.#queue.push({ run: () => this.avm.broadcast(object, method) });
+  }
+
+  // --- ドラッグ (startDrag) ---
+
+  /**
+   * クリップをマウスに追従させる。bounds は親の座標系での範囲（twips、{ left, top, right, bottom }）で、省略可。
+   * lock が真なら、クリップの基準点がマウスの位置に来る。偽なら、つかんだ時点の位置関係を保つ。
+   */
+  startDrag(clip, lock, bounds) {
+    const p = (clip.parent ?? clip).mouseLocal();
+    this.#drag = { clip, bounds, dx: lock ? 0 : clip.matrix.tx - p.x, dy: lock ? 0 : clip.matrix.ty - p.y };
+  }
+
+  stopDrag() {
+    this.#drag = null;
+  }
+
+  #dragTo() {
+    const drag = this.#drag;
+    if (!drag) return;
+    if (drag.clip.removed) {
+      this.#drag = null;
+      return;
+    }
+    const p = (drag.clip.parent ?? drag.clip).mouseLocal();
+    let x = p.x + drag.dx;
+    let y = p.y + drag.dy;
+    if (drag.bounds) {
+      x = Math.min(Math.max(x, drag.bounds.left), drag.bounds.right);
+      y = Math.min(Math.max(y, drag.bounds.top), drag.bounds.bottom);
+    }
+    drag.clip.setMatrix({ ...drag.clip.matrix, tx: Math.round(x), ty: Math.round(y) });
+    drag.clip.dropTarget = this.clipUnderMouse(drag.clip)?.slashPath() ?? ''; // _droptarget
+  }
+
+  /** マウスの位置にあるいちばん手前のクリップ（exclude とその中身は除く）。ドラッグ中の _droptarget の値になる。 */
+  clipUnderMouse(exclude) {
+    const find = (clip) => {
+      const children = clip.sortedChildren();
+      for (let i = children.length - 1; i >= 0; i--) {
+        const child = children[i];
+        if (child === exclude || !child.visible || child.clipDepth) continue;
+        if (child instanceof MovieClip) {
+          const found = find(child);
+          if (found) return found;
+        } else if (clip !== this.root && child.hitPoint(this.mouse.x, this.mouse.y)) {
+          return clip;
+        }
+      }
+      return null;
+    };
+    return find(this.root);
+  }
+
+  // --- ボタン ---
+
+  // クリップがボタンのように反応するか（ボタンそのもの、または press などのハンドラを持つクリップ）。
+  #buttonLike(clip) {
+    if (clip.character.button) return true;
+    if (clip.clipActions?.some((action) => action.events & BUTTON_FLAGS)) return true;
+    const object = clip.scriptObject();
+    return !!object && BUTTON_EVENTS.some((name) => object.get(EVENT_METHOD[name]) instanceof AVMFunction);
+  }
+
+  // enabled が偽のボタンやクリップは、マウスに反応しない。
+  #enabled(clip) {
+    const object = clip.scriptObject();
+    return !object || toBool(this.avm, object.get('enabled') ?? true);
+  }
+
+  // マウス位置にあるいちばん手前のボタン（またはボタンのように反応するクリップ）。それ以外の図形は、上に重なっていても隠さない。
   #buttonAt(clip, x, y) {
     if (!clip.visible) return null;
     const children = clip.sortedChildren();
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
       if (child.clipDepth || !(child instanceof MovieClip)) continue;
-      if (!child.character.button) {
+      if (!this.#buttonLike(child)) {
         const found = this.#buttonAt(child, x, y);
         if (found) return found;
         continue;
       }
-      if (!child.visible) continue;
+      if (!child.visible || !this.#enabled(child)) continue;
+      const button = child.character.button;
+      if (!button) {
+        // クリップは、表示中の中身の形で判定する。
+        if (child.hitPoint(x, y)) return child;
+        continue;
+      }
       const m = invert(child.worldMatrix());
       const local = { x: m.a * x + m.c * y + m.tx, y: m.b * x + m.d * y + m.ty };
-      if (child.character.button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0))) return child;
+      if (button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0))) return child;
     }
     return null;
   }
@@ -282,9 +420,7 @@ export class Movie {
     if (!character || depth > 8) return false;
     const m = invert(place.matrix ?? IDENTITY);
     const q = { x: m.a * p.x + m.c * p.y + m.tx, y: m.b * p.x + m.d * p.y + m.ty };
-    if (character.type === 'shape') {
-      return character.paths.some((op) => op.kind === 'fill' && crossings(op.path, q.x, q.y) % 2 === 1);
-    }
+    if (character.type === 'shape') return insidePaths(character.paths, q.x, q.y);
     if (character.type === 'sprite') {
       return (character.timeline[0] ?? []).some((op) => op.op === 'place' && op.characterId !== undefined && this.#hits(op, q, depth + 1));
     }
@@ -295,26 +431,43 @@ export class Movie {
   #updateButtons() {
     if (this.#over?.removed) this.#over = null;
     if (this.#pressed?.removed) this.#pressed = null;
-    const hit = this.#mouseInside ? this.#buttonAt(this.root, this.mouse.x, this.mouse.y) : null;
+    let hit = null;
+    this.#guard(() => { // ハンドラの有無を調べるときに、スクリプトの getter が動くことがある
+      hit = this.#mouseInside ? this.#buttonAt(this.root, this.mouse.x, this.mouse.y) : null;
+    });
     if (this.#pressed) {
       // 押したまま出入りする
       const inside = hit === this.#pressed;
       if (inside !== this.#pressedInside) {
         this.#pressedInside = inside;
-        this.#buttonEvent(this.#pressed, inside ? BUTTON_COND.dragOver : BUTTON_COND.dragOut, inside ? 'down' : 'over');
+        this.#buttonEvent(this.#pressed, inside ? 'dragOver' : 'dragOut', inside ? 'down' : 'over');
       }
     } else if (!this.#mouseDown && hit !== this.#over) {
-      if (this.#over) this.#buttonEvent(this.#over, BUTTON_COND.rollOut, 'up');
-      if (hit) this.#buttonEvent(hit, BUTTON_COND.rollOver, 'over');
+      if (this.#over) this.#buttonEvent(this.#over, 'rollOut', 'up');
+      if (hit) this.#buttonEvent(hit, 'rollOver', 'over');
       this.#over = hit;
     }
     this.runActions();
   }
 
-  // ボタンの見た目を state に切り替え、条件 cond のアクションを待ち行列に入れる。アクションはボタンを置いたクリップを対象に実行される。
-  #buttonEvent(button, cond, state) {
-    button.setButtonState(state);
-    for (const action of button.character.button.actions) if (action.cond & cond) this.queueAction(button.parent, action.code);
+  // ボタンなら見た目を state に切り替えて条件 event のアクションを待ち行列に入れる（ボタンを置いたクリップが対象）。
+  // クリップなら on(press) などのコードと、onPress などのメソッドを呼ぶ。
+  #buttonEvent(target, event, state) {
+    const button = target.character.button;
+    if (button) {
+      target.setButtonState(state);
+      for (const action of button.actions) if (action.cond & BUTTON_COND[event]) this.queueAction(target.parent, action.code);
+    } else {
+      // クリップは、_up / _over / _down というフレームラベルがあれば、ハンドラより先にそのフレームへ移って止まる。
+      const frame = target.frameNumber(`_${state}`);
+      if (frame !== undefined) target.gotoFrame(frame, false);
+    }
+    this.fire(target, event);
+  }
+
+  /** テキストフィールドの状態 edit（DefineEditText と同じ形）を描画命令にする。 */
+  textPaths(edit) {
+    return editTextToPaths(edit, this.#font);
   }
 
   /** 名前の照合用の小文字化。SWF 5 以前は英字だけを対象にする（2 バイト文字を壊さない）。 */
@@ -343,13 +496,16 @@ export class Movie {
     this.#initQueue.push({ clip, code });
   }
 
-  /** クリップイベントを発生させる。onClipEvent のコードと、同名のメソッド (onEnterFrame など) を待ち行列に入れる。 */
+  /**
+   * クリップイベントを発生させる。onClipEvent のコードと、同名のメソッド (onEnterFrame など) を待ち行列に入れる。
+   * キーのイベントには対応するメソッドが無い（EVENT_METHOD に無いものは onClipEvent だけ）。
+   */
   fire(clip, event) {
     if (!this.avm) return;
     for (const action of clip.clipActions ?? []) {
       if (action.events & EVENT[event]) this.#queue.push({ clip, code: action.code, removedOk: event === 'unload' });
     }
-    this.#queue.push({ clip, method: EVENT_METHOD[event], removedOk: event === 'unload', last: event === 'unload' });
+    if (EVENT_METHOD[event]) this.#queue.push({ clip, method: EVENT_METHOD[event], removedOk: event === 'unload', last: event === 'unload' });
   }
 
   /** 待ち行列が空になるまでアクションを実行する。実行中に積まれたものも続けて実行する。 */
@@ -359,6 +515,10 @@ export class Movie {
     for (;;) {
       const item = this.#initQueue.shift() ?? this.#queue.shift();
       if (!item) break;
+      if (item.run) {
+        this.#guard(item.run);
+        continue;
+      }
       if (avm.disabled || (item.clip.removed && !item.removedOk)) continue;
       const target = item.clip.scriptObject();
       this.#guard(() => {
@@ -437,7 +597,7 @@ export class Movie {
         } else if (tag.code === 37) {
           const edit = parseDefineEditText(tag, this.legacy !== null);
           if (this.legacy && edit.text !== undefined) edit.text = this.legacy.decode(edit.text); // 表示用
-          this.#define({ type: 'shape', id: edit.id, bounds: edit.bounds, paths: editTextToPaths(edit, this.#font) });
+          this.#define({ type: 'edittext', id: edit.id, bounds: edit.bounds, edit, fontName: this.#font(edit.fontId)?.name });
         } else if (tag.code === 8) {
           this.#jpegTables ??= tag.body;
         } else if (BITMAP_TAGS.has(tag.code) && tag.length >= 2) {
@@ -537,6 +697,14 @@ export class DisplayObject {
     return b ? transformBounds(b, m) : null;
   }
 
+  /** ステージ座標の点 (x, y)（twips）が、この図形の塗りの内側にあるか。 */
+  hitPoint(x, y) {
+    const paths = this.character.paths;
+    if (!paths) return false;
+    const m = invert(this.worldMatrix());
+    return insidePaths(paths, m.a * x + m.c * y + m.tx, m.b * x + m.d * y + m.ty);
+  }
+
   /** 親の座標系での外接矩形。 */
   boundsInParent() {
     return this.bounds(this.matrix);
@@ -554,6 +722,139 @@ export class DisplayObject {
 }
 
 /** 自分のタイムラインと子を持つオブジェクト。ルートもこれ。 */
+// 書式の既定値（createTextField で作ったフィールド。実機の getTextFormat の値）。
+const DEFAULT_FORMAT = {
+  font: 'Times Roman', size: 12, color: 0, bold: false, italic: false, underline: false, url: '', target: '', align: 'left',
+  leftMargin: 0, rightMargin: 0, indent: 0, leading: 0, bullet: false,
+};
+const rgbOf = (n) => ({ r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: 255 });
+
+/** テキストフィールド（DefineEditText を置いたもの、または createTextField で作ったもの）。 */
+export class TextField extends DisplayObject {
+  #object = null;
+  #paths = null;
+
+  constructor(movie, character, depth, desc, parent) {
+    super(character, depth, desc, parent);
+    this.movie = movie;
+    const edit = character.edit;
+    this.box = { ...character.bounds }; // 枠（twips）。_width / _height の代入で変わる
+    // 書式。format は今の文字に付いているもの、newFormat はこれから入る文字に付くもの。
+    this.newFormat = edit ? {
+      ...DEFAULT_FORMAT, font: character.fontName ?? '', size: edit.height / 20, color: (edit.color.r << 16) | (edit.color.g << 8) | edit.color.b,
+      align: edit.align, leftMargin: edit.leftMargin / 20, rightMargin: edit.rightMargin / 20, indent: edit.indent / 20, leading: edit.leading / 20,
+    } : { ...DEFAULT_FORMAT };
+    this.format = { ...this.newFormat };
+    this.html = edit?.html ?? false;
+    this.htmlText = this.html ? edit.text : null; // html が真のとき、代入された HTML そのもの
+    this.text = edit ? (this.html ? plainText(edit.text) : edit.text) : '';
+    this.type = edit && !edit.readOnly ? 'input' : 'dynamic';
+    this.multiline = edit?.multiline ?? false;
+    this.wordWrap = edit?.wordWrap ?? false;
+    this.password = edit?.password ?? false;
+    this.selectable = edit ? !edit.noSelect : true;
+    this.border = edit?.border ?? false;
+    this.background = edit?.border ?? false;
+    this.borderColor = 0;
+    this.backgroundColor = 0xffffff;
+    this.embedFonts = edit?.useOutlines ?? false;
+    this.autoSize = 'none';
+    this.maxChars = edit?.maxLength ?? null;
+    this.restrict = null;
+    this.variable = null;
+    if (parent && !this.name) this.name = movie.nextInstanceName();
+    if (edit?.variableName) this.bind(edit.variableName, true);
+  }
+
+  /** スクリプトから見たこのフィールド。AVM1 が無ければ undefined。 */
+  scriptObject() {
+    if (!this.movie.avm) return undefined;
+    return (this.#object ??= new TextFieldObject(this.movie.avm, this));
+  }
+
+  dotPath() {
+    return `${this.parent.dotPath()}.${this.name}`;
+  }
+
+  slashPath() {
+    return `${this.parent.parent ? this.parent.slashPath() : ''}/${this.name}`;
+  }
+
+  /** 見た目にかかわる状態が変わったら呼ぶ。 */
+  changed() {
+    this.#paths = null;
+  }
+
+  /** 文字列を入れる。書式は newFormat に戻る。fromScript が真なら、連動する変数にも書く。 */
+  setText(text, fromScript) {
+    this.text = text.replace(/\r\n|\n/g, '\r'); // 改行は CR で持つ
+    this.format = { ...this.newFormat };
+    this.changed();
+    if (fromScript && this.variable) this.#variable(this.text);
+  }
+
+  /** 変数 name と連動させる（null で解除）。initial が真（定義で指定された場合）なら、変数が未定義のときに今の文字列を変数へ入れる。 */
+  bind(name, initial = false) {
+    this.variable = name || null;
+    if (!this.variable) {
+      this.movie.boundFields.delete(this);
+      return;
+    }
+    this.movie.boundFields.add(this);
+    if (initial && this.#variable() === undefined) this.#variable(this.text);
+    else this.pull();
+  }
+
+  /** 連動する変数に値があれば、それを表示する文字列にする。 */
+  pull() {
+    if (!this.variable) return;
+    const value = this.#variable();
+    if (value === undefined) return;
+    const text = toStr(this.movie.avm, value).replace(/\r\n|\n/g, '\r');
+    if (text !== this.text) {
+      this.text = text;
+      this.changed();
+    }
+  }
+
+  // 連動する変数を読む（引数なし）か、書く。変数名は、フィールドを置いたクリップから見たパスでもよい。
+  #variable(...value) {
+    const { avm } = this.movie;
+    const target = this.parent?.scriptObject();
+    if (!avm || !target) return undefined;
+    const frame = { target, thisValue: target, scopes: [{ object: avm.global }, { object: target, target: true }] };
+    if (value.length) return avm.setVariable(frame, this.variable, value[0]);
+    return avm.getVariable(frame, this.variable);
+  }
+
+  /** 描画命令（図形と同じ形式）。内容が変わるまで同じ配列を返す。 */
+  paths() {
+    if (!this.#paths) {
+      const edit = this.character.edit;
+      const f = this.format;
+      this.#paths = this.movie.textPaths({
+        bounds: this.box, fontId: edit?.fontId, fontName: f.font, useOutlines: this.embedFonts,
+        height: f.size * 20, color: rgbOf(f.color), bold: f.bold, italic: f.italic, align: f.align,
+        leftMargin: f.leftMargin * 20, rightMargin: f.rightMargin * 20, indent: f.indent * 20, leading: f.leading * 20,
+        text: this.text, html: false, password: this.password, multiline: this.multiline, wordWrap: this.wordWrap,
+        border: this.border, background: this.background, borderColor: rgbOf(this.borderColor), backgroundColor: rgbOf(this.backgroundColor),
+      });
+    }
+    return this.#paths;
+  }
+
+  bounds(m) {
+    return transformBounds(this.box, m);
+  }
+
+  hitPoint(x, y) {
+    const m = invert(this.worldMatrix());
+    const px = m.a * x + m.c * y + m.tx;
+    const py = m.b * x + m.d * y + m.ty;
+    return px >= this.box.xmin && px <= this.box.xmax && py >= this.box.ymin && py <= this.box.ymax;
+  }
+}
+
 export class MovieClip extends DisplayObject {
   #object = null;
   #drawing = null;
@@ -597,7 +898,7 @@ export class MovieClip extends DisplayObject {
     if (!this.movie.avm) return undefined;
     if (!this.#object) {
       this.#object = new MovieClipObject(this.movie.avm, this);
-      if (!this.parent) this.#object.define('$version', 'MAC 35,0,0,60'); // ルートはプレイヤーの版を変数に持つ
+      if (!this.parent) this.#object.define('$version', PLAYER_VERSION); // ルートはプレイヤーの版を変数に持つ
     }
     return this.#object;
   }
@@ -605,7 +906,7 @@ export class MovieClip extends DisplayObject {
   childByName(name, caseInsensitive) {
     const fold = (s) => (caseInsensitive ? this.movie.lower(s) : s);
     const wanted = fold(name);
-    const matches = (child) => child instanceof MovieClip && fold(child.name) === wanted;
+    const matches = (child) => (child instanceof MovieClip || child instanceof TextField) && fold(child.name) === wanted;
     for (const child of this.children.values()) if (matches(child)) return child;
     for (const child of this.limbo ?? []) if (matches(child)) return child;
     return undefined;
@@ -714,11 +1015,32 @@ export class MovieClip extends DisplayObject {
     return child;
   }
 
+  /** 空のテキストフィールドを作る。位置と大きさは twips。 */
+  createTextField(name, depth, x, y, width, height) {
+    const character = { type: 'edittext', id: -2, order: -1, bounds: { xmin: 0, xmax: width, ymin: 0, ymax: height }, edit: null, fontName: undefined };
+    return this.#instantiate(depth, { ...PLACE_DEFAULTS, name, matrix: { ...IDENTITY, tx: x, ty: y } }, true, character);
+  }
+
   /** 自分と同じシンボルを、親の中に別の名前・深度で置く。 */
   duplicate(name, depth) {
     if (!this.parent) return undefined;
     const desc = { ...describe(this), name, clipActions: this.clipActions };
     return this.parent.#instantiate(depth, desc, true, this.character);
+  }
+
+  /** 中身を空にする（unloadMovie、または読み込みに失敗した loadMovie）。フレーム数は 0 になる。 */
+  unload() {
+    if (this.removed) return;
+    for (const depth of [...this.children.keys()]) this.#remove(depth);
+    this.#drawing = null;
+    this.frames = Object.assign([], { labels: new Map() });
+    this.currentFrame = 0;
+    this.playing = false;
+  }
+
+  /** スクリプトが作った子（深度 16384 以上。テキストフィールドなど）を取り除く。 */
+  removeDynamicChild(child) {
+    if (child.depth >= DYNAMIC_DEPTH && this.children.get(child.depth) === child) this.#remove(child.depth);
   }
 
   /** スクリプトが作ったクリップ（深度 16384 以上）を取り除く。 */
@@ -781,6 +1103,17 @@ export class MovieClip extends DisplayObject {
         child.apply(desc);
       }
     }
+  }
+
+  /** ステージ座標の点 (x, y)（twips）が、表示中の中身（子孫の図形と、描画 API で描いた図形）の内側にあるか。 */
+  hitPoint(x, y) {
+    const drawn = this.drawingPaths();
+    if (drawn) {
+      const m = invert(this.worldMatrix());
+      if (insidePaths(drawn, m.a * x + m.c * y + m.tx, m.b * x + m.d * y + m.ty)) return true;
+    }
+    for (const child of this.children.values()) if (child.visible && !child.clipDepth && child.hitPoint(x, y)) return true;
+    return false;
   }
 
   /** 自分と親がすべて表示されているか（_visible が偽のクリップの中のボタンは反応しない）。 */
@@ -879,7 +1212,7 @@ export class MovieClip extends DisplayObject {
       movie.warn(`sprite ${this.character.id} cannot place character ${character.id} defined after it`);
       return undefined;
     }
-    if (character.type !== 'sprite' && character.type !== 'shape' && character.type !== 'morph') {
+    if (!['sprite', 'shape', 'morph', 'edittext'].includes(character.type)) {
       movie.warn(`character ${character.id} (${character.type}) cannot be placed`);
       return undefined;
     }
@@ -895,9 +1228,9 @@ export class MovieClip extends DisplayObject {
     }
     movie.instances++;
     // 子の 1 フレーム目のアクションは待ち行列に入るだけなので、実行される時には親への登録は済んでいる。
-    const child = character.type === 'sprite'
-      ? new MovieClip(movie, character, depth, desc, this.level + 1, this)
-      : new DisplayObject(character, depth, desc, this);
+    const child = character.type === 'sprite' ? new MovieClip(movie, character, depth, desc, this.level + 1, this)
+      : character.type === 'edittext' ? new TextField(movie, character, depth, desc, this)
+        : new DisplayObject(character, depth, desc, this);
     this.children.set(depth, child);
     return child;
   }
