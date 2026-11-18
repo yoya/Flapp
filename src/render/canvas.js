@@ -110,7 +110,9 @@ export class CanvasRenderer {
     const twipsToPixels = { a: scale / 20, b: 0, c: 0, d: scale / 20, tx: (-xmin * scale) / 20, ty: (-ymin * scale) / 20 };
     this.base = twipsToPixels;
     // ルートにもスクリプトが位置や色変換を設定できる（_root._x など）。
-    if (movie.root.visible) this.#drawContent(ctx, movie.root, concat(twipsToPixels, movie.root.matrix), concatCx(IDENTITY_CX, movie.root.cxform), false);
+    // AS3 のムービーは、ステージの子（ルートと、スクリプトがステージに直接入れたもの）を描く。
+    if (movie.stage) this.#drawContent(ctx, movie.stage, twipsToPixels, IDENTITY_CX, false);
+    else if (movie.root.visible) this.#drawContent(ctx, movie.root, concat(twipsToPixels, movie.root.matrix), concatCx(IDENTITY_CX, movie.root.cxform), false);
   }
 
   // children[start] 以降のうち、深度が maxDepth 以下のものを描く。描き終えた位置を返す。

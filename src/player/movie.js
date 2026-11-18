@@ -1,6 +1,8 @@
 // 辞書（キャラクタ定義）、表示リスト、タイムラインの進行、スクリプトの実行順（仕様 3・5・13 章）。
 // 描画や DOM には依存しない。
 import { AVM1, PLAYER_VERSION } from '../avm1/interp.js';
+import { AVM2 } from '../avm2/vm.js';
+import { installFlash } from '../avm2/flash.js';
 import { MovieClipObject } from '../avm1/clip.js';
 import { TextFieldObject } from '../avm1/textfield.js';
 import { AVMFunction } from '../avm1/object.js';
@@ -13,7 +15,7 @@ import { parseDefineMorphShape } from '../swf/morph.js';
 import { parseSWF } from '../swf/parse.js';
 import { toBool, toStr } from '../avm1/convert.js';
 import { LegacyText } from '../swf/legacy.js';
-import { Reader } from '../swf/reader.js';
+import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
 import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
 import { shapeToPaths } from '../shape/paths.js';
@@ -22,6 +24,7 @@ const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
 const PLACE_DEFAULTS = Object.freeze({
   matrix: IDENTITY, cxform: null, ratio: 0, name: '', clipDepth: 0, filters: null, blendMode: 'normal', visible: true,
 });
+const PASS = Symbol('pass'); // マウスの相手探しで「当たったが、受けるものが決まらない」
 const SHAPE_TAGS = new Set([2, 22, 32, 83]);
 const BITMAP_TAGS = new Set([6, 20, 21, 35, 36, 90]);
 const MAX_NESTING = 255;
@@ -122,6 +125,7 @@ export class Movie {
   #pressed = null; // マウスを押したときに乗っていたボタン（離すまで、他のボタンは反応しない）
   #pressedInside = false; // 押したまま、そのボタンの上にいるか
   #mouseDown = false;
+  #keyChars = new Map(); // 押されているキーの仮想キーコード → 文字コード
   #mouseInside = false;
   #drag = null; // startDrag で引きずっているクリップ { clip, bounds, dx, dy } // マウスがステージの上にあるか（最初の mouseMove までは外にある扱い）
 
@@ -146,9 +150,12 @@ export class Movie {
   static async load(bytes, options = {}) {
     const movie = new Movie(await parseSWF(bytes, options), options);
     await movie.#decodeBitmaps();
+    if (movie.avm2) movie.#framePhase(); // AS3: 1 フレーム目の frameConstructed、フレームスクリプト、exitFrame
     movie.runActions(); // 1 フレーム目のアクション
     return movie;
   }
+
+  #phaseDepth = 0;
 
   #jpegTables;
   #pendingBitmaps = [];
@@ -184,21 +191,29 @@ export class Movie {
     const started = Date.now();
     this.now = now ?? (() => Date.now() - started); // 再生開始からの経過ミリ秒
     this.sounds = new SoundMixer(this, audio ?? null);
+    const traceOut = (text) => {
+      const shown = this.legacy ? this.legacy.decode(text) : text;
+      if (trace) trace(shown);
+      else if (this.traces.length < MAX_TRACES) this.traces.push(shown);
+    };
+    /** スクリプトが要求した URL を記録する（実行はしない）。 */
+    this.request = (req) => {
+      const shown = this.legacy ? { ...req, url: this.legacy.decode(req.url), target: this.legacy.decode(req.target) } : req;
+      if (this.requests.length < MAX_TRACES) this.requests.push(shown);
+      onRequest?.(shown);
+    };
+    this.symbolClasses = new Map(); // キャラクタ ID → 結び付けられた AS3 のクラス名 (SymbolClass)
+    this.unconstructed = new Set(); // AS3: 表示リストには入ったが、まだコンストラクタを呼んでいないクリップ
+    // ActionScript 3 のムービーは AVM2 で、それ以外は AVM1 で動かす。
+    this.avm2 = this.isAS3 ? new AVM2({ trace: traceOut, now: this.now, random, ...avm }) : null;
+    if (this.avm2) installFlash(this.avm2, this, { MovieClip, TextField });
     this.avm = this.isAS3 ? null : new AVM1({
       version: swf.version,
-      trace: (text) => {
-        const shown = this.legacy ? this.legacy.decode(text) : text;
-        if (trace) trace(shown);
-        else if (this.traces.length < MAX_TRACES) this.traces.push(shown);
-      },
+      trace: traceOut,
       legacy: this.legacy,
       stage: { width: (swf.frameSize.xmax - swf.frameSize.xmin) / 20, height: (swf.frameSize.ymax - swf.frameSize.ymin) / 20 },
       language,
-      request: (req) => {
-        const shown = this.legacy ? { ...req, url: this.legacy.decode(req.url), target: this.legacy.decode(req.target) } : req;
-        if (this.requests.length < MAX_TRACES) this.requests.push(shown);
-        onRequest?.(shown);
-      },
+      request: this.request,
       now: this.now,
       random,
       ...avm,
@@ -207,6 +222,14 @@ export class Movie {
 
     const timeline = this.#buildTimeline(swf.tags, null);
     this.root = new MovieClip(this, { type: 'sprite', id: 0, order: Infinity, timeline }, 0, PLACE_DEFAULTS, 0, null);
+    // AS3 のステージ。ルートを子に持つ入れ物で、スクリプトが stage.addChild で入れたものはルートの兄弟になる。
+    // ルートの parent は null のままにしておく（ルートを「親の無いクリップ」として扱っている箇所が多いため）。
+    this.stage = null;
+    if (this.avm2) {
+      this.stage = new MovieClip(this, this.emptySprite, 0, { ...PLACE_DEFAULTS, name: 'stage' }, 0, null, this.avm2.display.stage);
+      this.stage.removed = false;
+      this.stage.children.set(0, this.root);
+    }
   }
 
   /**
@@ -217,9 +240,14 @@ export class Movie {
   advance() {
     const due = this.avm?.pending.splice(0) ?? []; // 前のフレームまでに予約された処理（読み込み失敗の通知など）
     this.#guard(() => this.avm?.runTimers());
-    this.clips = this.clips.filter((clip) => !clip.removed);
+    const as3 = this.avm2?.display;
+    as3?.runTimers();
+    this.clips = this.clips.filter((clip) => (clip.listed = !clip.removed));
     const clips = this.clips.slice();
     for (let i = clips.length - 1; i >= 0; i--) if (!clips[i].removed && !clips[i].unloadPending) clips[i].tick();
+    as3?.broadcast('enterFrame'); // AS3 の enterFrame は、再生ヘッドが進んだ後に届く（実機で確認）
+    this.onFrameConstructed?.(); // 各クリップがこのフレームの子を作り終え、フレームのスクリプトを実行する前（検証用の観測点）
+    if (as3) this.#framePhase();
     this.runActions();
     for (const fn of due) this.#guard(fn);
     this.runActions();
@@ -247,12 +275,14 @@ export class Movie {
       this.#broadcast('mouseMove', 'Mouse', 'onMouseMove');
     }
     this.#updateButtons();
+    this.#mouseEvent(moved ? 'mouseMove' : null);
   }
 
   /** マウスがステージの外へ出たことを伝える。 */
   mouseLeave() {
     this.#mouseInside = false;
     this.#updateButtons();
+    this.#mouseEvent(null);
   }
 
   // 実機の順序: 全クリップの mouseDown（新しいクリップから、ルートが最後）→ Mouse のリスナー → 押されたものの press。
@@ -266,6 +296,7 @@ export class Movie {
       this.#buttonEvent(this.#pressed, 'press', 'down');
     }
     this.runActions();
+    this.#mouseEvent('mouseDown');
   }
 
   mouseUp() {
@@ -280,6 +311,7 @@ export class Movie {
     }
     this.runActions();
     this.#updateButtons();
+    this.#mouseEvent('mouseUp');
   }
 
   /**
@@ -308,6 +340,8 @@ export class Movie {
     const button = key ? find(this.root) : null;
     for (const action of button?.character.button.actions ?? []) if (action.key === key) this.queueAction(button.parent, action.code);
     this.runActions();
+    this.#keyChars.set(code, ascii);
+    this.avm2?.display.key('keyDown', code, ascii);
   }
 
   /** キーが離されたことを伝える。 */
@@ -315,11 +349,59 @@ export class Movie {
     this.avm?.keyEvent(code, 0, false);
     this.#broadcast('keyUp', 'Key', 'onKeyUp');
     this.runActions();
+    this.avm2?.display.key('keyUp', code, this.#keyChars.get(code) ?? 0); // 離したときのイベントも、押したときの文字コードを持つ
+    this.#keyChars.delete(code);
   }
 
   /** マウスが乗っているボタン、またはボタンのように反応するクリップ（無ければ null）。カーソルの形を変えるのに使う。 */
   get hoverButton() {
-    return this.#over;
+    return this.#over ?? (this.avm2?.display.handCursor() ? this.root : null);
+  }
+
+  // AS3: マウスの位置にあるオブジェクトへ、マウスのイベントを届ける（type が null なら、乗っているものの変化だけを伝える）。
+  #mouseEvent(type) {
+    if (!this.avm2) return;
+    const hit = this.#mouseInside ? this.#pick(this.stage, this.mouse.x, this.mouse.y) : null;
+    this.avm2.display.mouse(type, hit && hit !== PASS ? hit : null, this.#mouseInside, this.#mouseDown);
+  }
+
+  // AS3: clip の中で、点 (x, y) にあるいちばん手前の、マウスのイベントの相手（InteractiveObject）を探す。
+  // 戻り値は、相手の表示オブジェクト、PASS（何かに当たったが、それを受けるものが clip の中には無い）、null（何にも当たらない）。
+  // 実機で確かめた決まり:
+  //  - 図形や描画 API の絵は相手にならず、それを持つクリップが受ける。mouseEnabled が偽のものに当たったときも、親が受ける。
+  //  - 受けられない（mouseEnabled が偽の）クリップは、下にある子を続けて調べ、それでも決まらなければ親に任せる。
+  //  - mouseChildren が偽のクリップは、子の代わりに自分が受ける。
+  //  - ルート（メインタイムライン）は受けない。ルートの図形や、ルートに任されたぶんは、下に何も無ければステージが相手になる。
+  #pick(clip, x, y) {
+    const receives = clip.mouseEnabled !== false && clip !== this.root && clip !== this.stage;
+    let passed = false;
+    const children = clip.sortedChildren();
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i];
+      if (!child.visible || child.clipDepth) continue;
+      let hit = null;
+      if (!(child instanceof MovieClip) || child.leaf) {
+        if (child.hitPoint(x, y)) hit = child instanceof TextField && child.mouseEnabled !== false ? child : PASS;
+      } else if (child.character.button) {
+        const local = child.globalToLocal(x, y);
+        if (child.character.button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0))) hit = child.mouseEnabled !== false ? child : PASS;
+      } else {
+        hit = this.#pick(child, x, y);
+      }
+      if (!hit) continue;
+      if (hit !== PASS && clip.mouseChildren !== false) return hit;
+      if (receives) return clip;
+      passed = true;
+    }
+    const drawn = clip.drawingPaths(); // 描画 API で描いた図形は、子より下にある
+    if (drawn) {
+      const local = clip.globalToLocal(x, y);
+      if (insidePaths(drawn, local.x, local.y)) {
+        if (receives) return clip;
+        passed = true;
+      }
+    }
+    return passed ? PASS : null;
   }
 
   // 全クリップにイベントを配り（新しいクリップから、ルートが最後）、続けて Mouse / Key のリスナーを呼ぶ。
@@ -496,6 +578,29 @@ export class Movie {
     return `instance${++this.#instanceNames}`;
   }
 
+  #unnamedCounts = new Map(); // キャラクタ ID → それを置いたときに作られる、名前の無いオブジェクトの数（自分は除く）
+
+  /**
+   * AS3: キャラクタ id を置いたら付いたはずの instanceN の番号を、置かずに進める。
+   * 実機では、タイムラインが前のフレームへ戻る（最終フレームから 1 フレーム目へ回るのも同じ）とき、そのまま残るオブジェクトのぶんも
+   * 番号が進む（test/as3/lifecycle.as の出力から確認）。
+   */
+  skipInstanceNames(id, named) {
+    const inside = (characterId, order) => {
+      if (this.#unnamedCounts.has(characterId)) return this.#unnamedCounts.get(characterId);
+      const character = this.dictionary.get(characterId);
+      let n = 0;
+      if (character?.type === 'sprite' && character.order < order) {
+        for (const op of character.timeline[0] ?? []) {
+          if (op.op === 'place' && op.characterId !== undefined) n += (op.name ? 0 : 1) + inside(op.characterId, character.order);
+        }
+      }
+      this.#unnamedCounts.set(characterId, n);
+      return n;
+    };
+    this.#instanceNames += (named ? 0 : 1) + inside(id, Infinity);
+  }
+
   // --- アクションの待ち行列 ---
 
   queueAction(clip, code) {
@@ -545,13 +650,96 @@ export class Movie {
     }
   }
 
+  // AS3: フレームの後半。frameConstructed を配り、フレームに入ったクリップのフレームスクリプトを実行し、exitFrame を配る。
+  // フレームが進んだときのほか、スクリプトがフレームを移すたびに、その場で行われる（実機で確認）。
+  #framePhase() {
+    const { avm2 } = this;
+    if (this.#phaseDepth >= 16) return; // ハンドラの中の移動がさらに移動を呼ぶ、という入れ子の歯止め
+    this.#phaseDepth++;
+    try {
+      this.constructPending(this.stage);
+      avm2.display.broadcast('frameConstructed');
+      for (let round = 0; round < 1000; round++) {
+        if (!this.clips.some((clip) => clip.scriptPending)) break;
+        // 実行の順序は、このフレームで取り除かれたクリップが先で、あとは表示リストの順（親が先、子は下から上）。
+        const pending = this.clips.filter((clip) => clip.scriptPending && clip.removed);
+        const collect = (clip) => {
+          if (clip.scriptPending) pending.push(clip);
+          for (const child of clip.sortedChildren()) if (child instanceof MovieClip) collect(child);
+        };
+        collect(this.stage);
+        for (const clip of pending) {
+          if (!clip.scriptPending) continue;
+          clip.scriptPending = false;
+          const fn = clip.frameScripts?.get(clip.currentFrame);
+          if (!fn || !clip.as3) continue;
+          clip.inFrameScript = true;
+          try {
+            avm2.run(() => avm2.call(fn, clip.as3, []), (text) => this.warn(`uncaught error: ${text}`));
+          } finally {
+            clip.inFrameScript = false;
+          }
+          // 自分のフレームスクリプトの中で頼まれた移動は、スクリプトが終わってから行う（最後に頼まれたものだけ）。
+          const goto = clip.deferredGoto;
+          clip.deferredGoto = null;
+          if (goto) this.gotoFrame(clip, goto.frame, goto.play);
+        }
+      }
+      avm2.display.broadcast('exitFrame');
+    } finally {
+      this.#phaseDepth--;
+    }
+  }
+
+  /**
+   * AS3: クリップのフレームを移す (gotoAndPlay / gotoAndStop など)。移した先のフレームのスクリプトは、その場で実行される。
+   * 自分のフレームスクリプトの実行中なら、スクリプトが終わるまで移動を待つ。
+   * 最終フレームより先を指定すると、最終フレームへ移るが、そのフレームのスクリプトは実行されない（実機で確認）。
+   */
+  gotoFrame(clip, frame, play) {
+    if (clip.inFrameScript) {
+      clip.deferredGoto = { frame, play };
+      return;
+    }
+    const before = clip.currentFrame;
+    clip.gotoFrame(frame, play);
+    if (frame > clip.frames.length && clip.currentFrame !== before) clip.scriptPending = false;
+    if (clip.removed) this.constructPending(clip); // 表示リストの外のクリップは、下の処理では辿れない
+    this.#framePhase();
+  }
+
+  /**
+   * AS3: タイムラインが置いたクリップのうち、まだのもののコンストラクタを呼ぶ（top とその子孫が対象）。
+   * 実機と同じく、フレームが進んで enterFrame が配られた後に、表示リストの順（下から上）で、子を親より先に呼ぶ。
+   */
+  constructPending(top) {
+    if (!this.unconstructed.size) return;
+    const walk = (d) => {
+      for (const child of d.sortedChildren?.() ?? []) walk(child);
+      if (this.unconstructed.delete(d)) this.avm2.display.construct(d);
+    };
+    walk(top);
+    // 呼ぶ前に取り除かれたものは、もう辿れない。
+    if (top === this.stage) for (const clip of this.unconstructed) if (clip.removed) this.unconstructed.delete(clip);
+  }
+
+  // ABC を読み込む。壊れた ABC は警告を出して読み飛ばす。
+  #loadABC(bytes, lazy) {
+    try {
+      this.avm2.run(() => this.avm2.loadABC(bytes, { lazy }), (text) => this.warn(`uncaught error: ${text}`));
+    } catch (e) {
+      if (e.name !== 'ABCError') throw e;
+      this.warn(`ABC: ${e.message}`);
+    }
+  }
+
   // スクリプトを実行する。上限を超えたら、実機と同じく以後のスクリプトをすべて止める（再帰の深さの超過も同じ）。
   #guard(body) {
-    if (!this.avm || this.avm.disabled) return;
+    if (this.avm?.disabled) return;
     try {
       body();
     } catch (e) {
-      if (e.name !== 'AVMError') throw e;
+      if (e.name !== 'AVMError' || !this.avm) throw e;
       this.warn(`scripts are disabled: ${e.message}`);
       this.avm.disabled = true;
     }
@@ -594,6 +782,21 @@ export class Movie {
           for (let n = r.u16(); n > 0; n--) {
             const id = r.u16();
             this.exports.set(r.string(), id);
+          }
+        } else if ((tag.code === 82 || tag.code === 72) && this.avm2) {
+          // DoABC: フラグ（u32）と名前の後に ABC が続く。古い形 (72) は ABC だけ。
+          let at = 0;
+          if (tag.code === 82) {
+            at = tag.body.indexOf(0, 4) + 1;
+            if (at <= 0) throw new SWFError('DoABC has no name');
+          }
+          const lazy = tag.code === 82 && (tag.body[0] & 1) !== 0;
+          this.#loadABC(tag.body.subarray(at), lazy);
+        } else if (tag.code === 76 && this.avm2) {
+          const r = new Reader(tag.body);
+          for (let n = r.u16(); n > 0; n--) {
+            const id = r.u16();
+            this.symbolClasses.set(id, r.string());
           }
         } else if (tag.code === 14) {
           const sound = parseDefineSound(tag);
@@ -721,8 +924,8 @@ export class DisplayObject {
    * 子孫の図形を 1 つずつ変換先の座標系へ移してから合わせる（途中の階層で矩形にまとめると、
    * 回転した子を持つクリップの幅と高さが実機より大きくなる）。
    */
-  bounds(m) {
-    const b = this.character.bounds ?? this.character.startBounds;
+  bounds(m, edges = false) {
+    const b = (edges ? this.character.edgeBounds : undefined) ?? this.character.bounds ?? this.character.startBounds;
     return b ? transformBounds(b, m) : null;
   }
 
@@ -732,6 +935,12 @@ export class DisplayObject {
     if (!paths) return false;
     const m = invert(this.worldMatrix());
     return insidePaths(paths, m.a * x + m.c * y + m.tx, m.b * x + m.d * y + m.ty);
+  }
+
+  /** ステージ座標の点 (x, y)（twips）を、このオブジェクトの座標系に直す。 */
+  globalToLocal(x, y) {
+    const m = invert(this.worldMatrix());
+    return { x: m.a * x + m.c * y + m.tx, y: m.b * x + m.d * y + m.ty };
   }
 
   /** 親の座標系での外接矩形。 */
@@ -744,9 +953,9 @@ export class DisplayObject {
     return this.parent ? concat(this.parent.worldMatrix(), this.matrix) : this.matrix;
   }
 
-  /** other の座標系での外接矩形。 */
-  boundsIn(other) {
-    return this.bounds(concat(invert(other.worldMatrix()), this.worldMatrix()));
+  /** other の座標系での外接矩形。edges が真なら、線の太さを含めない（AS3 の getRect）。 */
+  boundsIn(other, edges = false) {
+    return this.bounds(concat(invert(other.worldMatrix()), this.worldMatrix()), edges);
   }
 }
 
@@ -888,7 +1097,8 @@ export class MovieClip extends DisplayObject {
   #object = null;
   #drawing = null;
 
-  constructor(movie, character, depth = 0, desc = PLACE_DEFAULTS, level = 0, parent = null) {
+  /** as3: スクリプトが new で作った AS3 のオブジェクト（その表示オブジェクトとして、表示リストの外に作る）。 */
+  constructor(movie, character, depth = 0, desc = PLACE_DEFAULTS, level = 0, parent = null, as3 = null) {
     super(character, depth, desc, parent);
     this.movie = movie;
     this.level = level; // 入れ子の深さ（ルートが 0）
@@ -899,19 +1109,97 @@ export class MovieClip extends DisplayObject {
     this.clipActions = desc.clipActions ?? null;
     this.unloadPending = false; // 取り除かれたが、unload の処理がまだ済んでいない
     this.limbo = null; // unload 待ちの子（名前での参照だけは続く）
-    if (parent && !this.name) this.name = movie.nextInstanceName(); // ルートの名前は空
-    movie.clips.push(this);
+    if ((parent || as3) && !this.name) this.name = movie.nextInstanceName(); // ルートの名前は空
+    if (!parent && !as3 && movie.avm2) this.name = 'root1'; // AS3 のルート（instanceN の番号は使わない）
+    // AS3: 表示リストに載っていない（new で作っただけ、または載っていない親の中の）クリップは、載るまでタイムラインを進めない。
+    if (as3 || (movie.avm2 && parent?.removed)) this.removed = true;
+    this.listed = !this.removed; // movie.clips に入っているか
+    if (this.listed) movie.clips.push(this);
     if (parent) movie.fire(this, 'load');
+    // AS3: オブジェクトを先に作っておき（子が自分を親のプロパティに入れられるように）、子を作ってからコンストラクタを呼ぶ。
+    // new で作られた場合は、呼び出し側（AVM2）がこの後でコンストラクタを呼ぶ。
+    if (as3) {
+      this.as3 = as3;
+      as3.display = this;
+    } else if (movie.avm2) {
+      movie.avm2.display.attach(this);
+    }
     if (this.frames.length > 0) this.#runFrame(1, true);
+    // タイムラインが置いたクリップのコンストラクタは、すぐには呼ばない（Movie の constructPending を参照）。
+    if (movie.avm2 && !as3) movie.unconstructed.add(this);
   }
 
   get totalFrames() {
     return this.frames.length;
   }
 
-  /** 深度の小さい順（下から上）の子。 */
+  /** 下から上の順の子。深度の小さい順。AS3 のスクリプトが順序を入れ替えた後は、その順序 (zorder)。 */
   sortedChildren() {
-    return [...this.children.values()].sort((a, b) => a.depth - b.depth);
+    return this.zorder ? this.zorder.slice() : [...this.children.values()].sort((a, b) => a.depth - b.depth);
+  }
+
+  // --- AS3 の表示リスト操作 ---
+
+  /**
+   * child を、表示順の index 番目に入れる（省略するといちばん上）。別の親の子なら、そこから外す。
+   * スクリプトが入れた子の深度は 16384 以上の空き番号にして、タイムラインの操作（深度で指定する）が触れないようにする。
+   * 入れられない（入れ子が深すぎる、数の上限）場合は false。
+   */
+  insertChild(child, index) {
+    const { movie } = this;
+    for (let c = this; c; c = c.parent) if (c === child) return false; // 自分や親を、自分の子にはできない
+    const height = (d) => { let h = 0; for (const c of d.children?.values() ?? []) h = Math.max(h, 1 + height(c)); return h; };
+    if (this.level + 1 + height(child) > MAX_NESTING) {
+      movie.warn(`sprites are nested deeper than ${MAX_NESTING} levels`);
+      return false;
+    }
+    if (!this.removed && child.removed && movie.instances + child.count() > movie.maxInstances) {
+      movie.warn(`too many display objects (limit ${movie.maxInstances})`);
+      return false;
+    }
+    child.parent?.detachChild(child);
+    const order = this.sortedChildren();
+    let key = DYNAMIC_DEPTH;
+    for (const depth of this.children.keys()) key = Math.max(key, depth + 1);
+    child.depth = key;
+    child.parent = this;
+    this.children.set(key, child);
+    const relevel = (d, level) => { d.level = level; for (const c of d.children?.values() ?? []) relevel(c, level + 1); };
+    relevel(child, this.level + 1);
+    if (this.zorder || (index !== undefined && index < order.length)) {
+      this.zorder ??= order;
+      this.zorder.splice(index ?? order.length, 0, child);
+    }
+    if (!this.removed) {
+      movie.instances += child.count();
+      child.revive();
+    }
+    return true;
+  }
+
+  /** 子 child を表示リストから外す。child と子孫は、また入れられるまでタイムラインが進まない。 */
+  detachChild(child) {
+    if (this.children.get(child.depth) === child) this.#remove(child.depth, true);
+  }
+
+  /** 子 child の表示順を index 番目にする。 */
+  setChildIndex(child, index) {
+    this.zorder ??= this.sortedChildren();
+    this.zorder.splice(this.zorder.indexOf(child), 1);
+    this.zorder.splice(index, 0, child);
+  }
+
+  /** 表示リストに戻った自分と子孫を、タイムラインを進める対象に戻す。 */
+  revive() {
+    this.removed = false;
+    if (!this.listed) {
+      this.listed = true;
+      this.movie.clips.push(this);
+    }
+    for (const child of this.children.values()) {
+      if (child instanceof MovieClip) child.revive();
+      else child.removed = false;
+    }
   }
 
   count() {
@@ -974,9 +1262,10 @@ export class MovieClip extends DisplayObject {
     return this.#drawing ? this.#drawing.paths() : null;
   }
 
-  bounds(m) {
-    let b = this.#drawing?.bounds ? transformBounds(this.#drawing.bounds, m) : null;
-    for (const child of this.children.values()) b = union(b, child.bounds(concat(m, child.matrix)));
+  bounds(m, edges = false) {
+    const own = edges ? this.#drawing?.edgeBounds : this.#drawing?.bounds;
+    let b = own ? transformBounds(own, m) : null;
+    for (const child of this.children.values()) b = union(b, child.bounds(concat(m, child.matrix), edges));
     return b;
   }
 
@@ -1097,6 +1386,7 @@ export class MovieClip extends DisplayObject {
   tick() {
     this.movie.fire(this, 'enterFrame');
     if (this.playing && this.frames.length > 1) {
+      this.isPlaying = true; // AS3 の isPlaying。最初は偽で、再生ヘッドが自分で進むと真になる
       if (this.currentFrame < this.frames.length) this.#runFrame(this.currentFrame + 1, true);
       else this.#rewind(1);
     }
@@ -1104,6 +1394,7 @@ export class MovieClip extends DisplayObject {
 
   #runFrame(n, withActions) {
     this.currentFrame = n;
+    if (withActions) this.scriptPending = true; // AS3: このフレームのスクリプト (addFrameScript) を実行する
     for (const op of this.frames[n - 1]) {
       if (op.op === 'action') {
         if (withActions) this.movie.queueAction(this, op.code);
@@ -1179,8 +1470,9 @@ export class MovieClip extends DisplayObject {
         }
       }
     }
-    this.#reconcile(wanted);
+    this.#reconcile(wanted, true);
     this.currentFrame = target;
+    this.scriptPending = true;
     for (const op of this.frames[target - 1]) {
       if (op.op === 'action') this.movie.queueAction(this, op.code);
       const sound = op.op === 'sound' ? this.movie.dictionary.get(op.soundId) : undefined;
@@ -1188,8 +1480,8 @@ export class MovieClip extends DisplayObject {
     }
   }
 
-  // 表示リストを wanted（深度 → 配置の記述）に合わせる。
-  #reconcile(wanted) {
+  // 表示リストを wanted（深度 → 配置の記述）に合わせる。replay: タイムラインを前へ戻すための呼び出し。
+  #reconcile(wanted, replay = false) {
     for (const [depth, child] of [...this.children]) {
       if (depth >= DYNAMIC_DEPTH) {
         wanted.delete(depth); // タグがこの深度に置いていても、埋まっているので置き直さない
@@ -1199,6 +1491,7 @@ export class MovieClip extends DisplayObject {
       if (desc && desc.characterId === child.character.id) {
         child.apply(desc);
         wanted.delete(depth);
+        if (replay && this.movie.avm2) this.movie.skipInstanceNames(desc.characterId, !!desc.name);
       } else {
         this.#remove(depth);
       }
@@ -1206,11 +1499,19 @@ export class MovieClip extends DisplayObject {
     for (const [depth, desc] of wanted) this.#instantiate(depth, desc);
   }
 
-  #remove(depth) {
+  // byScript: AS3 のスクリプトによる削除 (removeChild)。
+  #remove(depth, byScript = false) {
     const child = this.children.get(depth);
     if (!child) return;
+    if (this.movie.avm2) {
+      this.movie.avm2.display.removing(child); // removed / removedFromStage のイベント。ハンドラが表示リストを変えることがある
+      if (this.children.get(depth) !== child) return;
+      if (!byScript) this.movie.avm2.display.named(child, null); // タイムラインが取り除いた子は、親の同名のプロパティも null になる
+    }
     this.children.delete(depth);
-    this.movie.instances -= child.count();
+    if (this.zorder) this.zorder.splice(this.zorder.indexOf(child), 1);
+    if (this.movie.avm2) child.parent = null; // AS3 では、外されたオブジェクトの parent は null になる
+    if (!child.removed) this.movie.instances -= child.count();
     if (!(child instanceof MovieClip)) {
       child.removed = true;
       return;
@@ -1265,12 +1566,24 @@ export class MovieClip extends DisplayObject {
       movie.warn(`sprites are nested deeper than ${MAX_NESTING} levels`);
       return undefined;
     }
-    movie.instances++;
+    if (!(movie.avm2 && this.removed)) movie.instances++; // 表示リストの外で作られるものは、載るときに数える
     // 子の 1 フレーム目のアクションは待ち行列に入るだけなので、実行される時には親への登録は済んでいる。
     const child = character.type === 'sprite' ? new MovieClip(movie, character, depth, desc, this.level + 1, this)
       : character.type === 'edittext' ? new TextField(movie, character, depth, desc, this)
         : new DisplayObject(character, depth, desc, this);
     this.children.set(depth, child);
+    if (movie.avm2 && this.removed) child.removed = true;
+    if (movie.avm2 && !(child instanceof MovieClip)) {
+      // AS3 では、図形などにも instanceN の名前が付き、クリップと同じ順番で added などのイベントが届く。
+      if (!child.name) child.name = movie.nextInstanceName();
+      movie.unconstructed.add(child);
+    }
+    if (this.zorder) {
+      // スクリプトが順序を入れ替えた後にタイムラインが置くものは、自分より深度の小さいタイムラインの子のすぐ上に入れる。
+      let at = 0;
+      this.zorder.forEach((other, i) => { if (other.depth < depth) at = i + 1; });
+      this.zorder.splice(at, 0, child);
+    }
     return child;
   }
 }

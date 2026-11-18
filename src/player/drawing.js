@@ -1,6 +1,8 @@
 // スクリプトの描画 API (MovieClip.lineTo など) で作る図形。座標は twips。
 // 描画命令は図形 (shape/paths.js) と同じ形式で、paths() が描画側へ渡すスナップショットを返す。
 
+const MAX_SEGMENTS = 200000; // 1 つの描き先に溜められる線分・曲線の数
+
 const ROUND = { startCap: 'round', endCap: 'round', join: 'round', noClose: false };
 
 export class Drawing {
@@ -11,13 +13,16 @@ export class Drawing {
   #x = 0;
   #y = 0;
   #snapshot = null;
-  bounds = null; // { xmin, xmax, ymin, ymax }
+  #segments = 0;
+  bounds = null; // { xmin, xmax, ymin, ymax }。線の太さを含む
+  edgeBounds = null; // 線の太さを含まない外接矩形
 
   clear() {
+    this.#segments = 0;
     this.#ops = [];
     this.#fill = this.#stroke = this.#line = null;
     this.#x = this.#y = 0;
-    this.bounds = null;
+    this.bounds = this.edgeBounds = null;
     this.#snapshot = null;
   }
 
@@ -68,6 +73,7 @@ export class Drawing {
 
   #segment(cmd, x, y) {
     if (![...cmd.slice(1)].every(Number.isFinite)) return;
+    if (++this.#segments > MAX_SEGMENTS) return; // 描き足し続けるスクリプトへの備え（clear するまで、これ以上は増えない）
     this.#extend(this.#x, this.#y);
     this.#extend(x, y);
     this.#fill?.path.push(cmd);
@@ -91,6 +97,11 @@ export class Drawing {
     b.xmax = Math.max(b.xmax, x + pad);
     b.ymin = Math.min(b.ymin, y - pad);
     b.ymax = Math.max(b.ymax, y + pad);
+    const e = (this.edgeBounds ??= { xmin: x, xmax: x, ymin: y, ymax: y });
+    e.xmin = Math.min(e.xmin, x);
+    e.xmax = Math.max(e.xmax, x);
+    e.ymin = Math.min(e.ymin, y);
+    e.ymax = Math.max(e.ymax, y);
   }
 
   /** 描画命令の配列。内容が変わるまで同じ配列を返す（描画側のキャッシュのため）。 */
