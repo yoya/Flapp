@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { gunzipSync } from 'node:zlib';
+import { deflateRawSync, deflateSync, gunzipSync } from 'node:zlib';
 import { decodeADPCM } from '../src/audio/decode.js';
 import { Movie } from '../src/player/movie.js';
 import { SoundMixer } from '../src/player/sound.js';
@@ -258,18 +258,60 @@ test('Screen Video v2: 復号結果が ffmpeg の復号結果と一致する（1
   ]);
 });
 
-test('Screen Video v2: 確かめられていない機能と壊れたデータは VideoError にする。埋め込みでは使えない', () => {
+test('Screen Video v2: キーブロックの決まり方、Current の印、IFrameImage は、実機で確かめたとおりに働く', () => {
+  // 32×16 px、ブロックは 16×16 が 2 つ。絵は 15 ビットの色の雑音（1 画素 2 バイト）で、(f, j) ごとに違う。
+  // 同じストリームを実機で再生して確かめた挙動を、そのまま期待値にしている。
+  const noise = (f, j) => {
+    let seed = f * 1000 + j * 17 + 1;
+    return Uint8Array.from({ length: 512 }, (_, i) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return i % 2 ? (seed >>> 16) & 0xff : ((seed >>> 16) & 0xff) | 0x80; });
+  };
+  // 辞書の中身を少しだけ変えたもの。辞書を使って圧縮すると短くなり、違う辞書で展開すると違う絵になる。
+  const near = (data) => { const out = Uint8Array.from(data); out[101] ^= 0x1f; return out; };
+  const plain = (data) => deflateSync(data);
+  const primed = (data, dictionary) => {
+    const body = deflateRawSync(data, { dictionary });
+    assert.ok(body.length < 64); // 辞書に頼っている
+    return Buffer.concat([body, Buffer.alloc(4)]); // 末尾の adler32 は見られないので、でたらめでよい
+  };
+  const blocks = (list) => list.flatMap((b) => (b ? [(b[1].length + 1) >> 8, (b[1].length + 1) & 255, b[0], ...b[1]] : [0, 0]));
+  const packet = (flags, ...lists) => Uint8Array.from([0, 32, 0, 16, flags, ...lists.flatMap(blocks)]);
+  const decoder = new ScreenVideo2Decoder();
+  // ブロック j に映っている絵を、15 ビットの色のデータ（下の行から）に戻す。
+  const shown = (j) => {
+    const { rgba } = decoder;
+    const out = [];
+    for (let row = 0; row < 16; row++) {
+      for (let x = j * 16; x < j * 16 + 16; x++) {
+        const at = ((15 - row) * 32 + x) * 4, colour = ((rgba[at] >> 3) << 10) | ((rgba[at + 1] >> 3) << 5) | (rgba[at + 2] >> 3);
+        out.push(0x80 | (colour >> 8), colour & 0xff);
+      }
+    }
+    return Uint8Array.from(out);
+  };
+  decoder.decode(packet(0, [[0x10, plain(noise(0, 0))], [0x10, plain(noise(0, 1))]]));
+  assert.deepEqual([shown(0), shown(1)], [noise(0, 0), noise(0, 1)]);
+  // 素のブロックは、差分フレームでもキーブロックになる。次の priming は、それを辞書にする。
+  decoder.decode(packet(0, [[0x10, plain(noise(1, 0))], null]));
+  decoder.decode(packet(0, [[0x11, primed(near(noise(1, 0)), noise(1, 0))], [0x12, plain(noise(5, 1))]]));
+  assert.deepEqual(shown(0), near(noise(1, 0)));
+  // Current の印（形式の 2）: 位置の 2 バイトは無く、素のブロックとして映る。ただしキーブロックにはならない
+  // （次の priming の辞書は、フレーム 0 のままになる）。両方の印が立っていれば、ふつうの priming。
+  assert.deepEqual(shown(1), noise(5, 1));
+  decoder.decode(packet(0, [null, [0x13, primed(near(noise(0, 1)), noise(0, 1))]]));
+  assert.deepEqual([shown(0), shown(1)], [near(noise(1, 0)), near(noise(0, 1))]);
+  // IFrameImage: ブロックの列がもう 1 つ続き、同じ規則で続けて処理される（先の列で置き換わったキーブロックが、辞書になる）。
+  decoder.decode(packet(2, [[0x10, plain(noise(6, 0))], null], [[0x11, primed(near(noise(6, 0)), noise(6, 0))], [0x10, plain(noise(7, 1))]]));
+  assert.deepEqual([shown(0), shown(1)], [near(noise(6, 0)), noise(7, 1)]);
+  assert.throws(() => decoder.decode(packet(2, [null, null])), /truncated/); // 2 つ目の列が無い
+});
+
+test('Screen Video v2: 実機が再生できないものと壊れたデータは VideoError にする。埋め込みでは使えない', () => {
   const [key, inter] = parseFLV(asset('video-screen2.flv')).video.map((t) => t.data);
   assert.throws(() => new ScreenVideo2Decoder().decode(inter), /without a key block/); // キーフレームより前の差分
   assert.throws(() => new ScreenVideo2Decoder().decode(key.subarray(0, 20)), VideoError);
-  for (const [flags, message] of [[2, /IFrameImage/], [1, /palette/]]) {
-    const packet = Uint8Array.from(key); // Buffer の slice は写しにならないので、写しを作る
-    packet[4] = flags;
-    assert.throws(() => new ScreenVideo2Decoder().decode(packet), message);
-  }
-  const primed = Uint8Array.from(key);
-  primed[7] |= 2; // 最初のブロックの形式に「ほかのブロックを辞書にする」を立てる
-  assert.throws(() => new ScreenVideo2Decoder().decode(primed), /another block/);
+  const palette = Uint8Array.from(key); // Buffer の slice は写しにならないので、写しを作る
+  palette[4] = 1; // ストリームの中のパレット（実機は、これが付いたストリームで落ちる）
+  assert.throws(() => new ScreenVideo2Decoder().decode(palette), /palette/);
   // FLV では再生できるが、SWF に埋め込んだもの（実機も何も表示しない）は対象外。
   assert.equal(decodable('screen2'), false);
   const h = host();

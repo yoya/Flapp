@@ -25,6 +25,7 @@ SWF は信用できない入力として扱います。
 未対応のもの:
 
 - ActionScript 1 / 2 からのビデオの操作（`NetStream`）
+- Screen Video v2 の、ストリームの中のパレット（実機も再生できません）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式

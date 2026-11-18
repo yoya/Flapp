@@ -77,11 +77,17 @@ const DEFAULT_PALETTE = [
  * - 画素は、24 ビットの BGR か、15/7 ビットの混成（1 バイトならパレットの番号、2 バイトなら 15 ビットの色）。
  * - ブロックの一部の行だけを送れる（HasDiffBlocks）。送られなかった行は、キーフレームのときの絵に戻る
  *   （差分は、直前のフレームではなくキーフレームのブロックに対するもの）。
- * - 「zlib の priming」: 圧縮のとき、キーフレームの同じブロックの（展開後の）データが直前にあったものとして圧縮してある。
- *   展開するときも、そのデータを辞書として与える。このブロックには zlib のヘッダが無い。
- * priming の中身は仕様書に書かれていないので、ffmpeg が作ったデータを展開できることと、復号結果が ffmpeg の復号結果や
- * 実機の画面（FLV を NetStream で再生したもの）と一致することで確かめた。確かめられなかった機能（ほかのブロックを辞書にする指定、IFrameImage、ストリーム内のパレット）は、
- * 当てずっぽうで復号せずに、未対応として VideoError にする。
+ * - 「zlib の priming」（形式の最下位ビット）: 圧縮のとき、同じ位置の「キーブロック」の（展開後の）データが直前にあったものとして
+ *   圧縮してある。展開するときも、そのデータを辞書として与える。このブロックには zlib のヘッダが無い。
+ *   キーブロックは、その位置に最後に送られた、priming も行の範囲の指定も無いブロック（FLV のキーフレームでなくてもよい）。
+ * - IFrameImage の印の付いたパケットには、ブロックの列がもう 1 つ続く。同じ規則で、続けて処理する。
+ * priming などの中身は仕様書に書かれていないので、ffmpeg が作ったデータと、機能ごとに作ったデータを実機で再生して
+ * （FLV を NetStream で再生）、画面と突き合わせて確かめた。仕様書の説明と違うところ:
+ * - 形式の下から 2 番目のビット（ZlibPrimeCompressCurrent）が立っていても、位置（IMAGEPRIMEPOSITION）の 2 バイトは無い。
+ *   このビットは復号のしかたを変えないが、立っているブロックはキーブロックにならない。
+ * - 末尾の adler32 は確かめられない。
+ * ストリームの中のパレット（HasPaletteInfo）は、どんな形で送っても実機が落ちるので、未対応として VideoError にする。
+ * なお、24 ビットの色のブロックに priming を使うと実機は落ちる。ここでは、15/7 ビットの色と同じに復号する。
  */
 export class ScreenVideo2Decoder {
   constructor() {
@@ -101,7 +107,6 @@ export class ScreenVideo2Decoder {
     const blockWidth = ((bytes[0] >> 4) + 1) * 16, width = ((bytes[0] & 15) << 8) | bytes[1];
     const blockHeight = ((bytes[2] >> 4) + 1) * 16, height = ((bytes[2] & 15) << 8) | bytes[3];
     if (width < 1 || height < 1 || width * height > MAX_VIDEO_PIXELS) throw new VideoError(`video frame size ${width}x${height} is out of range`);
-    if (bytes[4] & 2) throw new VideoError('screen video v2: IFrameImage is not supported');
     if (bytes[4] & 1) throw new VideoError('screen video v2: a palette in the stream is not supported');
     if (width !== this.width || height !== this.height || blockWidth !== this.blockWidth || blockHeight !== this.blockHeight) {
       Object.assign(this, { width, height, blockWidth, blockHeight, keys: [], keyPixels: [] });
@@ -109,81 +114,82 @@ export class ScreenVideo2Decoder {
       for (let i = 3; i < this.rgba.length; i += 4) this.rgba[i] = 255;
     }
     let pos = 5;
-    let index = 0;
-    for (let bottom = 0; bottom < height; bottom += blockHeight) {
-      const h = Math.min(blockHeight, height - bottom);
-      for (let left = 0; left < width; left += blockWidth, index++) {
-        const w = Math.min(blockWidth, width - left);
-        if (pos + 2 > bytes.length) throw new VideoError('screen video packet is truncated');
-        const size = (bytes[pos] << 8) | bytes[pos + 1];
-        pos += 2;
-        if (size === 0) continue; // 前のフレームから変わっていない
-        if (pos + size > bytes.length) throw new VideoError('screen video packet is truncated');
-        const end = pos + size;
-        // IMAGEFORMAT: 色の深さ、行の範囲の指定があるか、priming の種類
-        const format = bytes[pos++];
-        const depth = (format >> 3) & 3;
-        if (format >> 5 || (depth !== 0 && depth !== 2)) throw new VideoError('screen video v2: unknown block format');
-        let firstRow = 0, rows = h;
-        if (format & 4) {
-          if (pos + 2 > end) throw new VideoError('screen video packet is truncated');
-          [firstRow, rows] = [bytes[pos], bytes[pos + 1]];
+    for (let list = bytes[4] & 2 ? 2 : 1; list > 0; list--) {
+      let index = 0;
+      for (let bottom = 0; bottom < height; bottom += blockHeight) {
+        const h = Math.min(blockHeight, height - bottom);
+        for (let left = 0; left < width; left += blockWidth, index++) {
+          const w = Math.min(blockWidth, width - left);
+          if (pos + 2 > bytes.length) throw new VideoError('screen video packet is truncated');
+          const size = (bytes[pos] << 8) | bytes[pos + 1];
           pos += 2;
-          if (firstRow + rows > h) throw new VideoError('screen video v2: rows are outside the block');
-        }
-        if (format & 2) throw new VideoError('screen video v2: priming from another block is not supported');
-        const limit = w * h * 3;
-        let pixels;
-        if (rows === 0) pixels = new Uint8Array(0); // 行が 1 つも無い: キーフレームのときの絵に戻るだけ（データは付かない）
-        else if (format & 1) {
-          if (!this.keys[index]) throw new VideoError('screen video v2: a primed block without a key block');
-          pixels = inflateSync(bytes.subarray(pos, end), 0, limit, this.keys[index]);
-        } else {
-          pixels = end - pos > 2 ? inflateSync(bytes.subarray(pos, end), 2, limit) : null; // 先頭 2 バイトは zlib のヘッダ
-          if (pixels && !(format & 4)) this.keys[index] = pixels.slice();
-        }
-        pos = end;
-        if (!pixels) throw new VideoError('screen video block cannot be decompressed');
-        // 行の範囲だけが送られたブロックは、キーフレームのときの絵に戻してから、その行を書く。
-        const rowsOf = (y0) => this.rgba.subarray((y0 * width + left) * 4, (y0 * width + left + w) * 4);
-        if (format & 4 && this.keyPixels[index]) {
-          for (let row = 0; row < h; row++) rowsOf(height - 1 - (bottom + row)).set(this.keyPixels[index].subarray(row * w * 4, (row + 1) * w * 4));
-        }
-        // ブロックの中の画素は、下の行から順に入っている。行の範囲の指定も、下から数える。
-        let at = 0;
-        for (let row = firstRow; row < firstRow + rows; row++) {
-          const y = height - 1 - (bottom + row);
-          for (let x = 0; x < w; x++) {
-            const to = (y * width + left + x) * 4;
-            if (at >= pixels.length) throw new VideoError('screen video block is too short');
-            if (depth === 0) {
-              // 24 ビット: B, G, R
-              this.rgba[to] = pixels[at + 2];
-              this.rgba[to + 1] = pixels[at + 1];
-              this.rgba[to + 2] = pixels[at];
-              at += 3;
-            } else if (pixels[at] & 0x80) {
-              // 15 ビットの色（各 5 ビット）。8 ビットへは、3 ビット左に寄せるだけ（下位は 0 のまま。実機の画面で確認。
-              // ffmpeg は上位ビットを下位に写すので、最大で 7 だけ明るくなる）。
-              const color = ((pixels[at] & 0x7f) << 8) | pixels[at + 1];
-              const wide = (v) => v << 3;
-              this.rgba[to] = wide((color >> 10) & 31);
-              this.rgba[to + 1] = wide((color >> 5) & 31);
-              this.rgba[to + 2] = wide(color & 31);
-              at += 2;
-            } else {
-              const color = DEFAULT_PALETTE[pixels[at++]];
-              this.rgba[to] = color >> 16;
-              this.rgba[to + 1] = (color >> 8) & 0xff;
-              this.rgba[to + 2] = color & 0xff;
+          if (size === 0) continue; // 前のフレームから変わっていない
+          if (pos + size > bytes.length) throw new VideoError('screen video packet is truncated');
+          const end = pos + size;
+          // IMAGEFORMAT: 色の深さ、行の範囲の指定があるか、priming の種類
+          const format = bytes[pos++];
+          const depth = (format >> 3) & 3;
+          if (format >> 5 || (depth !== 0 && depth !== 2)) throw new VideoError('screen video v2: unknown block format');
+          let firstRow = 0, rows = h;
+          if (format & 4) {
+            if (pos + 2 > end) throw new VideoError('screen video packet is truncated');
+            [firstRow, rows] = [bytes[pos], bytes[pos + 1]];
+            pos += 2;
+            if (firstRow + rows > h) throw new VideoError('screen video v2: rows are outside the block');
+          }
+          const limit = w * h * 3;
+          let pixels;
+          if (rows === 0) pixels = new Uint8Array(0); // 行が 1 つも無い: キーフレームのときの絵に戻るだけ（データは付かない）
+          else if (format & 1) {
+            if (!this.keys[index]) throw new VideoError('screen video v2: a primed block without a key block');
+            pixels = inflateSync(bytes.subarray(pos, end), 0, limit, this.keys[index]);
+          } else {
+            pixels = end - pos > 2 ? inflateSync(bytes.subarray(pos, end), 2, limit) : null; // 先頭 2 バイトは zlib のヘッダ
+            if (pixels && !(format & 6)) this.keys[index] = pixels.slice();
+          }
+          pos = end;
+          if (!pixels) throw new VideoError('screen video block cannot be decompressed');
+          // 行の範囲だけが送られたブロックは、キーフレームのときの絵に戻してから、その行を書く。
+          const rowsOf = (y0) => this.rgba.subarray((y0 * width + left) * 4, (y0 * width + left + w) * 4);
+          if (format & 4 && this.keyPixels[index]) {
+            for (let row = 0; row < h; row++) rowsOf(height - 1 - (bottom + row)).set(this.keyPixels[index].subarray(row * w * 4, (row + 1) * w * 4));
+          }
+          // ブロックの中の画素は、下の行から順に入っている。行の範囲の指定も、下から数える。
+          let at = 0;
+          for (let row = firstRow; row < firstRow + rows; row++) {
+            const y = height - 1 - (bottom + row);
+            for (let x = 0; x < w; x++) {
+              const to = (y * width + left + x) * 4;
+              if (at >= pixels.length) throw new VideoError('screen video block is too short');
+              if (depth === 0) {
+                // 24 ビット: B, G, R
+                this.rgba[to] = pixels[at + 2];
+                this.rgba[to + 1] = pixels[at + 1];
+                this.rgba[to + 2] = pixels[at];
+                at += 3;
+              } else if (pixels[at] & 0x80) {
+                // 15 ビットの色（各 5 ビット）。8 ビットへは、3 ビット左に寄せるだけ（下位は 0 のまま。実機の画面で確認。
+                // ffmpeg は上位ビットを下位に写すので、最大で 7 だけ明るくなる）。
+                const color = ((pixels[at] & 0x7f) << 8) | pixels[at + 1];
+                const wide = (v) => v << 3;
+                this.rgba[to] = wide((color >> 10) & 31);
+                this.rgba[to + 1] = wide((color >> 5) & 31);
+                this.rgba[to + 2] = wide(color & 31);
+                at += 2;
+              } else {
+                const color = DEFAULT_PALETTE[pixels[at++]];
+                this.rgba[to] = color >> 16;
+                this.rgba[to + 1] = (color >> 8) & 0xff;
+                this.rgba[to + 2] = color & 0xff;
+              }
             }
           }
-        }
-        if (!(format & 5)) {
-          // キーのブロック（全体が、priming なしで送られた）: 絵を控えておく。
-          const copy = new Uint8ClampedArray(w * h * 4);
-          for (let row = 0; row < h; row++) copy.set(rowsOf(height - 1 - (bottom + row)), row * w * 4);
-          this.keyPixels[index] = copy;
+          if (!(format & 7)) {
+            // キーブロック（全体が、priming の印なしで送られた）: 絵を控えておく。
+            const copy = new Uint8ClampedArray(w * h * 4);
+            for (let row = 0; row < h; row++) copy.set(rowsOf(height - 1 - (bottom + row)), row * w * 4);
+            this.keyPixels[index] = copy;
+          }
         }
       }
     }
