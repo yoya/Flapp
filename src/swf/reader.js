@@ -100,6 +100,68 @@ export class Reader {
   /** FB[n]: 16.16 固定小数のビット値。 */
   fb(n) { return this.sb(n) / 65536; }
 
+  /** STRING: 0 終端の文字列。SWF 6 以降は UTF-8（SWF 5 以前のロケール依存の符号化は未対応）。 */
+  string() {
+    this.align();
+    const end = this.bytes.indexOf(0, this.pos);
+    if (end < 0) throw new SWFError(`unterminated string at offset ${this.pos}`);
+    const s = new TextDecoder().decode(this.bytes.subarray(this.pos, end));
+    this.pos = end + 1;
+    return s;
+  }
+
+  /** RGB。a は常に 255。 */
+  rgb() { return { r: this.u8(), g: this.u8(), b: this.u8(), a: 255 }; }
+  /** RGBA。各成分 0〜255。 */
+  rgba() { return { r: this.u8(), g: this.u8(), b: this.u8(), a: this.u8() }; }
+
+  /**
+   * MATRIX。x' = a*x + c*y + tx, y' = b*x + d*y + ty（Canvas の a,b,c,d,e,f と同じ並び）。
+   * tx, ty は twips。
+   */
+  matrix() {
+    this.align();
+    let a = 1, b = 0, c = 0, d = 1;
+    if (this.ub(1)) {
+      const n = this.ub(5);
+      a = this.fb(n);
+      d = this.fb(n);
+    }
+    if (this.ub(1)) {
+      const n = this.ub(5);
+      b = this.fb(n);
+      c = this.fb(n);
+    }
+    const n = this.ub(5);
+    const tx = this.sb(n);
+    const ty = this.sb(n);
+    this.align();
+    return { a, b, c, d, tx, ty };
+  }
+
+  /** CXFORM / CXFORMWITHALPHA。乗算項は 256 が 1.0、加算項は -255〜255 を想定した整数。 */
+  cxform(hasAlpha) {
+    this.align();
+    const hasAdd = this.ub(1);
+    const hasMult = this.ub(1);
+    const n = this.ub(4);
+    const cx = { rm: 256, gm: 256, bm: 256, am: 256, ra: 0, ga: 0, ba: 0, aa: 0 };
+    if (hasMult) {
+      cx.rm = this.sb(n);
+      cx.gm = this.sb(n);
+      cx.bm = this.sb(n);
+      if (hasAlpha) cx.am = this.sb(n);
+    }
+    if (hasAdd) {
+      cx.ra = this.sb(n);
+      cx.ga = this.sb(n);
+      cx.ba = this.sb(n);
+      if (hasAlpha) cx.aa = this.sb(n);
+    }
+    this.align();
+    return cx;
+  }
+
   /** RECT。単位は twips。 */
   rect() {
     this.align();

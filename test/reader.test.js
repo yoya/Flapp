@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Reader, SWFError } from '../src/swf/reader.js';
+import { matrix } from '../tools/mkfixtures.js';
 
 const reader = (...bytes) => new Reader(Uint8Array.from(bytes));
 
@@ -80,4 +81,44 @@ test('範囲外の読み取りは SWFError', () => {
   const r = reader(0x01, 0x02);
   r.ub(1);
   assert.throws(() => r.u16(), SWFError); // 揃えると 1 バイトしか残らない
+});
+
+test('STRING', () => {
+  const r = reader(0x61, 0x62, 0x00, 0xe3, 0x81, 0x82, 0x00, 0x7f);
+  assert.equal(r.string(), 'ab');
+  assert.equal(r.string(), 'あ');
+  assert.equal(r.u8(), 0x7f);
+  assert.throws(() => reader(0x61, 0x62).string(), SWFError); // 終端が無い
+});
+
+test('RGB / RGBA', () => {
+  const r = reader(1, 2, 3, 4, 5, 6, 7);
+  assert.deepEqual(r.rgb(), { r: 1, g: 2, b: 3, a: 255 });
+  assert.deepEqual(r.rgba(), { r: 4, g: 5, b: 6, a: 7 });
+});
+
+test('MATRIX', () => {
+  // 何も持たない行列（平行移動 0 ビット）
+  assert.deepEqual(reader(0x00).matrix(), { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
+  // 拡大 0.5 / 2、回転 0.25 / -0.25、移動 (1200, -1700)
+  const r = new Reader(Uint8Array.from([...matrix({ a: 0.5, d: 2, b: 0.25, c: -0.25, tx: 1200, ty: -1700 }), 0xaa]));
+  assert.deepEqual(r.matrix(), { a: 0.5, b: 0.25, c: -0.25, d: 2, tx: 1200, ty: -1700 });
+  assert.equal(r.u8(), 0xaa); // 行列の後はバイト境界に揃う
+});
+
+test('CXFORM', () => {
+  // HasAdd=1, HasMult=1, Nbits=9: 乗算 (128, 0, -256)、加算 (0, 64, -255)。アルファは既定値のまま
+  const bits = '1' + '1' + '1001' +
+    '010000000' + '000000000' + '100000000' +
+    '000000000' + '001000000' + '100000001';
+  const bytes = (bits + '0000000').match(/.{8}/g).map((b) => parseInt(b, 2));
+  assert.deepEqual(new Reader(Uint8Array.from(bytes)).cxform(false), {
+    rm: 128, gm: 0, bm: -256, am: 256, ra: 0, ga: 64, ba: -255, aa: 0,
+  });
+  // アルファつき: HasAdd=0, HasMult=1, Nbits=10: (256, 256, 256, 128)
+  const alpha = '0' + '1' + '1010' + '0100000000'.repeat(3) + '0010000000';
+  const abytes = (alpha + '0000000').match(/.{8}/g).map((b) => parseInt(b, 2));
+  assert.deepEqual(new Reader(Uint8Array.from(abytes)).cxform(true), {
+    rm: 256, gm: 256, bm: 256, am: 128, ra: 0, ga: 0, ba: 0, aa: 0,
+  });
 });
