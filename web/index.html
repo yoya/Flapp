@@ -31,10 +31,20 @@
 <script type="module">
   import { Movie } from '../src/player/movie.js';
   import { CanvasRenderer } from '../src/render/canvas.js';
+  import { WebAudioOutput } from '../src/audio/webaudio.js';
 
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
   let timer = 0;
+  // 音の出力。ブラウザは利用者の操作があるまで音を出さないので、最初のクリックやキー操作で有効にする。
+  const audio = new WebAudioOutput();
+  window.flappAudio = audio; // 開発用（コンソールから audio.level() で音が出ているかを確かめられる）
+  // 有効になったら、流れている途中のストリーム音を次のフレームで鳴らし直させる。
+  for (const type of ['pointerdown', 'keydown']) {
+    window.addEventListener(type, () => {
+      if (audio.context.state === 'suspended') audio.resume().then(() => current?.sounds.stop((p) => p.stream));
+    }, { capture: true });
+  }
   let current = null; // 再生中のムービー
   let loaded = null; // 再生中のファイル { bytes, label }（文字コードを変えたときに読み直す）
 
@@ -93,7 +103,8 @@
     const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''} （開きません）`);
     let movie;
     try {
-      movie = await Movie.load(bytes, { trace, onRequest, encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      current?.sounds.stop(); // 前のムービーの音を止める
+      movie = await Movie.load(bytes, { trace, onRequest, audio, encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
