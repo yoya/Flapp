@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flapp</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; }
+  canvas { display: block; margin: 12px 0; border: 1px solid #888; }
+  #info, #warnings { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  #warnings { color: #a40; }
+</style>
+<h1>Flapp</h1>
+<p>SWF ファイルを選ぶか、ここにドロップしてください。<input type="file" id="file" accept=".swf"></p>
+<canvas id="stage" width="0" height="0"></canvas>
+<div id="info"></div>
+<div id="warnings"></div>
+<script type="module">
+  import { Movie } from '../src/player/movie.js';
+  import { CanvasRenderer } from '../src/render/canvas.js';
+
+  const canvas = document.getElementById('stage');
+  const renderer = new CanvasRenderer(canvas);
+  let timer = 0;
+
+  async function play(bytes, label) {
+    clearInterval(timer);
+    const info = document.getElementById('info');
+    const warnings = document.getElementById('warnings');
+    warnings.textContent = '';
+    let movie;
+    try {
+      movie = await Movie.load(bytes);
+    } catch (e) {
+      info.textContent = `${label}: ${e.message}`;
+      return;
+    }
+    const scale = window.devicePixelRatio || 1;
+    const draw = () => {
+      renderer.render(movie, scale);
+      canvas.style.width = `${canvas.width / scale}px`;
+      canvas.style.height = `${canvas.height / scale}px`;
+      info.textContent = `${label}: SWF ${movie.version}, ${movie.frameRate} fps, ` +
+        `frame ${movie.root.currentFrame} / ${movie.root.totalFrames}`;
+      warnings.textContent = movie.warnings.join('\n');
+    };
+    draw();
+    // フレームレート 0 は実質停止として扱う。
+    if (movie.frameRate > 0) {
+      timer = setInterval(() => {
+        movie.advance();
+        draw();
+      }, 1000 / movie.frameRate);
+    }
+  }
+
+  document.getElementById('file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) play(await file.arrayBuffer(), file.name);
+  });
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) play(await file.arrayBuffer(), file.name);
+  });
+
+  // 開発用: ?swf=../test/fixtures/xxx.swf で同じサーバ上のファイルを再生する。
+  const param = new URLSearchParams(location.search).get('swf');
+  if (param) {
+    const res = await fetch(param);
+    if (res.ok) play(await res.arrayBuffer(), param);
+    else document.getElementById('info').textContent = `${param}: HTTP ${res.status}`;
+  }
+</script>
+</html>

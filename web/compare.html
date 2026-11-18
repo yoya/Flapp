@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flapp 実機比較</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; }
+  .row { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 20px; flex-wrap: wrap; }
+  figure { margin: 0; }
+  figcaption { font-size: 12px; color: #666; }
+  canvas { display: block; border: 1px solid #888; }
+  pre { font-size: 12px; }
+</style>
+<h1>実機との画素比較</h1>
+<p>
+  test/expected/*.png（<code>npm run oracle</code> で取得した実機のウィンドウ画像）と、同じ SWF を Flapp で描いた結果を比べます。
+  「差」は画素ごとの最大チャンネル差を 4 倍に強調したものです。
+</p>
+<pre id="summary">実行中…</pre>
+<div id="rows"></div>
+<script type="module">
+  import { Movie } from '../src/player/movie.js';
+  import { CanvasRenderer } from '../src/render/canvas.js';
+
+  const THRESHOLD = 32;  // これを超えるチャンネル差を「不一致」と数える
+  const SETTLE_FRAME = 10; // 多フレームのテスト用 SWF は、このフレームまでに絵が止まるように作ってある
+  const CORNER = 12;       // 比較から外す左下の正方形の一辺（ステージ px）
+
+  const names = await (await fetch('../test/fixtures/index.json')).json();
+  const rows = document.getElementById('rows');
+  const summary = [];
+
+  const figure = (canvas, caption, cssWidth) => {
+    canvas.style.width = `${cssWidth}px`;
+    const fig = document.createElement('figure');
+    fig.append(canvas, Object.assign(document.createElement('figcaption'), { textContent: caption }));
+    return fig;
+  };
+
+  for (const name of names) {
+    const result = { name };
+    summary.push(result);
+    try {
+      const movie = await Movie.load(await (await fetch(`../test/fixtures/${name}.swf`)).arrayBuffer());
+      const frame = Math.min(SETTLE_FRAME, movie.root.totalFrames);
+      for (let i = 1; i < frame; i++) movie.advance();
+      result.frame = frame;
+      if (movie.warnings.length) result.warnings = movie.warnings;
+
+      // 実機は色管理をせずに SWF の RGB 値をそのまま画面へ書く。画像に付いたディスプレイの
+      // プロファイルで変換されると値が変わるので、無変換で読む。
+      const png = await fetch(`../test/expected/${name}.png`);
+      if (!png.ok) throw new Error(`expected image: HTTP ${png.status}`);
+      const img = await createImageBitmap(await png.blob(), { colorSpaceConversion: 'none' });
+
+      // 実機画像はウィンドウ全体。下端からステージの高さ分だけを切り出す（上はタイトルバー）。
+      const stageW = (movie.frameSize.xmax - movie.frameSize.xmin) / 20;
+      const stageH = (movie.frameSize.ymax - movie.frameSize.ymin) / 20;
+      const scale = img.width / stageW;
+      const w = Math.round(stageW * scale);
+      const h = Math.round(stageH * scale);
+      const expected = Object.assign(document.createElement('canvas'), { width: w, height: h });
+      const ectx = expected.getContext('2d', { willReadFrequently: true });
+      ectx.drawImage(img, 0, img.height - h, w, h, 0, 0, w, h);
+
+      const ours = document.createElement('canvas');
+      new CanvasRenderer(ours).render(movie, scale);
+
+      const a = ours.getContext('2d').getImageData(0, 0, w, h).data;
+      const b = ectx.getImageData(0, 0, w, h).data;
+      const diff = Object.assign(document.createElement('canvas'), { width: w, height: h });
+      const dctx = diff.getContext('2d');
+      const out = dctx.createImageData(w, h);
+      let compared = 0, mismatched = 0, total = 0, max = 0;
+      const corner = Math.round(CORNER * scale);
+      for (let i = 0; i < a.length; i += 4) {
+        if (b[i + 3] !== 255) continue; // ウィンドウの角の丸みで欠けた画素は比べない
+        const px = (i / 4) % w;
+        const py = Math.floor(i / 4 / w);
+        if (px < corner && py >= h - corner) continue; // デバッガ版が左下に出す緑の印
+        const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+        compared++;
+        total += d;
+        if (d > max) max = d;
+        if (d > THRESHOLD) mismatched++;
+        const v = Math.min(255, d * 4);
+        out.data[i] = v;
+        out.data[i + 1] = d > THRESHOLD ? 0 : v;
+        out.data[i + 2] = d > THRESHOLD ? 0 : v;
+        out.data[i + 3] = 255;
+      }
+      dctx.putImageData(out, 0, 0);
+      Object.assign(result, {
+        scale,
+        mismatchPercent: +((100 * mismatched) / compared).toFixed(3),
+        meanDiff: +(total / compared).toFixed(3),
+        maxDiff: max,
+      });
+
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.append(figure(ours, `${name}: Flapp（フレーム ${frame}）`, stageW), figure(expected, '実機', stageW), figure(diff, '差', stageW));
+      rows.append(row);
+    } catch (e) {
+      result.error = e.message || String(e);
+    }
+  }
+  document.getElementById('summary').textContent = summary.map((r) => JSON.stringify(r)).join('\n');
+</script>
+</html>
