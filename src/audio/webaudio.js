@@ -33,11 +33,11 @@ export class WebAudioOutput {
     await Promise.all(sounds.map((sound) => this.#buffer(sound)));
   }
 
-  // サウンドを AudioBuffer にする。PCM と ADPCM はその場で、MP3 はブラウザの復号（非同期）で。
+  // サウンドを AudioBuffer にする。PCM と ADPCM はその場で、MP3 と AAC（FLV の音声）はブラウザの復号（非同期）で。
   #buffer(sound) {
     if (this.#buffers.has(sound)) return this.#buffers.get(sound);
     let result;
-    if (sound.format === 'mp3') {
+    if (sound.format === 'mp3' || sound.format === 'aac') {
       // decodeAudioData は渡したバッファを使い切るので、写しを渡す。
       result = this.context.decodeAudioData(sound.data.slice().buffer).then((buffer) => {
         this.#buffers.set(sound, buffer);
