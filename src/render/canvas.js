@@ -108,6 +108,8 @@ export class CanvasRenderer {
     this.movie = movie;
     this.scale = scale;
     const twipsToPixels = { a: scale / 20, b: 0, c: 0, d: scale / 20, tx: (-xmin * scale) / 20, ty: (-ymin * scale) / 20 };
+    const drawn = movie.root.drawingPaths();
+    if (drawn) this.#drawShape(ctx, drawn, twipsToPixels, IDENTITY_CX, false);
     this.#drawChildren(ctx, movie.root.sortedChildren(), 0, Infinity, twipsToPixels, IDENTITY_CX, false);
   }
 
@@ -191,6 +193,8 @@ export class CanvasRenderer {
 
   #drawContent(ctx, child, m, cx, mask) {
     if (child instanceof MovieClip) {
+      const drawn = child.drawingPaths(); // 描画 API で描いた内容は子の下
+      if (drawn) this.#drawShape(ctx, drawn, m, cx, mask);
       this.#drawChildren(ctx, child.sortedChildren(), 0, Infinity, m, cx, mask);
     } else if (child.character.type === 'shape') {
       this.#drawShape(ctx, child.character.paths, m, cx, mask);
@@ -326,7 +330,9 @@ export class CanvasRenderer {
   #stroke(ctx, op, m, cx) {
     const { style } = op;
     // 線幅が変形で歪まないよう、パスをデバイス座標へ移してから等倍で描く。
-    const objectScale = style.noHScale && style.noVScale ? this.scale / 20 : Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+    // 線幅の倍率は、対角方向の単位ベクトル (1, 1)/√2 が変形後に何倍の長さになるか（実機の画面から求めた規則。
+    // 等倍・回転では 1、3 × 1 の拡大では √5、斜めの変形では面積比の平方根より小さくなる）。
+    const objectScale = style.noHScale && style.noVScale ? this.scale / 20 : Math.hypot(m.a + m.c, m.b + m.d) / Math.SQRT2;
     // 実機に合わせる: 線幅は最小 1 デバイスピクセル。幅がデバイスピクセルの奇数のときは、
     // 縁が画素の境界に乗るよう半ピクセルずらす（2 倍解像度の実機の画面で確認した規則）。
     const width = Math.max(style.width * objectScale, 1);
