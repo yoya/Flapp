@@ -7,7 +7,9 @@ import { Movie } from '../src/player/movie.js';
 
 async function run(name, frames) {
   let time = 0;
-  const movie = await Movie.load(readFileSync(new URL(`fixtures/${name}.swf`, import.meta.url)), { now: () => time });
+  // NetStream が再生するファイルは、SWF からの相対パスで探して渡す。
+  const media = (url) => { try { return readFileSync(new URL(url, new URL('fixtures/', import.meta.url))); } catch { return null; } };
+  const movie = await Movie.load(readFileSync(new URL(`fixtures/${name}.swf`, import.meta.url)), { now: () => time, media });
   for (let i = 0; i < frames; i++) {
     time += 1000 / movie.frameRate;
     movie.advance();
@@ -82,4 +84,26 @@ test('表示オブジェクトの BitmapData.draw は、rasterize オプショ�
   const movie = await Movie.load(readFileSync(new URL('fixtures/as3x-visual.swf', import.meta.url)), { now: () => 0, rasterize });
   assert.deepEqual(movie.traces, ['center ffff0000 corner ffff0000']);
   assert.deepEqual(movie.warnings, []);
+});
+
+test('NetStream: 一時停止と位置の変更、見つからないファイル、サーバへの接続', async () => {
+  const movie = await run('as3x-netstream2', 26);
+  assert.deepEqual(movie.traces, [
+    '1 NetStream.Play.Start 0',
+    '1 NetStream.Buffer.Full 0',
+    'paused 83 64 48',
+    'still 83', // 止めている間は進まない
+    'seek 333', // 0.4 秒を指定すると、その手前のキーフレーム（333 ms）になる
+    'toggled 416',
+    '9 NetStream.Seek.Notify 500',
+    '10 NetStream.Buffer.Flush 583',
+    '10 NetStream.Play.Stop 583',
+    '10 NetStream.Buffer.Empty 583',
+    '21 missing NetStream.Play.StreamNotFound error',
+    '21 server NetConnection.Connect.Failed error false',
+  ]);
+  assert.deepEqual(movie.requests.map((r) => `${r.kind} ${r.url}`), [
+    'play ../../tools/assets/video-h263.flv', 'play no-such-file.flv', 'connect rtmp://example.com/app', 'play unheard.flv',
+  ]);
+  assert.deepEqual(movie.warnings, ['unhandled netStatus: NetStream.Play.StreamNotFound']); // 誰も聞いていない失敗は、警告として残る
 });

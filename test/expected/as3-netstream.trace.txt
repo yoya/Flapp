@@ -1,0 +1,14 @@
+[object NetConnection] false null true
+Error 2126
+connection NetConnection.Connect.Success status true true false netStatus false
+true null
+[object NetStream] 0 0 0 0 0 true 1 true
+[object Video] 320 240 0 0 false 0 true false flash.media::Video 64 48 (x=0, y=0, w=320, h=240)
+true 1 true
+true
+TypeError 2004
+attach null ok
+stream NetStream.Play.Start status true
+onMetaData 0.666 64 48 12 2 object
+stream NetStream.Play.Stop status true
+ at stop 0.58 64 48 true 4182 320 240

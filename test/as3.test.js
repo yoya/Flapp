@@ -15,7 +15,9 @@ for (const file of readdirSync(dir).filter((f) => /^as3-.*\.swf$/.test(f)).sort(
   test(`${name}: trace が実機と一致する`, async () => {
     // 時刻は実時間ではなく、1 フレーム進めるごとにフレーム間隔ぶん進める。
     let time = 0;
-    const movie = await Movie.load(readFileSync(new URL(file, dir)), { now: () => time, random: () => 0.5 });
+    // NetStream が再生するファイルは、SWF からの相対パスで探して渡す（実機と同じ場所のファイルを使う）。
+    const media = (url) => { try { return readFileSync(new URL(url, dir)); } catch { return null; } };
+    const movie = await Movie.load(readFileSync(new URL(file, dir)), { now: () => time, random: () => 0.5, media });
     // 入力の手順 (<名前>.input.json) があれば、それを与えたときの出力を、同じ入力を実機へ送って取った trace と比べる。
     const input = new URL(`${name}.input.json`, dir);
     const withInput = existsSync(input);
