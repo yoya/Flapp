@@ -72,7 +72,9 @@ for (const swf of swfs) {
   const name = basename(swf, '.swf');
   const before = new Set(pids());
   const started = Date.now();
-  execFileSync('open', ['-n', '-g', '-a', opt.player, swf]);
+  // 直前の実行がクラッシュしていると、macOS が「ウインドウを再開しますか？」と尋ねて再生が始まらない。
+  // 保存された状態を無視して起動する。
+  execFileSync('open', ['-n', '-g', '-a', opt.player, swf, '--args', '-ApplePersistenceIgnoreState', 'YES']);
 
   let fresh = [];
   for (let i = 0; i < 40 && fresh.length === 0; i++) {
