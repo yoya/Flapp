@@ -1,7 +1,9 @@
 // 実機（Flash Player デバッガ版）で SWF を再生し、trace 出力とウィンドウ画像を
 // test/expected/ に保存する。macOS 専用。
 //
-//   node tools/oracle.js [--player <.app>] [--wait <ms>] [swf ...]
+//   node tools/oracle.js [--player <.app>] [--wait <ms>] [--out <dir>] [swf ...]
+//
+// --out を省くと test/expected/ に保存する。試し撮りは --out tmp のように別の場所へ。
 //
 // - trace は ~/mm.cfg の TraceOutputFileEnable=1 が前提（無ければ中断する）。
 // - trace() の出力は UTF-8 だが、プレイヤー自身の警告文は OS のロケールの符号化で書かれる
@@ -22,11 +24,12 @@ const { values: opt, positionals } = parseArgs({
   options: {
     player: { type: 'string', default: '/Applications/Adobe Animate 2024/Players/Debug/Flash Player Debugger.app' },
     wait: { type: 'string', default: '2000' },
+    out: { type: 'string' },
   },
 });
 
 const fixturesDir = join(root, 'test/fixtures');
-const outDir = join(root, 'test/expected');
+const outDir = opt.out ? resolve(opt.out) : join(root, 'test/expected');
 const swfs = positionals.length
   ? positionals.map((p) => resolve(p))
   : readdirSync(fixturesDir).filter((f) => f.endsWith('.swf')).map((f) => join(fixturesDir, f));
