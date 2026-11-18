@@ -6,6 +6,6 @@
     "test": "node --test",
     "fixtures": "node tools/mkfixtures.js",
     "oracle": "node tools/oracle.js",
-    "serve": "python3 -m http.server 8123 --bind 127.0.0.1"
+    "serve": "node tools/serve.js"
   }
 }
