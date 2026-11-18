@@ -27,8 +27,14 @@
   const CORNER = 12;       // 比較から外す左下の正方形の一辺（ステージ px）
 
   // ?only=名前の一部 で対象を絞れる。
-  const only = new URLSearchParams(location.search).get('only') ?? '';
-  const names = (await (await fetch('../test/fixtures/index.json')).json()).filter((n) => n.includes(only));
+  // ?list=<JSON の URL> で、テスト用以外の SWF を比べられる。JSON は [{ name, swf, png, frame }]（URL はこのページから見た相対パス、
+  // frame は実機画像を撮ったフレーム数）。
+  const query = new URLSearchParams(location.search);
+  const only = query.get('only') ?? '';
+  const entries = (query.get('list')
+    ? await (await fetch(query.get('list'))).json()
+    : (await (await fetch('../test/fixtures/index.json')).json()).map((name) => ({ name, swf: `../test/fixtures/${name}.swf`, png: `../test/expected/${name}.png` }))
+  ).filter((e) => e.name.includes(only));
   const rows = document.getElementById('rows');
   const summary = [];
 
@@ -39,18 +45,19 @@
     return fig;
   };
 
-  for (const name of names) {
+  for (const entry of entries) {
+    const { name } = entry;
     const result = { name };
     summary.push(result);
     try {
-      const movie = await Movie.load(await (await fetch(`../test/fixtures/${name}.swf`)).arrayBuffer());
-      const frame = Math.min(SETTLE_FRAME, movie.root.totalFrames);
+      const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer());
+      const frame = entry.frame ?? Math.min(SETTLE_FRAME, movie.root.totalFrames);
       for (let i = 1; i < frame; i++) movie.advance();
       result.frame = frame;
 
       // 実機は色管理をせずに SWF の RGB 値をそのまま画面へ書く。画像に付いたディスプレイの
       // プロファイルで変換されると値が変わるので、無変換で読む。
-      const png = await fetch(`../test/expected/${name}.png`);
+      const png = await fetch(entry.png);
       if (!png.ok) throw new Error(`expected image: HTTP ${png.status}`);
       const img = await createImageBitmap(await png.blob(), { colorSpaceConversion: 'none' });
 

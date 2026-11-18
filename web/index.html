@@ -6,14 +6,28 @@
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; }
   canvas { display: block; margin: 12px 0; border: 1px solid #888; }
-  #info, #warnings { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  #info, #warnings, #traces { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
   #warnings { color: #a40; }
+  #traces { max-height: 240px; overflow: auto; border: 1px solid #ccc; padding: 4px 8px; margin-top: 8px; }
+  #traces:empty { display: none; }
 </style>
 <h1>Flapp</h1>
 <p>SWF ファイルを選ぶか、ここにドロップしてください。<input type="file" id="file" accept=".swf"></p>
+<p>
+  <label>SWF 5 以前の文字コード:
+    <select id="encoding">
+      <option value="shift_jis">日本語 (Shift-JIS)</option>
+      <option value="windows-1252">西欧 (Windows-1252)</option>
+      <option value="euc-kr">韓国語 (EUC-KR)</option>
+      <option value="gbk">中国語・簡体字 (GBK)</option>
+      <option value="big5">中国語・繁体字 (Big5)</option>
+    </select>
+  </label>
+</p>
 <canvas id="stage" width="0" height="0"></canvas>
 <div id="info"></div>
 <div id="warnings"></div>
+<div id="traces"></div>
 <script type="module">
   import { Movie } from '../src/player/movie.js';
   import { CanvasRenderer } from '../src/render/canvas.js';
@@ -21,20 +35,73 @@
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
   let timer = 0;
+  let current = null; // 再生中のムービー
+  let loaded = null; // 再生中のファイル { bytes, label }（文字コードを変えたときに読み直す）
+
+  // SWF 5 以前の文字列は、ファイルを作った環境の文字コードで入っている（ファイルからは判別できない）。
+  // 実機は OS の言語に合わせるので、ここではブラウザの言語から初期値を決める。?encoding= でも指定できる。
+  const encoding = document.getElementById('encoding');
+  const language = navigator.language.toLowerCase();
+  encoding.value = new URLSearchParams(location.search).get('encoding')
+    ?? (language.startsWith('ja') ? 'shift_jis' : language.startsWith('ko') ? 'euc-kr'
+      : /^zh-(tw|hk|hant)/.test(language) ? 'big5' : language.startsWith('zh') ? 'gbk' : 'windows-1252');
+  if (!encoding.value) encoding.value = 'windows-1252'; // 一覧に無い指定
+  encoding.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label); });
+
+  let redraw = () => {}; // 再生中のムービーを描き直す
+
+  // マウスとキーの入力をムービーへ伝える（_xmouse / _ymouse、ボタン）。キー入力は、ステージをクリックして選んでいる間だけ受け取る。
+  const SPECIAL_KEYS = {
+    ArrowLeft: 1, ArrowRight: 2, Home: 3, End: 4, Insert: 5, Delete: 6, Backspace: 8, Enter: 13,
+    ArrowUp: 14, ArrowDown: 15, PageUp: 16, PageDown: 17, Tab: 18, Escape: 19,
+  };
+  const input = (handle) => (e) => {
+    if (!current) return;
+    handle(current, e);
+    canvas.style.cursor = current.hoverButton ? 'pointer' : '';
+    redraw();
+  };
+  const moveTo = (movie, e) => {
+    const rect = canvas.getBoundingClientRect();
+    movie.mouseMove(Math.round((e.clientX - rect.left) * 20), Math.round((e.clientY - rect.top) * 20));
+  };
+  canvas.tabIndex = 0;
+  canvas.addEventListener('mousemove', input(moveTo));
+  canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
+  canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
+  window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
+  canvas.addEventListener('keydown', input((movie, e) => {
+    const code = SPECIAL_KEYS[e.key] ?? (e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : 0);
+    if (!code) return;
+    e.preventDefault();
+    movie.keyDown(code);
+  }));
 
   async function play(bytes, label) {
     clearInterval(timer);
     const info = document.getElementById('info');
     const warnings = document.getElementById('warnings');
     warnings.textContent = '';
+    // trace() の出力。画面に残すのは最後の 500 行まで。
+    const traces = document.getElementById('traces');
+    traces.textContent = '';
+    const lines = [];
+    const trace = (text) => {
+      lines.push(text);
+      if (lines.length > 500) lines.shift();
+      traces.textContent = lines.join('\n');
+      traces.scrollTop = traces.scrollHeight;
+    };
     let movie;
     try {
-      movie = await Movie.load(bytes);
+      movie = await Movie.load(bytes, { trace, encoding: encoding.value });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
     }
     await renderer.prepare(movie);
+    current = movie;
+    loaded = { bytes, label };
     const scale = window.devicePixelRatio || 1;
     const draw = () => {
       renderer.render(movie, scale);
@@ -45,6 +112,7 @@
       warnings.textContent = movie.warnings.join('\n');
     };
     draw();
+    redraw = draw;
     // フレームレート 0 は実質停止として扱う。
     if (movie.frameRate > 0) {
       timer = setInterval(() => {
