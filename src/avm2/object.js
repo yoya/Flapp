@@ -82,6 +82,16 @@ export class ASArray extends ASObject {
   }
 }
 
+/** Vector.<T>。要素の型と変換は、クラス（klass.vector）が持つ。 */
+export class ASVector extends ASObject {
+  constructor(klass, items = []) {
+    super(klass);
+    klass.vm.charge(items.length);
+    this.items = items;
+    this.fixed = false;
+  }
+}
+
 /**
  * クラス。静的メンバーは自分の values と staticTraits、インスタンスのメンバーは instanceTraits に持つ。
  * trait: { kind: 'slot' | 'const' | 'method' | 'accessor', key, name, value?, type?, fn?, get?, set? }
@@ -111,6 +121,7 @@ export class ASClass extends ASObject {
 
   /** 短い名前（パッケージを除いたもの）。 */
   get shortName() {
+    if (this.vector) return this.name.slice(this.name.indexOf('::') + 2); // Vector.<flash.display::Sprite> は型引数ごと
     return this.name.slice(this.name.lastIndexOf(':') + 1);
   }
 
