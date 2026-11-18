@@ -137,10 +137,10 @@ test('埋め込みビデオ: 一度に復号するフレーム数には上限が
 test('埋め込みビデオ: 対応していないコーデックは、警告を残して表示しない', async () => {
   const bytes = fixtures['video-h263'].slice();
   const at = (await tagsOf('video-h263', 60))[0].offset;
-  bytes[at + 2 + 9] = 4; // DefineVideoStream の CodecID を VP6 にする（タグの見出し 2 バイト + 9 バイト目）
+  bytes[at + 2 + 9] = 7; // DefineVideoStream の CodecID を、SWF には無い 7 にする（タグの見出し 2 バイト + 9 バイト目）
   const movie = await Movie.load(bytes);
   for (let i = 0; i < 3; i++) movie.advance();
-  assert.deepEqual(movie.warnings, ['video 1: codec vp6 is not supported (it will not be shown)']);
+  assert.deepEqual(movie.warnings, ['video 1: codec unknown-7 is not supported (it will not be shown)']);
   assert.deepEqual(movie.root.sortedChildren()[0].paths(), []);
 });
 
@@ -273,6 +273,25 @@ function vp6Reference(name, alpha) {
   assert.equal(at, data.length);
   return frames;
 }
+// ffmpeg の復号結果から作る、表示される絵（RGBA）。実機に合わせた変換: 輝度は 16〜235、色差は 16〜240 に収める。
+// アルファ付きの色はアルファを掛けた値で、アルファより明るい色はアルファまでに抑える。それを、掛ける前の色に戻す。
+function vp6Shown([y, cb, cr, a]) {
+  const { width: w, height: h } = VP6;
+  const clamp = (v, low, high) => Math.min(Math.max(v, low), high);
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const luma = 1.164 * (clamp(y[py * w + px], 16, 235) - 16);
+      const c = (py >> 1) * (w >> 1) + (px >> 1);
+      const u = clamp(cb[c], 16, 240) - 128, v = clamp(cr[c], 16, 240) - 128;
+      const alpha = a ? a[py * w + px] : 255;
+      const colour = [luma + 1.596 * v, luma - 0.392 * u - 0.813 * v, luma + 2.017 * u].map((value) => clamp(value, 0, alpha));
+      rgba.set([...colour.map((value) => (alpha ? (value * 255) / alpha : value)), alpha], (py * w + px) * 4);
+    }
+  }
+  return rgba;
+}
+
 test('VP6: 復号結果が ffmpeg の復号結果と完全に一致する（アルファ付きも）', () => {
   for (const [name, reference, alpha] of [['video-vp6.flv', 'video-vp6.yuv.gz', false], ['video-vp6a.flv', 'video-vp6a.yuva.gz', true]]) {
     const flv = parseFLV(asset(name));
@@ -328,4 +347,40 @@ test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止
     }
   }
   assert.ok(failed > 100, String(failed));
+});
+
+test('埋め込みビデオと FLV の VP6: 絵は表示する大きさに切り取られ、色は実機と同じ変換で RGBA になる', async () => {
+  for (const [fixture, flvName, reference, alpha] of [['video-vp6', 'video-vp6.flv', 'video-vp6.yuv.gz', false], ['video-vp6a', 'video-vp6a.flv', 'video-vp6a.yuva.gz', true]]) {
+    const pictures = vp6Reference(reference, alpha).map(vp6Shown);
+    assert.equal(decodable(alpha ? 'vp6a' : 'vp6'), true);
+    assert.equal(parseDefineVideoStream((await tagsOf(fixture, 60))[0]).codec, alpha ? 'vp6a' : 'vp6');
+    const movie = await Movie.load(fixtures[fixture]);
+    for (let i = 0; i < 10; i++) movie.advance();
+    const [main, still] = movie.root.sortedChildren();
+    assert.equal(main.ratio, 7);
+    assert.deepEqual([main.image().width, main.image().height], [62, 44]);
+    assert.deepEqual(main.image().rgba, pictures[7]);
+    if (!alpha) {
+      assert.equal(still.ratio, 5); // 後から置かれて、フレーム 5 のまま（キーフレーム 4 から復号される）
+      assert.deepEqual(still.image().rgba, pictures[5]);
+    } else assert.ok(main.image().rgba.some((v, i) => i % 4 === 3 && v > 0 && v < 255)); // 半透明の画素がある
+    assert.deepEqual(movie.warnings, []);
+    // FLV: パケットの先頭の 1 バイトが、右と下から削る画素数。
+    const h = host();
+    const playback = new FlvPlayback(h, parseFLV(asset(flvName)));
+    playback.play(0);
+    assert.deepEqual(playback.image().rgba, pictures[0]);
+    h.time = 520; // フレーム 6（500 ms）
+    assert.deepEqual([playback.image().width, playback.image().height], [62, 44]);
+    assert.deepEqual(playback.image().rgba, pictures[6]);
+    assert.deepEqual(h.warnings, []);
+  }
+  // 符号化された大きさより広い枠には、何も映らない（黒くなる）。狭い枠には、左上の部分が映る。
+  const frames = new Map(parseFLV(asset('video-vp6.flv')).video.map((t, n) => [n, t.data.subarray(1)]));
+  const wide = embeddedSequence('vp6', frames, () => {}, { width: 80, height: 48 }).show(0);
+  assert.deepEqual([wide.width, wide.height, ...new Set(wide.rgba)], [80, 48, 0, 255]);
+  const narrow = embeddedSequence('vp6', frames, () => {}, { width: 20, height: 10 }).show(0);
+  const full = vp6Shown(vp6Reference('video-vp6.yuv.gz', false)[0]);
+  assert.deepEqual([...narrow.rgba.subarray(0, 80)], [...full.subarray(0, 80)]);
+  assert.deepEqual([...narrow.rgba.subarray(9 * 80)], [...full.subarray(9 * 62 * 4, 9 * 62 * 4 + 80)]);
 });

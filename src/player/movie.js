@@ -1180,7 +1180,7 @@ export class VideoObject extends DisplayObject {
     if (this.source) return this.source.image();
     const { codec, frames } = this.character;
     if (!frames?.size || !decodable(codec)) return null;
-    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`));
+    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`), this.character);
     return this.#sequence.show(this.ratio);
   }
 

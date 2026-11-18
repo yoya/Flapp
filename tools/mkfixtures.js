@@ -1395,6 +1395,31 @@ fixtures['video-screen'] = swf({
   ],
 });
 
+// VP6: tools/mkvp6.js で作った 8 フレーム（フレーム 0 と 4 がキーフレーム）を 2 倍に拡大して再生する。
+// データは、FLV のパケットから先頭の 1 バイト（削る画素数）を除いたもの。絵は 64×48 px で符号化されていて、
+// DefineVideoStream の大きさ（62×44 px）に切り取られる。6 フレーム目からは、フレーム 5 で止まったままのもう 1 つの
+// インスタンスを右に置く（キーフレーム 4 から復号される）。
+const vp6Packets = (name) => parseFLV(readFileSync(new URL(`assets/${name}`, import.meta.url))).video.map((t) => [...t.data.subarray(1)]);
+fixtures['video-vp6'] = swf({
+  version: 8, frames: 8,
+  tags: [
+    SetBackgroundColor(0xee, 0xee, 0xee),
+    DefineVideoStream(1, 8, 62, 44, 4),
+    ...videoTimeline(1, vp6Packets('video-vp6.flv'), { a: 2, d: 2, tx: 200, ty: 200 }, (n) => (n === 5 ? [PlaceObject2({ depth: 2, id: 1, ratio: 5, matrix: { tx: 3200, ty: 200 } })] : [])),
+    End(),
+  ],
+});
+// アルファ付きの VP6: 背景の色が透けて見える。
+fixtures['video-vp6a'] = swf({
+  version: 8, frames: 8,
+  tags: [
+    SetBackgroundColor(0x33, 0x66, 0xcc),
+    DefineVideoStream(1, 8, 62, 44, 5),
+    ...videoTimeline(1, vp6Packets('video-vp6a.flv'), { a: 2, d: 2, tx: 200, ty: 200 }),
+    End(),
+  ],
+});
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = new URL('../test/fixtures/', import.meta.url);
   mkdirSync(dir, { recursive: true });

@@ -5,6 +5,7 @@
 import { scanMP3 } from '../audio/decode.js';
 import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../video/h263.js';
 import { ScreenVideo2Decoder, ScreenVideoDecoder } from '../video/screen.js';
+import { VP6Decoder } from '../video/vp6.js';
 
 // 1 回の更新で復号する量の上限（巻き戻しや飛び越しで、一度に大量に復号しないため）。フレーム数と、画素数の合計の両方で抑える。
 const MAX_CATCH_UP = 32;
@@ -14,7 +15,43 @@ const MAX_CATCH_UP_PIXELS = 1 << 23;
  * SWF に埋め込まれたビデオとして、このコーデックを復号できるか。
  * Screen Video v2 は、復号器はあるが、埋め込みでは使えない（実機も、埋め込みの v2 は何も表示しない。FLV でだけ映る）。
  */
-export const decodable = (codec) => codec === 'h263' || codec === 'screen';
+export const decodable = (codec) => codec === 'h263' || codec === 'screen' || codec === 'vp6' || codec === 'vp6a';
+
+const DECODERS = {
+  h263: () => new H263Decoder(),
+  screen: () => new ScreenVideoDecoder(),
+  screen2: () => new ScreenVideo2Decoder(),
+  vp6: () => new VP6Decoder(),
+  vp6a: () => new VP6Decoder(true),
+};
+
+// VP6 の絵（YUV と、あればアルファ）を、表示する大きさに切り取って RGBA にする。色の扱いは、実機の画面に合わせてある:
+// - 輝度は 16〜235、色差は 16〜240 に収めてから RGB にする。
+// - アルファ付きの色は、アルファを掛けた値で入っている。アルファより明るい色は、アルファまでに抑えられる。
+//   ここでは掛ける前の色に戻す（戻した値が 255 を超えるぶんは 255 に丸まるので、抑えたのと同じ結果になる）。
+function vp6Image(picture, width, height) {
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  // 符号化された大きさより広い枠には、何も映らない（実機は、枠を黒く塗る）。
+  if (width > picture.width || height > picture.height) {
+    for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+    return rgba;
+  }
+  const { stride, y, cb, cr, alpha } = picture;
+  for (let py = 0, i = 0; py < height; py++) {
+    for (let px = 0; px < width; px++, i += 4) {
+      const luma = 1.164 * (Math.min(Math.max(y[py * stride + px], 16), 235) - 16);
+      const c = (py >> 1) * (stride >> 1) + (px >> 1);
+      const u = Math.min(Math.max(cb[c], 16), 240) - 128, v = Math.min(Math.max(cr[c], 16), 240) - 128;
+      const a = alpha ? alpha[py * stride + px] : 255;
+      const scale = a === 255 ? 1 : a ? 255 / a : 0; // 透明な画素の色は 0 にしておく
+      rgba[i] = Math.max(luma + 1.596 * v, 0) * scale;
+      rgba[i + 1] = Math.max(luma - 0.392 * u - 0.813 * v, 0) * scale;
+      rgba[i + 2] = Math.max(luma + 2.017 * u, 0) * scale;
+      rgba[i + 3] = a;
+    }
+  }
+  return rgba;
+}
 
 /**
  * 番号の付いたフレーム列から、指定の番号のフレームの絵を作る。
@@ -22,13 +59,16 @@ export const decodable = (codec) => codec === 'h263' || codec === 'screen';
  */
 class FrameSequence {
   /**
-   * @param {string} codec 'h263' | 'screen' | 'screen2'
+   * @param {string} codec 'h263' | 'screen' | 'screen2' | 'vp6' | 'vp6a'
    * @param {(n: number) => Uint8Array | undefined} packet  n 番のフレームのビデオパケット（無ければ undefined）
    * @param {(target: number) => number} keyBefore  target 以下で、そこから復号を始められるフレームの番号
    * @param {(message: string) => void} warn
+   * @param {{ width: number, height: number } | null} [box]  VP6 の埋め込みビデオ: 絵を切り取る大きさ。
+   *   無ければ（FLV）、パケットの先頭の 1 バイトが、右と下から削る画素数
    */
-  constructor(codec, packet, keyBefore, warn) {
+  constructor(codec, packet, keyBefore, warn, box = null) {
     this.codec = codec;
+    this.box = box;
     this.packet = packet;
     this.keyBefore = keyBefore;
     this.warn = warn;
@@ -45,7 +85,7 @@ class FrameSequence {
   show(target) {
     if (this.failed || target === this.decoded) return this.image;
     if (!this.decoder || target < this.decoded) {
-      this.decoder = this.codec === 'h263' ? new H263Decoder() : this.codec === 'screen2' ? new ScreenVideo2Decoder() : new ScreenVideoDecoder();
+      this.decoder = DECODERS[this.codec]();
       this.decoded = this.keyBefore(target) - 1;
     }
     let pixels = MAX_CATCH_UP_PIXELS;
@@ -53,9 +93,17 @@ class FrameSequence {
       const data = this.packet(++this.decoded);
       if (!data) continue; // このフレーム番号のデータは無い（前の絵のまま）
       try {
-        const picture = this.decoder.decode(data);
-        pixels -= picture.width * picture.height;
-        const rgba = this.codec === 'h263' ? toRGBA(picture) : picture.rgba;
+        let picture, rgba;
+        if (this.codec === 'vp6' || this.codec === 'vp6a') {
+          const coded = this.decoder.decode(this.box ? data : data.subarray(1));
+          pixels -= coded.width * coded.height;
+          picture = this.box ?? { width: coded.width - (data[0] >> 4), height: coded.height - (data[0] & 15) };
+          rgba = vp6Image(coded, picture.width, picture.height);
+        } else {
+          picture = this.decoder.decode(data);
+          pixels -= picture.width * picture.height;
+          rgba = this.codec === 'h263' ? toRGBA(picture) : picture.rgba;
+        }
         if (this.image?.width === picture.width && this.image.height === picture.height) Object.assign(this.image, { rgba, version: this.image.version + 1 });
         else this.image = { type: 'bitmap', width: picture.width, height: picture.height, rgba, version: 0 };
       } catch (e) {
@@ -69,24 +117,35 @@ class FrameSequence {
   }
 }
 
-/** SWF に埋め込まれたビデオ（DefineVideoStream と VideoFrame）のフレーム列。 */
-export function embeddedSequence(codec, frames, warn) {
+/**
+ * SWF に埋め込まれたビデオ（DefineVideoStream と VideoFrame）のフレーム列。
+ * @param {{ width: number, height: number }} size  DefineVideoStream の幅と高さ
+ */
+export function embeddedSequence(codec, frames, warn, size) {
   // Screen Video のフレームは、先頭に FLV のビデオタグと同じ 1 バイト（フレームの種類とコーデック）が付いている。
   // 仕様書の表には無いが、実機はこの 1 バイトが無いと何も表示しない（実機で確認）。
   const packet = codec === 'screen' ? (n) => frames.get(n)?.subarray(1) : (n) => frames.get(n);
-  // H.263 は、ピクチャの見出しでキーフレームかどうかが分かる。Screen Video は先頭から復号する。
+  // H.263 は、ピクチャの見出しでキーフレームかどうかが分かる。VP6 は、先頭のバイトの最上位ビットが 0 ならキーフレーム
+  // （アルファ付きは、色のデータの長さ 3 バイトの後）。Screen Video は先頭から復号する。
+  const isKey = (data) => {
+    if (codec === 'vp6') return data.length > 0 && !(data[0] & 0x80);
+    if (codec === 'vp6a') return data.length > 3 && !(data[3] & 0x80);
+    return readPictureHeader(data).type === 0;
+  };
   const keyBefore = (target) => {
-    if (codec !== 'h263') return 0;
+    if (codec === 'screen') return 0;
     for (let n = target; n > 0; n--) {
       try {
-        if (frames.has(n) && readPictureHeader(frames.get(n)).type === 0) return n;
+        if (frames.has(n) && isKey(frames.get(n))) return n;
       } catch (e) {
         if (!(e instanceof VideoError)) throw e;
       }
     }
     return 0;
   };
-  return new FrameSequence(codec, packet, keyBefore, warn);
+  // VP6 のデータには、FLV のような先頭の 1 バイトは無い。絵は、DefineVideoStream の大きさに切り取られる（どちらも実機で確認）。
+  const box = codec === 'vp6' || codec === 'vp6a' ? { width: size.width, height: size.height } : null;
+  return new FrameSequence(codec, packet, keyBefore, warn, box);
 }
 
 const AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
