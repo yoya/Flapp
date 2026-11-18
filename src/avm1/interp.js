@@ -444,7 +444,7 @@ export class AVM1 {
         case 0x06: clip()?.play(); break;
         case 0x07: clip()?.stop(); break;
         case 0x08: break; // ToggleQuality
-        case 0x09: break; // StopSounds
+        case 0x09: clip()?.clip.movie.sounds.stop(); break; // StopSounds: 鳴っている音をすべて止める
         case 0x81: clip()?.gotoFrame(view.getUint16(data, true) + 1, false); break; // GotoFrame
         case 0x83: { // GetURL: 外部への移動・読み込みは行わず、要求があったことだけを伝える
           const [url, next] = string(data);

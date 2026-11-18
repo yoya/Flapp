@@ -5,6 +5,8 @@ import { MovieClipObject } from '../avm1/clip.js';
 import { TextFieldObject } from '../avm1/textfield.js';
 import { AVMFunction } from '../avm1/object.js';
 import { Drawing } from './drawing.js';
+import { SoundMixer, buildStream } from './sound.js';
+import { parseDefineButtonSound, parseDefineSound, parseSoundStreamBlock, parseSoundStreamHead, parseStartSound } from '../swf/sound.js';
 import { parseBitmap } from '../swf/bitmap.js';
 import { BUTTON_COND, parseDefineButton, parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
 import { parseDefineMorphShape } from '../swf/morph.js';
@@ -135,6 +137,7 @@ export class Movie {
    *   avm: AVM1 の上限（maxSteps, maxAllocations, maxDepth）
    *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
    *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
+   *   audio: 音の出力（player/sound.js の冒頭を参照。ブラウザでは audio/webaudio.js）。省略すると音は出ない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
    *   encoding: SWF 5 以前の文字列の文字コード（'shift_jis' など、TextDecoder が受け付ける名前）。省略すると 'windows-1252'。
    *             SWF 6 以降は常に UTF-8 なので使わない。SWF 5 以前では、クリップの名前などはバイト列のままの文字列になる
@@ -156,7 +159,7 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en' } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio } = {}) {
     this.boundFields = new Set(); // 変数と連動しているテキストフィールド
     this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
     this.#bitmapPixelBudget = maxBitmapPixels;
@@ -179,6 +182,8 @@ export class Movie {
     const attributes = swf.tags.find((t) => t.code === 69);
     this.isAS3 = !!attributes && attributes.length >= 1 && (attributes.body[0] & 0x08) !== 0;
     const started = Date.now();
+    this.now = now ?? (() => Date.now() - started); // 再生開始からの経過ミリ秒
+    this.sounds = new SoundMixer(this, audio ?? null);
     this.avm = this.isAS3 ? null : new AVM1({
       version: swf.version,
       trace: (text) => {
@@ -194,7 +199,7 @@ export class Movie {
         if (this.requests.length < MAX_TRACES) this.requests.push(shown);
         onRequest?.(shown);
       },
-      now: now ?? (() => Date.now() - started),
+      now: this.now,
       random,
       ...avm,
     });
@@ -218,6 +223,10 @@ export class Movie {
     this.runActions();
     for (const fn of due) this.#guard(fn);
     this.runActions();
+    // 音: ストリーム音を各クリップの今のフレームに合わせ、鳴り終わった音を片付ける。
+    for (const clip of this.clips) if (clip.frames.stream) this.sounds.syncStream(clip);
+    this.#guard(() => this.sounds.update());
+    this.runActions(); // 鳴り終わりの通知 (onSoundComplete)
     // 変数と連動するテキストフィールドに、変数の値を反映する。
     for (const field of this.boundFields) {
       if (field.removed) this.boundFields.delete(field);
@@ -457,6 +466,9 @@ export class Movie {
     if (button) {
       target.setButtonState(state);
       for (const action of button.actions) if (action.cond & BUTTON_COND[event]) this.queueAction(target.parent, action.code);
+      const sound = target.character.buttonSounds?.[event]; // DefineButtonSound
+      const defined = sound && this.dictionary.get(sound.soundId);
+      if (defined?.type === 'sound') this.sounds.start(defined, sound.info, target.parent);
     } else {
       // クリップは、_up / _over / _down というフレームラベルがあれば、ハンドラより先にそのフレームへ移って止まる。
       const frame = target.frameNumber(`_${state}`);
@@ -551,6 +563,8 @@ export class Movie {
     const frames = [];
     frames.labels = new Map(); // フレームラベル → フレーム番号
     let ops = [];
+    let streamHead = null; // このタイムラインのストリーム音の形式
+    const streamBlocks = [];
     for (const tag of tags) {
       try {
         if (tag.code === 1) {
@@ -562,6 +576,12 @@ export class Movie {
           ops.push({ op: 'remove', ...parseRemoveObject(tag) });
         } else if (tag.code === 12) {
           ops.push({ op: 'action', code: tag.body });
+        } else if (tag.code === 15) {
+          ops.push({ op: 'sound', ...parseStartSound(tag) });
+        } else if (tag.code === 18 || tag.code === 45) {
+          streamHead ??= parseSoundStreamHead(tag);
+        } else if (tag.code === 19) {
+          if (streamHead) streamBlocks.push({ frame: frames.length + 1, ...parseSoundStreamBlock(tag, streamHead) });
         } else if (tag.code === 43) {
           const name = new Reader(tag.body, this.legacy !== null).string();
           if (!frames.labels.has(name)) frames.labels.set(name, frames.length + 1);
@@ -575,6 +595,14 @@ export class Movie {
             const id = r.u16();
             this.exports.set(r.string(), id);
           }
+        } else if (tag.code === 14) {
+          const sound = parseDefineSound(tag);
+          if (!['pcm', 'pcm-native', 'adpcm', 'mp3'].includes(sound.format)) this.warn(`sound ${sound.id}: format ${sound.format} is not supported (it will be silent)`);
+          this.#define({ type: 'sound', ...sound });
+        } else if (tag.code === 17) {
+          const { buttonId, sounds } = parseDefineButtonSound(tag);
+          const button = this.dictionary.get(buttonId);
+          if (button?.button) button.buttonSounds = sounds;
         } else if (tag.code === 9) {
           this.backgroundColor ??= parseSetBackgroundColor(tag);
         } else if (SHAPE_TAGS.has(tag.code)) {
@@ -613,6 +641,7 @@ export class Movie {
         this.warn(`tag ${tag.name ?? tag.code} at offset ${tag.offset}: ${e.message}`);
       }
     }
+    if (streamHead && streamBlocks.length) frames.stream = buildStream(streamHead, streamBlocks);
     return frames;
   }
 
@@ -1084,6 +1113,12 @@ export class MovieClip extends DisplayObject {
         this.movie.queueInit(op.spriteId, this, op.code);
         continue;
       }
+      if (op.op === 'sound') {
+        // 途中のフレームを飛ばして移動するときは鳴らさない。
+        const sound = this.movie.dictionary.get(op.soundId);
+        if (withActions && sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
+        continue;
+      }
       if (op.op === 'remove') {
         this.#remove(op.depth);
         continue;
@@ -1146,7 +1181,11 @@ export class MovieClip extends DisplayObject {
     }
     this.#reconcile(wanted);
     this.currentFrame = target;
-    for (const op of this.frames[target - 1]) if (op.op === 'action') this.movie.queueAction(this, op.code);
+    for (const op of this.frames[target - 1]) {
+      if (op.op === 'action') this.movie.queueAction(this, op.code);
+      const sound = op.op === 'sound' ? this.movie.dictionary.get(op.soundId) : undefined;
+      if (sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
+    }
   }
 
   // 表示リストを wanted（深度 → 配置の記述）に合わせる。
