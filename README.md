@@ -24,7 +24,7 @@ SWF は信用できない入力として扱います。
 
 未対応のもの:
 
-- インターレースの VP6、ActionScript 1 / 2 からのビデオの操作（`NetStream`）
+- ActionScript 1 / 2 からのビデオの操作（`NetStream`）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
@@ -91,3 +91,4 @@ SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
 - VP6 には公開された仕様が無いので、VP6 の復号（[src/video/vp6.js](src/video/vp6.js)）だけは、FFmpeg の復号器を JavaScript に移したものです。
   このファイルと、それに寄りかかるテスト用の素材の生成（[tools/mkvp6.js](tools/mkvp6.js)）は、FFmpeg と同じ LGPL 2.1 以降
   （[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）で、著作権の表示は vp6.js の冒頭にあります。
+- インターレースの VP6 は、実機では映りません（埋め込みのビデオは黒くなり、FLV は何も映りません）が、Flapp は FFmpeg と同じに復号して映します。

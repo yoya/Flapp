@@ -8,6 +8,7 @@
 // キーフレームと差分フレーム、マクロブロックの種類のすべて、端数のあるベクトルと絵の外を指すベクトル、ゴールデンフレーム、
 // ブロックの境目のフィルタ、補間のフィルタの切り替え、確率のモデルと係数の順序の更新、大きな係数と長い 0 の連続。
 // ハフマン符号の係数と、係数を別の区画に分ける形は作らない。
+// video-vp6i.flv と video-vp6ai.flv は、インターレースのストリーム（実機の Flash Player は映さない。ffmpeg は復号できる）。
 //
 // 作り方: 復号器（src/video/vp6.js）は、レンジ符号から「この確率で 1 ビット読む」を繰り返して構文を読み進める。
 // そこで、復号器のレンジ符号を「次に読ませたいビットを返して、同じ確率で符号化する」ものに差し替えて、復号器を 1 回走らせる。
@@ -17,6 +18,8 @@
 // 復号の正しさは、作ったストリームを ffmpeg で復号した結果（下のコマンド）と比べて確かめる（test/video.test.js）:
 //   ffmpeg -i video-vp6.flv  -fps_mode passthrough -f rawvideo -pix_fmt yuv420p  video-vp6.yuv;   gzip -9n video-vp6.yuv
 //   ffmpeg -i video-vp6a.flv -fps_mode passthrough -f rawvideo -pix_fmt yuva420p video-vp6a.yuva; gzip -9n video-vp6a.yuva
+//   ffmpeg -i video-vp6i.flv -fps_mode passthrough -f rawvideo -pix_fmt yuv420p  video-vp6i.yuv;  gzip -9n video-vp6i.yuv
+// （video-vp6ai.flv には、ffmpeg の結果を置いていない。ffmpeg は、インターレースのアルファの面を正しく復号しないため。）
 import { writeFileSync } from 'node:fs';
 import { VP6Decoder, internals } from '../src/video/vp6.js';
 
@@ -236,19 +239,23 @@ const frame = (key) => [(key ? 0 : 0x80) | (QUANTIZER << 1)];
 
 // キーフレーム。見出しは、Flash のエンコーダが作るものと同じ形（サブバージョン 8、係数は見出しと同じ区画）。
 function keyFrame(rnd, options) {
-  const header = [...frame(true), (8 << 3) | 6, ROWS, COLS, ROWS, COLS];
+  const header = [...frame(true), (8 << 3) | 6 | (options.interlaced ? 1 : 0), ROWS, COLS, ROWS, COLS];
   const d = [];
   bits(d, 0, 2);
   filterInfo(d, options.filter);
   d.push(0); // ハフマン符号を使わない
   coeffModels(d, options.models);
+  if (options.interlaced) bits(d, 150, 8); // フィールドごとに符号化するマクロブロックの割合（確率）
   const state = {};
-  for (let n = 0; n < ROWS * COLS; n++) macroblock(d, rnd, true, state);
+  for (let n = 0; n < ROWS * COLS; n++) {
+    if (options.interlaced) d.push(rnd(2)); // このマクロブロックを、フィールドごとに符号化するか
+    macroblock(d, rnd, true, state);
+  }
   return { header, decisions: d };
 }
 
 // 差分フレーム。types は、マクロブロックの種類の並び（足りなければ繰り返す）。
-function interFrame(rnd, { golden = 0, deblock = 0, filter = null, models: update, types }) {
+function interFrame(rnd, { golden = 0, deblock = 0, filter = null, models: update, types, interlaced }) {
   const d = [golden, deblock];
   if (deblock) d.push(0);
   if (filter) {
@@ -259,11 +266,13 @@ function interFrame(rnd, { golden = 0, deblock = 0, filter = null, models: updat
   zeros(d, 6); // マクロブロックの種類のモデルは、そのまま
   models(d, 4 + 14 + 16); // ベクトルのモデルも、そのまま
   coeffModels(d, update);
+  if (interlaced) bits(d, 100, 8);
   let previous = INTER_NOVEC_PF;
   const state = {};
   const delta = () => vector(d, rnd(61) - 30, rnd(61) - 30);
   for (let n = 0; n < ROWS * COLS; n++) {
     const type = types[n % types.length];
+    if (interlaced) d.push(rnd(2));
     if (type === previous) d.push(1);
     else d.push(0, ...treePath(PMBT_TREE, type));
     previous = type;
@@ -279,18 +288,18 @@ function interFrame(rnd, { golden = 0, deblock = 0, filter = null, models: updat
   return { header: frame(false), decisions: d };
 }
 
-function script(seed) {
+function script(seed, interlaced = false) {
   const rnd = random(seed);
   return [
-    keyFrame(rnd, { filter: { mode: 2, variance: 2, maxVector: 3, selection: 5 }, models: { dccv: { 0: 100, 13: 70 } } }),
-    interFrame(rnd, { types: [INTER_NOVEC_PF, INTER_DELTA_PF, INTER_DELTA_PF, INTRA, INTER_4V, INTER_V1_PF, INTER_V2_PF, INTER_DELTA_PF, INTER_NOVEC_PF, INTER_NOVEC_PF, INTER_4V, INTER_DELTA_PF] }),
-    interFrame(rnd, { golden: 1, deblock: 1, models: { ract: { 5: 90, 200: 40 }, runv: { 3: 60 } }, types: [INTER_DELTA_PF, INTER_V1_PF, INTER_DELTA_PF, INTER_V2_PF, INTER_4V] }),
-    interFrame(rnd, { deblock: 1, filter: { mode: 0, selection: 0 }, types: [INTER_NOVEC_GF, INTER_DELTA_GF, INTER_V1_GF, INTER_DELTA_PF, INTER_V2_GF, INTER_DELTA_GF, INTRA] }),
-    keyFrame(rnd, { filter: { mode: 1, selection: 9 }, models: { reorder: { 1: 3, 7: 0, 20: 1 } } }),
-    interFrame(rnd, { types: [INTER_DELTA_PF, INTER_4V, INTER_DELTA_PF, INTER_NOVEC_PF] }),
-    interFrame(rnd, { deblock: 1, filter: { mode: 2, variance: 0, maxVector: 7, selection: 12 }, models: { reorder: { 2: 5 } }, types: [INTER_DELTA_PF, INTER_DELTA_GF, INTER_4V] }),
-    interFrame(rnd, { golden: 1, types: [INTER_NOVEC_PF, INTER_DELTA_PF, INTER_NOVEC_GF, INTER_V1_PF] }),
-  ];
+    (extra) => keyFrame(rnd, { filter: { mode: 2, variance: 2, maxVector: 3, selection: 5 }, models: { dccv: { 0: 100, 13: 70 } }, ...extra }),
+    (extra) => interFrame(rnd, { types: [INTER_NOVEC_PF, INTER_DELTA_PF, INTER_DELTA_PF, INTRA, INTER_4V, INTER_V1_PF, INTER_V2_PF, INTER_DELTA_PF, INTER_NOVEC_PF, INTER_NOVEC_PF, INTER_4V, INTER_DELTA_PF], ...extra }),
+    (extra) => interFrame(rnd, { golden: 1, deblock: 1, models: { ract: { 5: 90, 200: 40 }, runv: { 3: 60 } }, types: [INTER_DELTA_PF, INTER_V1_PF, INTER_DELTA_PF, INTER_V2_PF, INTER_4V], ...extra }),
+    (extra) => interFrame(rnd, { deblock: 1, filter: { mode: 0, selection: 0 }, types: [INTER_NOVEC_GF, INTER_DELTA_GF, INTER_V1_GF, INTER_DELTA_PF, INTER_V2_GF, INTER_DELTA_GF, INTRA], ...extra }),
+    (extra) => keyFrame(rnd, { filter: { mode: 1, selection: 9 }, models: { reorder: { 1: 3, 7: 0, 20: 1 } }, ...extra }),
+    (extra) => interFrame(rnd, { types: [INTER_DELTA_PF, INTER_4V, INTER_DELTA_PF, INTER_NOVEC_PF], ...extra }),
+    (extra) => interFrame(rnd, { deblock: 1, filter: { mode: 2, variance: 0, maxVector: 7, selection: 12 }, models: { reorder: { 2: 5 } }, types: [INTER_DELTA_PF, INTER_DELTA_GF, INTER_4V], ...extra }),
+    (extra) => interFrame(rnd, { golden: 1, types: [INTER_NOVEC_PF, INTER_DELTA_PF, INTER_NOVEC_GF, INTER_V1_PF], ...extra }),
+  ].map((f) => f({ interlaced }));
 }
 
 // ---- 符号化: 復号器に、用意したビットを読ませる ----
@@ -329,20 +338,26 @@ function flv(codec, packets) {
   return Uint8Array.from(out);
 }
 
-const colour = new VP6Decoder().color;
-const colourFrames = script(2024).map((f) => ({ key: !(f.header[0] & 0x80), data: encode(colour, f) }));
-const alpha = new VP6Decoder(true).alpha;
-const alphaFrames = script(77).map((f) => encode(alpha, f));
+const stream = (context, seed, interlaced) => script(seed, interlaced).map((f) => ({ key: !(f.header[0] & 0x80), data: encode(context, f) }));
+// アルファ付き: 色のデータの長さ（3 バイト）、色のデータ、アルファのデータ
+const withAlpha = (colour, alpha) => colour.map(({ key, data }, n) => ({ key, data: [...u24(data.length), ...data, ...alpha[n].data] }));
+const colourFrames = stream(new VP6Decoder().color, 2024, false);
+const alphaFrames = stream(new VP6Decoder(true).alpha, 77, false);
+// インターレース: マクロブロックの半分ほどを、フィールドごとに符号化する。
+const interlacedFrames = stream(new VP6Decoder().color, 31, true);
+const interlacedAlpha = stream(new VP6Decoder(true).alpha, 5, true);
 
 const files = {
   'video-vp6.flv': flv(4, colourFrames),
-  // アルファ付き: 色のデータの長さ（3 バイト）、色のデータ、アルファのデータ
-  'video-vp6a.flv': flv(5, colourFrames.map(({ key, data }, n) => ({ key, data: [...u24(data.length), ...data, ...alphaFrames[n]] }))),
+  'video-vp6a.flv': flv(5, withAlpha(colourFrames, alphaFrames)),
+  'video-vp6i.flv': flv(4, interlacedFrames),
+  'video-vp6ai.flv': flv(5, withAlpha(interlacedFrames, interlacedAlpha)),
 };
 
 // 作ったストリームを、手を加えていない復号器で読めることを確かめてから書き出す。
-for (const [decoder, frames] of [[new VP6Decoder(), colourFrames.map((f) => f.data)], [new VP6Decoder(), alphaFrames]]) {
-  for (const data of frames) decoder.decode(Uint8Array.from(data));
+for (const frames of [colourFrames, alphaFrames, interlacedFrames, interlacedAlpha]) {
+  const decoder = new VP6Decoder();
+  for (const { data } of frames) decoder.decode(Uint8Array.from(data));
 }
 for (const [name, bytes] of Object.entries(files)) {
   writeFileSync(new URL(`assets/${name}`, import.meta.url), bytes);

@@ -31,7 +31,9 @@
 // VP6 の復号。Flapp のほかの部分は仕様書だけから書いているが、VP6 は公開された仕様が無いので、このファイルだけは
 // FFmpeg の復号器を JavaScript に移したもの（そのため、このファイルだけ LGPL）。
 // 対応するのは Flash で使う形（FLV の CodecID 4 と 5、SWF の埋め込みビデオ）で、絵は上下が反転していない。
-// インターレースのストリームは、確かめる材料が無いので未対応（VideoError）にしている。
+// インターレース（マクロブロックごとに、1 行おきの 2 枚の絵として符号化できる形）のストリームも FFmpeg と同じに復号するが、
+// 実機の Flash Player はこの印の付いたストリームを映さない（黒くなる）。アルファ付きのインターレースでは、FFmpeg は
+// アルファの面で行の間隔を 2 倍にしておらず、絵が崩れる。ここでは色と同じに扱っている（正解を確かめる手段は無い）。
 //
 // 入力は信用できないデータとして扱う。配列の外を読まない・書かないこと、大きさの上限（MAX_VIDEO_PIXELS）を守ることは、
 // 移したコードの側で保証する（FFmpeg が余白の付いたバッファに頼っている所は、座標を丸めて読む形にしてある）。
@@ -145,6 +147,11 @@ const DEF_COEFF_REORDER = new Uint8Array([
   0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 7,
   7, 7, 7, 8, 8, 9, 9, 9, 9, 9, 9, 10, 10, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12,
   12, 13, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15,
+]);
+const IL_COEFF_REORDER = new Uint8Array([
+  0, 1, 0, 1, 1, 2, 5, 3, 2, 2, 2, 2, 4, 7, 8, 10, 9, 7, 5, 4, 2, 3, 5, 6,
+  8, 9, 11, 12, 13, 12, 11, 10, 9, 7, 5, 4, 6, 7, 9, 11, 12, 12, 13, 13, 14, 12, 11, 9,
+  7, 9, 11, 12, 14, 14, 14, 15, 13, 11, 13, 15, 15, 15, 15, 15,
 ]);
 const DEF_RUNV_COEFF_MODEL = new Uint8Array([
   198, 197, 196, 146, 198, 204, 169, 142, 130, 136, 149, 149, 191, 249, 135, 201, 181, 154, 98, 117, 132, 126, 146, 169,
@@ -636,6 +643,9 @@ class Context {
     this.filterSelection = 0;
     this.useHuffman = 0;
     this.huffmanCoeff = false; // 係数がハフマン符号か
+    this.interlaced = 0; // インターレース: マクロブロックごとに、1 行おきの 2 枚の絵（フィールド）として符号化できる
+    this.ilProb = 0;
+    this.ilBlock = 0; // 今のマクロブロックが、フィールドごとの符号化か
     this.c = null; // レンジ符号（見出し、モデル、マクロブロックの種類とベクトル）
     this.ccp = null; // 係数のレンジ符号（別の区画に分かれていなければ c と同じ）
     this.gb = null; // 係数のビット列（ハフマン符号のとき）
@@ -682,8 +692,8 @@ class Context {
     this.aboveNotNull = null;
     this.aboveIdx = new Int32Array(6);
     this.blockOffset = new Int32Array(6);
-    // 動き補償の作業用: 12×12 の画素（1 行 16 バイト）と、斜めの補間の途中の結果
-    this.emu = new Uint8ClampedArray(16 * 12);
+    // 動き補償の作業用: 12×12 の画素（1 行 16 バイト。フィールドごとのマクロブロックでは 12×24）と、斜めの補間の途中の結果
+    this.emu = new Uint8ClampedArray(16 * 24);
     this.tmp = new Uint8ClampedArray(8 * 9);
   }
 
@@ -700,7 +710,6 @@ class Context {
     if (this.key) {
       const subVersion = buf[p + 1] >> 3;
       if (subVersion > 8) throw new VideoError('vp6: unknown version of the bitstream');
-      if (buf[p + 1] & 1) throw new VideoError('vp6: interlaced video is not supported');
       const filterHeader = buf[p + 1] & 6;
       if (separatedCoeff || !filterHeader) {
         if (end - p < 4) throw new VideoError('vp6: the frame is too short');
@@ -712,6 +721,7 @@ class Context {
       if (!rows || !cols) throw new VideoError('vp6: the frame size is zero');
       if (rows * cols * 256 > MAX_VIDEO_PIXELS) throw new VideoError(`video frame size ${cols * 16}x${rows * 16} is out of range`);
       this.filterHeader = filterHeader;
+      this.interlaced = buf[start + 1] & 1;
       if (!this.mbTypes || cols !== this.mbWidth || rows !== this.mbHeight) this.resize(cols, rows);
       c = new RangeDecoder(buf, p + 6, end);
       c.gets(2);
@@ -826,7 +836,7 @@ class Context {
     this.vectorFdv.set(DEF_FDV_VECTOR_MODEL);
     this.vectorPdv.set(DEF_PDV_VECTOR_MODEL);
     this.coeffRunv.set(DEF_RUNV_COEFF_MODEL);
-    this.coeffReorder.set(DEF_COEFF_REORDER);
+    this.coeffReorder.set(this.interlaced ? IL_COEFF_REORDER : DEF_COEFF_REORDER);
     this.coeffOrderTableInit();
   }
 
@@ -1236,20 +1246,20 @@ class Context {
 
   // ---- 動き補償 ----
 
-  // 12×12 の作業用の画素にかける、ブロックの境目のフィルタ（vp56_deblock_filter、vp3 のループフィルタ）。
-  deblock(dx, dy) {
+  // 作業用の画素（1 行が stride バイトの 12×12）にかける、ブロックの境目のフィルタ（vp56_deblock_filter、vp3 のループフィルタ）。
+  deblock(stride, dx, dy) {
     const yuv = this.emu, bv = this.boundingValues;
     if (dx) {
-      for (let i = 0, p = 10 - dx; i < 12; i++, p += 16) {
+      for (let i = 0, p = 10 - dx; i < 12; i++, p += stride) {
         const v = bv[127 + ((yuv[p - 2] - yuv[p + 1] + (yuv[p] - yuv[p - 1]) * 3 + 4) >> 3)];
         yuv[p - 1] += v;
         yuv[p] -= v;
       }
     }
     if (dy) {
-      for (let i = 0, p = 16 * (10 - dy); i < 12; i++, p++) {
-        const v = bv[127 + ((yuv[p - 32] - yuv[p + 16] + (yuv[p] - yuv[p - 16]) * 3 + 4) >> 3)];
-        yuv[p - 16] += v;
+      for (let i = 0, p = stride * (10 - dy); i < 12; i++, p++) {
+        const v = bv[127 + ((yuv[p - 2 * stride] - yuv[p + stride] + (yuv[p] - yuv[p - stride]) * 3 + 4) >> 3)];
+        yuv[p - stride] += v;
         yuv[p] -= v;
       }
     }
@@ -1283,8 +1293,9 @@ class Context {
   }
 
   // 参照する絵からブロック b を持ってくる（vp56_mc）。x, y は、輝度の面でのブロックの位置。
-  mc(b, plane, ref, x, y) {
-    const dst = this.current[plane], to = this.blockOffset[b], stride = this.strides[plane];
+  // stride は、書き込む側の 1 行の長さ（フィールドごとのマクロブロックの輝度では、面の 2 倍。1 行おきに読み書きする）。
+  mc(b, plane, ref, stride, x, y) {
+    const dst = this.current[plane], to = this.blockOffset[b], refStride = this.strides[plane];
     const div = b < 4 ? 4 : 8, mask = div - 1;
     const mvx = this.mvX[b], mvy = this.mvY[b];
     const dx = Math.trunc(mvx / div), dy = Math.trunc(mvy / div);
@@ -1296,17 +1307,19 @@ class Context {
     y += dy - 2;
     const width = this.planeWidth[plane], height = this.planeHeight[plane];
     let src = ref, srcStride = stride, from = to + dy * stride + dx;
-    if (this.deblockFiltering || x < 0 || x + 12 >= width || y < 0 || y + 12 >= height) {
+    const field = this.interlaced && this.ilBlock;
+    if (field || this.deblockFiltering || x < 0 || x + 12 >= width || y < 0 || y + 12 >= height) {
       // 周りの 2 画素を含む 12×12 を、作業用に写す。絵の外は、端の画素を延ばす。
-      const emu = this.emu;
-      for (let j = 0; j < 12; j++) {
-        const line = Math.min(Math.max(y + j, 0), height - 1) * stride;
+      // フィールドごとのマクロブロックでは、2 行上から 12×24 を写して、輝度は 1 行おきに使う（色差は、4 行目から続けて使う）。
+      const emu = this.emu, rows = field ? 24 : 12, top = field ? y - 2 : y;
+      for (let j = 0; j < rows; j++) {
+        const line = Math.min(Math.max(top + j, 0), height - 1) * refStride;
         for (let i = 0; i < 12; i++) emu[j * 16 + i] = ref[line + Math.min(Math.max(x + i, 0), width - 1)];
       }
-      if (this.deblockFiltering) this.deblock(dx & 7, dy & 7);
       src = emu;
-      srcStride = 16;
-      from = 2 + 2 * 16;
+      srcStride = stride === refStride ? 16 : 32;
+      from = 2 + (field ? 4 : 2) * 16;
+      if (this.deblockFiltering) this.deblock(srcStride, dx & 7, dy & 7);
     }
     let overlap = 0;
     if (mvx & mask) overlap += mvx > 0 ? 1 : -1;
@@ -1322,8 +1335,14 @@ class Context {
     this.addPredictorsDc(refFrame);
     const ref = refFrame === FRAME_PREVIOUS ? this.previous : refFrame === FRAME_GOLDEN ? this.golden : this.current;
     if (!ref) throw new VideoError('vp6: the reference frame is missing');
+    // フィールドごとのマクロブロック: 輝度の上の 2 ブロックが偶数行、下の 2 ブロックが奇数行になる。
+    const field = this.interlaced && this.ilBlock;
+    if (field) {
+      this.blockOffset[2] -= this.strides[0] * 7;
+      this.blockOffset[3] -= this.strides[0] * 7;
+    }
     for (let b = 0; b < this.bMax; b++) {
-      const plane = B2P[b], stride = this.strides[plane], to = this.blockOffset[b];
+      const plane = B2P[b], stride = field && plane === 0 ? this.strides[0] * 2 : this.strides[plane], to = this.blockOffset[b];
       const dst = this.current[plane], block = this.blocks[b], selector = this.idctSelector[b];
       if (type === MB_INTRA) {
         if (selector > 10 || selector === 1) idct(dst, to, stride, block, 1);
@@ -1333,7 +1352,7 @@ class Context {
       if (type === MB_INTER_NOVEC_PF || type === MB_INTER_NOVEC_GF) {
         const from = ref[plane];
         for (let j = 0, p = to; j < 8; j++, p += stride) for (let i = 0; i < 8; i++) dst[p + i] = from[p + i];
-      } else this.mc(b, plane, ref[plane], 16 * col + (b === 1 || b === 3 ? 8 : 0), 16 * row + (b === 2 || b === 3 ? 8 : 0));
+      } else this.mc(b, plane, ref[plane], stride, 16 * col + (b === 1 || b === 3 ? 8 : 0), 16 * row + (b === 2 || b === 3 ? (field ? 1 : 8) : 0));
       if (selector > 10) idct(dst, to, stride, block, 2);
       else if (selector > 1) idct10(dst, to, stride, block, 2);
       else {
@@ -1343,6 +1362,10 @@ class Context {
       }
     }
     if (this.bMax < 6) this.blockCoeff.fill(0, 4 * 64); // 絵にしなかった色差の係数を消す
+    if (field) {
+      this.blockOffset[2] += this.strides[0] * 7;
+      this.blockOffset[3] += this.strides[0] * 7;
+    }
   }
 
   // ---- フレーム全体（ff_vp56_decode_mbs） ----
@@ -1357,6 +1380,7 @@ class Context {
       this.mbType = MB_INTER_NOVEC_PF;
     }
     this.parseCoeffModels();
+    if (this.interlaced) this.ilProb = this.c.gets(8);
 
     this.prevDc.fill(0);
     this.prevDc[1 * 3 + FRAME_CURRENT] = 128;
@@ -1383,6 +1407,12 @@ class Context {
       offset[3] = offset[2] + 8;
       offset[4] = offset[5] = row * 8 * strideUV;
       for (let col = 0; col < this.mbWidth; col++) {
+        if (this.interlaced) {
+          // フィールドごとの符号化かどうか。確率は、左のマクロブロックがどちらだったかで変わる。
+          let prob = this.ilProb;
+          if (col > 0) prob += this.ilBlock ? -(prob >> 1) : (256 - prob) >> 1;
+          this.ilBlock = this.c.getProb(prob);
+        }
         const type = this.key ? MB_INTRA : this.decodeMv(row, col);
         if (this.huffmanCoeff) this.parseCoeffHuffman();
         else this.parseCoeff();

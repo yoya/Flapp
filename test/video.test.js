@@ -283,7 +283,7 @@ test('Screen Video v2: 確かめられていない機能と壊れたデータは
 // VP6 の素材（tools/mkvp6.js で作ったもの）: 64×48 px で符号化されていて、表示するのは 62×44 px。8 フレーム。
 const VP6 = { width: 62, height: 44, stride: 64, frames: 8 };
 // ffmpeg の復号結果（表示する範囲だけの YUV、アルファ付きなら A も）を、フレームごとの面に分ける。
-function vp6Reference(name, alpha) {
+function vp6Reference(name, alpha = false) {
   const data = gunzipSync(asset(name));
   const { width: w, height: h } = VP6;
   const sizes = [w * h, (w >> 1) * (h >> 1), (w >> 1) * (h >> 1), ...(alpha ? [w * h] : [])];
@@ -311,8 +311,8 @@ function vp6Shown([y, cb, cr, a]) {
   return rgba;
 }
 
-test('VP6: 復号結果が ffmpeg の復号結果と完全に一致する（アルファ付きも）', () => {
-  for (const [name, reference, alpha] of [['video-vp6.flv', 'video-vp6.yuv.gz', false], ['video-vp6a.flv', 'video-vp6a.yuva.gz', true]]) {
+test('VP6: 復号結果が ffmpeg の復号結果と完全に一致する（アルファ付きと、インターレースも）', () => {
+  for (const [name, reference, alpha] of [['video-vp6.flv', 'video-vp6.yuv.gz', false], ['video-vp6a.flv', 'video-vp6a.yuva.gz', true], ['video-vp6i.flv', 'video-vp6i.yuv.gz', false]]) {
     const flv = parseFLV(asset(name));
     assert.deepEqual(flv.video.map((t) => [t.codec, t.key]), Array.from({ length: 8 }, (_, n) => [alpha ? 'vp6a' : 'vp6', n % 4 === 0]));
     const expected = vp6Reference(reference, alpha);
@@ -329,13 +329,28 @@ test('VP6: 復号結果が ffmpeg の復号結果と完全に一致する（ア�
   }
 });
 
+test('VP6: インターレースのアルファの面は、同じデータを色のストリームとして復号したときの輝度と同じになる', () => {
+  // ffmpeg は、インターレースのアルファの面を正しく復号しない（行の間隔を 2 倍にしない）ので、ffmpeg とは比べられない。
+  // 輝度の復号は ffmpeg と一致することを確かめてあるので、それと同じ結果になることを確かめる。
+  const whole = new VP6Decoder(true), plain = new VP6Decoder();
+  let fields = 0;
+  for (const tag of parseFLV(asset('video-vp6ai.flv')).video) {
+    const data = tag.data.subarray(1);
+    const offset = (data[0] << 16) | (data[1] << 8) | data[2];
+    assert.deepEqual(whole.decode(data).alpha, plain.decode(data.subarray(3 + offset)).y);
+    assert.equal(whole.alpha.interlaced, 1);
+    fields += whole.alpha.ilBlock;
+  }
+  assert.ok(fields > 0); // フィールドごとに符号化したマクロブロックがある
+});
+
 test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止まらない復号にならない）', () => {
-  const frames = parseFLV(asset('video-vp6.flv')).video.map((t) => t.data.subarray(1));
+  // でたらめに壊すのは、インターレースのストリーム（復号の経路がいちばん多い）。
+  const frames = parseFLV(asset('video-vp6i.flv')).video.map((t) => t.data.subarray(1));
   assert.throws(() => new VP6Decoder().decode(frames[1]), /without a key frame/);
   assert.throws(() => new VP6Decoder().decode(frames[0].subarray(0, 5)), /too short/);
   assert.throws(() => new VP6Decoder().decode(new Uint8Array(0)), /too short/);
   const edit = (change) => { const data = Uint8Array.from(frames[0]); change(data); return data; };
-  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[1] |= 1; })), /interlaced/);
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[1] = 9 << 3; })), /unknown version/);
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = 0; })), /size is zero/);
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = d[3] = 255; })), /out of range/); // 4080×4080
