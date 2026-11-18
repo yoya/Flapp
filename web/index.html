@@ -51,14 +51,10 @@
   let redraw = () => {}; // 再生中のムービーを描き直す
 
   // マウスとキーの入力をムービーへ伝える（_xmouse / _ymouse、ボタン）。キー入力は、ステージをクリックして選んでいる間だけ受け取る。
-  const SPECIAL_KEYS = {
-    ArrowLeft: 1, ArrowRight: 2, Home: 3, End: 4, Insert: 5, Delete: 6, Backspace: 8, Enter: 13,
-    ArrowUp: 14, ArrowDown: 15, PageUp: 16, PageDown: 17, Tab: 18, Escape: 19,
-  };
   const input = (handle) => (e) => {
     if (!current) return;
     handle(current, e);
-    canvas.style.cursor = current.hoverButton ? 'pointer' : '';
+    canvas.style.cursor = current.avm && !current.avm.mouseVisible ? 'none' : current.hoverButton ? 'pointer' : '';
     redraw();
   };
   const moveTo = (movie, e) => {
@@ -70,12 +66,13 @@
   canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
   canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
   window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
+  // キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡す。
   canvas.addEventListener('keydown', input((movie, e) => {
-    const code = SPECIAL_KEYS[e.key] ?? (e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : 0);
-    if (!code) return;
+    if (!e.keyCode || e.metaKey) return;
     e.preventDefault();
-    movie.keyDown(code);
+    movie.keyDown(e.keyCode, e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : e.key === 'Enter' ? 13 : 0);
   }));
+  canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
 
   async function play(bytes, label) {
     clearInterval(timer);
@@ -92,9 +89,11 @@
       traces.textContent = lines.join('\n');
       traces.scrollTop = traces.scrollHeight;
     };
+    // スクリプトが要求した URL は、開かずに trace の欄へ表示する。
+    const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''} （開きません）`);
     let movie;
     try {
-      movie = await Movie.load(bytes, { trace, encoding: encoding.value });
+      movie = await Movie.load(bytes, { trace, onRequest, encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
