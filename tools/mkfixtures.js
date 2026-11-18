@@ -22,6 +22,7 @@
 //                         drawbox=x=80:y=30:w=20:h=20:color=yellow:t=fill:enable='eq(n,2)+eq(n,4)',drawbox=x=64:y=0:w=64:h=64:color=0x1830c8:t=fill:enable='eq(n,6)'"
 //                         -frames:v 7 -c:v flashsv2 -g 10 -an -fflags +bitexact -flags +bitexact video-screen2.flv
 //   video-screen2.rgb.gz  ffmpeg -i video-screen2.flv -f rawvideo -pix_fmt rgb24 video-screen2.rgb; gzip -9n video-screen2.rgb
+// VP6 の素材（video-vp6.flv、video-vp6a.flv と、ffmpeg で復号した結果）は、tools/mkvp6.js で作る（作り方はそちらの冒頭）。
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseFLV } from '../src/video/flv.js';

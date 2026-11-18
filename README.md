@@ -88,5 +88,5 @@ SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
   ActionScript をコンパイルする `tools/mkas.js` / `tools/mkas3.js` 用の Java と FFDec が要ります。
 - 端末のフォントで決まる文字の寸法など、実機と同じにならないところがあります。
 - VP6 には公開された仕様が無いので、VP6 の復号（[src/video/vp6.js](src/video/vp6.js)）だけは、FFmpeg の復号器を JavaScript に移したものです。
-  このファイルは、FFmpeg と同じ LGPL 2.1 以降（[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）で、
-  著作権の表示はファイルの冒頭にあります。
+  このファイルと、それに寄りかかるテスト用の素材の生成（[tools/mkvp6.js](tools/mkvp6.js)）は、FFmpeg と同じ LGPL 2.1 以降
+  （[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）で、著作権の表示は vp6.js の冒頭にあります。

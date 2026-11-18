@@ -1,5 +1,5 @@
-// ビデオ: タグの解析、Sorenson H.263 と Screen Video の復号、埋め込みビデオの再生、FLV の分解と再生。
-// H.263 の復号結果は、ffmpeg で復号した結果（tools/assets/video-h263.yuv）と比べる。
+// ビデオ: タグの解析、Sorenson H.263・Screen Video・VP6 の復号、埋め込みビデオの再生、FLV の分解と再生。
+// H.263 と VP6 の復号結果は、ffmpeg で復号した結果（tools/assets/video-h263.yuv、video-vp6.yuv.gz、video-vp6a.yuva.gz）と比べる。
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -12,6 +12,7 @@ import { parseDefineVideoStream, parseVideoFrame } from '../src/swf/video.js';
 import { parseFLV } from '../src/video/flv.js';
 import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../src/video/h263.js';
 import { ScreenVideo2Decoder, ScreenVideoDecoder } from '../src/video/screen.js';
+import { VP6Decoder } from '../src/video/vp6.js';
 import { SCREEN_VIDEO, fixtures, screenVideoPixel } from '../tools/mkfixtures.js';
 
 const asset = (name) => readFileSync(new URL(`../tools/assets/${name}`, import.meta.url));
@@ -258,4 +259,73 @@ test('Screen Video v2: 確かめられていない機能と壊れたデータは
   h.time = 500;
   assert.deepEqual([...playback.image().rgba.subarray((5 * 128 + 100) * 4, (5 * 128 + 100) * 4 + 3)], [24, 48, 192]);
   assert.deepEqual(h.warnings, []);
+});
+
+// VP6 の素材（tools/mkvp6.js で作ったもの）: 64×48 px で符号化されていて、表示するのは 62×44 px。8 フレーム。
+const VP6 = { width: 62, height: 44, stride: 64, frames: 8 };
+// ffmpeg の復号結果（表示する範囲だけの YUV、アルファ付きなら A も）を、フレームごとの面に分ける。
+function vp6Reference(name, alpha) {
+  const data = gunzipSync(asset(name));
+  const { width: w, height: h } = VP6;
+  const sizes = [w * h, (w >> 1) * (h >> 1), (w >> 1) * (h >> 1), ...(alpha ? [w * h] : [])];
+  let at = 0;
+  const frames = Array.from({ length: VP6.frames }, () => sizes.map((size) => data.subarray(at, (at += size))));
+  assert.equal(at, data.length);
+  return frames;
+}
+test('VP6: 復号結果が ffmpeg の復号結果と完全に一致する（アルファ付きも）', () => {
+  for (const [name, reference, alpha] of [['video-vp6.flv', 'video-vp6.yuv.gz', false], ['video-vp6a.flv', 'video-vp6a.yuva.gz', true]]) {
+    const flv = parseFLV(asset(name));
+    assert.deepEqual(flv.video.map((t) => [t.codec, t.key]), Array.from({ length: 8 }, (_, n) => [alpha ? 'vp6a' : 'vp6', n % 4 === 0]));
+    const expected = vp6Reference(reference, alpha);
+    const decoder = new VP6Decoder(alpha);
+    flv.video.forEach((tag, n) => {
+      assert.equal(tag.data[0], 0x24); // 右を 2 px、下を 4 px 削る
+      const p = decoder.decode(tag.data.subarray(1));
+      assert.deepEqual([p.width, p.height, p.stride], [64, 48, 64]); // 符号化された大きさ
+      const planes = [[p.y, 64, 62, 44], [p.cb, 32, 31, 22], [p.cr, 32, 31, 22], ...(alpha ? [[p.alpha, 64, 62, 44]] : [])];
+      planes.forEach(([plane, stride, w, h], k) => {
+        for (let y = 0; y < h; y++) assert.deepEqual([...plane.subarray(y * stride, y * stride + w)], [...expected[n][k].subarray(y * w, y * w + w)], `${name} frame ${n} plane ${k} row ${y}`);
+      });
+    });
+  }
+});
+
+test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止まらない復号にならない）', () => {
+  const frames = parseFLV(asset('video-vp6.flv')).video.map((t) => t.data.subarray(1));
+  assert.throws(() => new VP6Decoder().decode(frames[1]), /without a key frame/);
+  assert.throws(() => new VP6Decoder().decode(frames[0].subarray(0, 5)), /too short/);
+  assert.throws(() => new VP6Decoder().decode(new Uint8Array(0)), /too short/);
+  const edit = (change) => { const data = Uint8Array.from(frames[0]); change(data); return data; };
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[1] |= 1; })), /interlaced/);
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[1] = 9 << 3; })), /unknown version/);
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = 0; })), /size is zero/);
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = d[3] = 255; })), /out of range/); // 4080×4080
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[0] |= 1; d[2] = 0xff; d[3] = 0xff; })), VideoError); // 係数の区画がフレームの外
+  // アルファ付き: 色のデータの長さがフレームからはみ出す。色とアルファの大きさが違う。
+  const [alphaKey] = parseFLV(asset('video-vp6a.flv')).video.map((t) => Uint8Array.from(t.data.subarray(1)));
+  assert.throws(() => new VP6Decoder(true).decode(Uint8Array.from([0xff, 0xff, 0xff, ...alphaKey.subarray(3)])), /outside the frame/);
+  const offset = (alphaKey[0] << 16) | (alphaKey[1] << 8) | alphaKey[2];
+  alphaKey[3 + offset + 3] = 2; // アルファの側の、マクロブロックの列の数
+  assert.throws(() => new VP6Decoder(true).decode(alphaKey), VideoError);
+  // でたらめに壊したフレームを続けて復号しても、VideoError のほかは起きない。
+  let seed = 1;
+  const rnd = (n) => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
+  let failed = 0;
+  for (let round = 0; round < 300; round++) {
+    const decoder = new VP6Decoder();
+    for (const frame of frames) {
+      let data = Uint8Array.from(frame);
+      if (round % 3 === 0) data = data.subarray(0, rnd(data.length + 1));
+      else for (let k = 1 + rnd(4); k > 0; k--) data[rnd(data.length)] = rnd(256);
+      try {
+        const p = decoder.decode(data);
+        assert.ok(p.width * p.height <= 1 << 22 && p.y.length === p.width * p.height);
+      } catch (e) {
+        assert.ok(e instanceof VideoError, e.stack);
+        failed++;
+      }
+    }
+  }
+  assert.ok(failed > 100, String(failed));
 });
