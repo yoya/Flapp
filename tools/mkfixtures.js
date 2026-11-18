@@ -12,8 +12,14 @@
 //   tone.mp3        lame --quiet -r -s 22.05 -m m --bitwidth 16 --signed --little-endian -b 32 tone.raw tone.mp3
 //   tone-adpcm.flv  ffmpeg -f s16le -ar 22050 -ac 1 -i tone.raw -c:a adpcm_swf -f flv tone-adpcm.flv
 //                   （ADPCM の復号を ffmpeg の復号結果と突き合わせるため。test/sound.test.js）
+//
+// ビデオのテスト用の素材は、ffmpeg のテスト用の絵（64×48 px、8 フレーム、4 フレームごとにキーフレーム）から作った:
+//   video-h263.flv  ffmpeg -f lavfi -i testsrc2=size=64x48:rate=12 -frames:v 8 -c:v flv -g 4 -q:v 4 -an -fflags +bitexact -flags +bitexact video-h263.flv
+//   video-h263.yuv  ffmpeg -i video-h263.flv -f rawvideo -pix_fmt yuv420p video-h263.yuv
+//                   （H.263 の復号を ffmpeg の復号結果と突き合わせるため。test/video.test.js）
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parseFLV } from '../src/video/flv.js';
 import { crc32, deflateSync } from 'node:zlib';
 
 export const u16 = (v) => [v & 0xff, (v >> 8) & 0xff];
@@ -1310,6 +1316,76 @@ export const callOtherClip = swf({
     PlaceObject2({ depth: 1, id: 2, name: 'card', matrix: { tx: 400, ty: 400 } }),
     DoAction([PushString('x'), PushString('root-var'), SetVariable, PushString('card:2'), Call, Stop]),
     ShowFrame(), End(),
+  ],
+});
+
+// --- ビデオ（仕様 14 章） ---
+const DefineVideoStream = (id, numFrames, width, height, codec, smoothing = false) =>
+  tag(60, [...u16(id), ...u16(numFrames), ...u16(width), ...u16(height), smoothing ? 1 : 0, codec]);
+const VideoFrame = (id, n, data) => tag(61, [...u16(id), ...u16(n), ...data], true);
+// 埋め込みのビデオを 1 フレームにつき 1 枚ずつ進めて、最後のフレームで止まるタイムライン。表示するフレームは ratio で指定する。
+// extra(n) は、フレーム n に足すタグ。
+const videoTimeline = (id, packets, place, extra = () => []) => packets.flatMap((data, n) => [
+  VideoFrame(id, n, data),
+  n === 0 ? PlaceObject2({ depth: 1, id, ratio: 0, matrix: place }) : PlaceObject2({ depth: 1, move: true, ratio: n }),
+  ...extra(n),
+  ...(n === packets.length - 1 ? [DoAction([Stop])] : []),
+  ShowFrame(),
+]);
+
+// Sorenson H.263: ffmpeg で作った 8 フレームを 2 倍に拡大して再生する。6 フレーム目からは、フレーム 2 で止まったままの
+// もう 1 つのインスタンスを右に置く（差分フレームなので、キーフレーム 0 から順に復号しないと出せない）。
+const h263Packets = parseFLV(readFileSync(new URL('assets/video-h263.flv', import.meta.url))).video.map((t) => [...t.data]);
+fixtures['video-h263'] = swf({
+  version: 8, frames: h263Packets.length,
+  tags: [
+    SetBackgroundColor(0xee, 0xee, 0xee),
+    DefineVideoStream(1, h263Packets.length, 64, 48, 2),
+    ...videoTimeline(1, h263Packets, { a: 2, d: 2, tx: 200, ty: 200 }, (n) => (n === 5 ? [PlaceObject2({ depth: 2, id: 1, ratio: 2, matrix: { tx: 3200, ty: 200 } })] : [])),
+    End(),
+  ],
+});
+
+// Screen Video のテスト用の絵。40×24 px で、ブロックは 16×16（右端と上端は半端な大きさのブロックになる）。
+// フレーム 0 は全体（キーフレーム）、フレーム 1 と 2 は、それぞれ 1 つのブロックだけが変わる。
+export const SCREEN_VIDEO = { width: 40, height: 24, block: 16, frames: 3 };
+/** フレーム n の、(x, y)（左上が原点）の画素 [r, g, b]。 */
+export function screenVideoPixel(n, x, y) {
+  if (n >= 1 && x >= 16 && x < 32 && y >= 8) return [255, 200 - (x - 16) * 8, 0]; // 下の段の中央のブロック
+  if (n >= 2 && x >= 32 && y < 8) return [0, 255 - y * 16, 255]; // 上の段の右端のブロック
+  return [x * 6, y * 10, 128];
+}
+// SCREENVIDEOPACKET。ブロックは左下から右上へ並び、ブロックの中の画素も下の行から BGR で入る。変わらないブロックは長さ 0。
+// 先頭には、FLV のビデオタグと同じ 1 バイト（上位 4 ビットがフレームの種類、下位がコーデック）を付ける。仕様書の VideoFrame の表には
+// 無いが、実機はこれが無いと何も表示しない。
+function screenVideoPacket(n) {
+  const { width, height, block } = SCREEN_VIDEO;
+  const out = [(n === 0 ? 0x10 : 0x20) | 3, ((block / 16 - 1) << 4) | (width >> 8), width & 0xff, ((block / 16 - 1) << 4) | (height >> 8), height & 0xff];
+  for (let bottom = 0; bottom < height; bottom += block) {
+    for (let left = 0; left < width; left += block) {
+      const pixels = [];
+      let changed = n === 0;
+      for (let row = 0; row < Math.min(block, height - bottom); row++) {
+        const y = height - 1 - (bottom + row);
+        for (let x = left; x < Math.min(left + block, width); x++) {
+          const color = screenVideoPixel(n, x, y);
+          pixels.push(color[2], color[1], color[0]);
+          if (n > 0 && String(screenVideoPixel(n - 1, x, y)) !== String(color)) changed = true;
+        }
+      }
+      const data = changed ? [...deflateSync(Uint8Array.from(pixels))] : [];
+      out.push(data.length >> 8, data.length & 0xff, ...data);
+    }
+  }
+  return out;
+}
+fixtures['video-screen'] = swf({
+  version: 8, frames: SCREEN_VIDEO.frames,
+  tags: [
+    SetBackgroundColor(0xee, 0xee, 0xee),
+    DefineVideoStream(1, SCREEN_VIDEO.frames, SCREEN_VIDEO.width, SCREEN_VIDEO.height, 3),
+    ...videoTimeline(1, Array.from({ length: SCREEN_VIDEO.frames }, (_, n) => screenVideoPacket(n)), { a: 4, d: 4, tx: 200, ty: 200 }),
+    End(),
   ],
 });
 

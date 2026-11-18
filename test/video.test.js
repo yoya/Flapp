@@ -1,0 +1,208 @@
+// ビデオ: タグの解析、Sorenson H.263 と Screen Video の復号、埋め込みビデオの再生、FLV の分解と再生。
+// H.263 の復号結果は、ffmpeg で復号した結果（tools/assets/video-h263.yuv）と比べる。
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { Movie } from '../src/player/movie.js';
+import { SoundMixer } from '../src/player/sound.js';
+import { FlvPlayback, embeddedSequence } from '../src/player/video.js';
+import { parseSWF } from '../src/swf/parse.js';
+import { parseDefineVideoStream, parseVideoFrame } from '../src/swf/video.js';
+import { parseFLV } from '../src/video/flv.js';
+import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../src/video/h263.js';
+import { ScreenVideoDecoder } from '../src/video/screen.js';
+import { SCREEN_VIDEO, fixtures, screenVideoPixel } from '../tools/mkfixtures.js';
+
+const asset = (name) => readFileSync(new URL(`../tools/assets/${name}`, import.meta.url));
+const flvBytes = asset('video-h263.flv');
+const tagsOf = async (name, code) => (await parseSWF(fixtures[name])).tags.filter((t) => t.code === code);
+// FlvPlayback を動かすための、時刻を手で進められる最小限のホスト。
+function host() {
+  const h = { time: 0, now: () => h.time, warnings: [], warn: (m) => h.warnings.push(m) };
+  h.sounds = new SoundMixer(h, null);
+  return h;
+}
+
+test('DefineVideoStream と VideoFrame を解析する', async () => {
+  const [define] = (await tagsOf('video-h263', 60)).map(parseDefineVideoStream);
+  assert.deepEqual(define, { id: 1, numFrames: 8, width: 64, height: 48, deblocking: 0, smoothing: false, codec: 'h263' });
+  const frames = (await tagsOf('video-h263', 61)).map(parseVideoFrame);
+  assert.deepEqual(frames.map((f) => [f.streamId, f.frameNum]), Array.from({ length: 8 }, (_, n) => [1, n]));
+  assert.equal(parseDefineVideoStream((await tagsOf('video-screen', 60))[0]).codec, 'screen');
+});
+
+test('H.263: 復号結果が ffmpeg の復号結果と一致する（逆 DCT の丸めの差だけ）', () => {
+  const flv = parseFLV(flvBytes);
+  const reference = asset('video-h263.yuv');
+  const decoder = new H263Decoder();
+  let at = 0;
+  flv.video.forEach((tag, n) => {
+    const p = decoder.decode(tag.data);
+    assert.deepEqual([p.width, p.height, p.stride], [64, 48, 64]);
+    for (const [plane, w, h] of [[p.y, 64, 48], [p.cb, 32, 24], [p.cr, 32, 24]]) {
+      let sum = 0, max = 0;
+      for (let i = 0; i < w * h; i++) {
+        const d = Math.abs(plane[i] - reference[at + i]);
+        sum += d;
+        max = Math.max(max, d);
+      }
+      at += w * h;
+      assert.ok(max <= 3 && sum / (w * h) < 0.1, `frame ${n}: max ${max}, mean ${sum / (w * h)}`);
+    }
+  });
+  assert.equal(at, reference.length);
+});
+
+test('H.263: ピクチャの見出しと、壊れたデータの扱い', () => {
+  const { video } = parseFLV(flvBytes);
+  assert.deepEqual(video.map((t) => readPictureHeader(t.data).type), [0, 1, 1, 1, 0, 1, 1, 1]); // 4 フレームごとにキーフレーム
+  const header = readPictureHeader(video[0].data);
+  assert.deepEqual([header.version, header.width, header.height], [1, 64, 48]);
+  // キーフレームより前の差分フレーム、途中で切れたデータ、開始符号の無いデータは、VideoError になる。
+  assert.throws(() => new H263Decoder().decode(video[1].data), VideoError);
+  assert.throws(() => new H263Decoder().decode(video[0].data.subarray(0, 40)), VideoError);
+  assert.throws(() => new H263Decoder().decode(new Uint8Array(64).fill(0xff)), VideoError);
+  // 大きすぎる寸法（65535×65535）は、面を確保する前に断る。
+  assert.throws(() => readPictureHeader(Uint8Array.from([0, 0, 0x80, 0, 0xff, 0xff, 0xff, 0xff, 0x80, 0, 0])), /out of range/);
+  // RGBA への変換: 寸法どおりの大きさで、不透明。
+  const rgba = toRGBA(new H263Decoder().decode(video[0].data));
+  assert.equal(rgba.length, 64 * 48 * 4);
+  assert.ok(rgba.every((v, i) => i % 4 !== 3 || v === 255));
+});
+
+test('Screen Video: 変わったブロックだけを書き換えて、各フレームの画素が元の絵と一致する', async () => {
+  const frames = (await tagsOf('video-screen', 61)).map(parseVideoFrame);
+  const decoder = new ScreenVideoDecoder();
+  frames.forEach((frame, n) => {
+    const p = decoder.decode(frame.data.subarray(1)); // 先頭の 1 バイトは、フレームの種類とコーデック
+    assert.deepEqual([p.width, p.height], [SCREEN_VIDEO.width, SCREEN_VIDEO.height]);
+    for (let y = 0; y < p.height; y++) {
+      for (let x = 0; x < p.width; x++) {
+        const i = (y * p.width + x) * 4;
+        assert.deepEqual([...p.rgba.subarray(i, i + 4)], [...screenVideoPixel(n, x, y), 255], `frame ${n} (${x}, ${y})`);
+      }
+    }
+  });
+  assert.throws(() => new ScreenVideoDecoder().decode(frames[0].data.subarray(1, 30)), VideoError);
+  assert.throws(() => new ScreenVideoDecoder().decode(Uint8Array.from([0x0f, 0xff, 0x0f, 0xff])), /out of range/); // 4095×4095
+});
+
+test('埋め込みビデオ: ratio で指定されたフレームが表示される', async () => {
+  const movie = await Movie.load(fixtures['video-h263']);
+  for (let i = 0; i < 10; i++) movie.advance();
+  const [main, still] = movie.root.sortedChildren();
+  // 期待する絵: 先頭から順に復号したもの。
+  const decoder = new H263Decoder();
+  const pictures = parseFLV(flvBytes).video.map((t) => toRGBA(decoder.decode(t.data)));
+  assert.equal(main.ratio, 7);
+  assert.deepEqual(main.image().rgba, pictures[7]);
+  assert.equal(still.ratio, 2); // 後から置かれて、フレーム 2 のまま（キーフレーム 0 から復号される）
+  assert.deepEqual(still.image().rgba, pictures[2]);
+  // 描画命令は、ビデオの枠（64×48 px）いっぱいにその絵を塗った矩形。
+  const [op] = main.paths();
+  assert.equal(op.style.bitmap, main.image());
+  assert.deepEqual(op.path, [['M', 0, 0], ['L', 1280, 0], ['L', 1280, 960], ['L', 0, 960], ['Z']]);
+  assert.deepEqual(main.boundsInParent(), { xmin: 200, xmax: 200 + 2560, ymin: 200, ymax: 200 + 1920 }); // 2 倍に拡大して置いてある
+  assert.deepEqual(movie.warnings, []);
+
+  const screen = await Movie.load(fixtures['video-screen']);
+  for (let i = 0; i < 5; i++) screen.advance();
+  const image = screen.root.sortedChildren()[0].image();
+  assert.deepEqual([...image.rgba.subarray(0, 4)], [...screenVideoPixel(2, 0, 0), 255]);
+});
+
+test('埋め込みビデオ: 一度に復号するフレーム数には上限があり、壊れたフレームは警告を残して止まる', async () => {
+  const packets = (await tagsOf('video-screen', 61)).map((t) => parseVideoFrame(t).data);
+  // 100 フレームぶんのストリーム（中身は 3 種類の繰り返し）。いきなり最後のフレームを求めても、1 回では追いつかない。
+  const frames = new Map(Array.from({ length: 100 }, (_, n) => [n, packets[n % 3]]));
+  const warnings = [];
+  const sequence = embeddedSequence('screen', frames, (m) => warnings.push(m));
+  sequence.show(99);
+  assert.equal(sequence.decoded, 31);
+  for (let i = 0; i < 3; i++) sequence.show(99);
+  assert.equal(sequence.decoded, 99);
+  assert.deepEqual(warnings, []);
+  // 壊れたフレームに当たったら、それより前の絵を残して止まる。
+  frames.set(50, packets[0].subarray(0, 20));
+  const broken = embeddedSequence('screen', frames, (m) => warnings.push(m));
+  for (let i = 0; i < 5; i++) broken.show(99);
+  assert.equal(broken.decoded, 50);
+  assert.ok(broken.image);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^video frame 50: /);
+});
+
+test('埋め込みビデオ: 対応していないコーデックは、警告を残して表示しない', async () => {
+  const bytes = fixtures['video-h263'].slice();
+  const at = (await tagsOf('video-h263', 60))[0].offset;
+  bytes[at + 2 + 9] = 4; // DefineVideoStream の CodecID を VP6 にする（タグの見出し 2 バイト + 9 バイト目）
+  const movie = await Movie.load(bytes);
+  for (let i = 0; i < 3; i++) movie.advance();
+  assert.deepEqual(movie.warnings, ['video 1: codec vp6 is not supported (it will not be shown)']);
+  assert.deepEqual(movie.root.sortedChildren()[0].paths(), []);
+});
+
+test('FLV を分解する', () => {
+  const flv = parseFLV(flvBytes);
+  assert.equal(flv.video.length, 8);
+  assert.equal(flv.audio.length, 0);
+  assert.deepEqual(flv.video.map((t) => [t.codec, t.key]), Array.from({ length: 8 }, (_, n) => ['h263', n % 4 === 0]));
+  assert.deepEqual(flv.video.map((t) => t.time), [0, 83, 167, 250, 333, 417, 500, 583]);
+  assert.equal(flv.duration, 583);
+  assert.deepEqual({ ...flv.metadata }, { duration: 0.666, width: 64, height: 48, videodatarate: 195.3125, framerate: 12, videocodecid: 2, filesize: 4182 });
+  // 音声つきのファイル（ADPCM、tools/assets/tone-adpcm.flv）。
+  const tone = parseFLV(asset('tone-adpcm.flv'));
+  assert.equal(tone.video.length, 0);
+  assert.deepEqual([tone.audio[0].format, tone.audio[0].rate, tone.audio[0].bits16, tone.audio[0].stereo], ['adpcm', 22050, true, false]);
+  // 途中で切れたファイルは、読めたところまで。FLV でないものは VideoError。
+  assert.equal(parseFLV(flvBytes.subarray(0, 3000)).video.length, 4);
+  assert.throws(() => parseFLV(Uint8Array.from([0x46, 0x57, 0x53, 8, 0, 0, 0, 0, 0])), VideoError);
+});
+
+test('FLV の再生: 時刻に合わせて絵が進み、最後のタグの時刻で終わる', () => {
+  const h = host();
+  const playback = new FlvPlayback(h, parseFLV(flvBytes));
+  const decoder = new H263Decoder();
+  const pictures = parseFLV(flvBytes).video.map((t) => toRGBA(decoder.decode(t.data)));
+  assert.equal(playback.duration, 583);
+  playback.play(0);
+  assert.deepEqual(playback.image().rgba, pictures[0]);
+  h.time = 260; // フレーム 3（250 ms）
+  assert.deepEqual(playback.image().rgba, pictures[3]);
+  assert.equal(playback.time, 260);
+  assert.equal(playback.finished(), false);
+  playback.pause();
+  h.time = 1000;
+  assert.equal(playback.time, 260); // 止めている間は進まない
+  playback.resume();
+  h.time = 1100; // 再開してから 100 ms
+  assert.equal(playback.time, 360);
+  assert.deepEqual(playback.image().rgba, pictures[4]);
+  // 位置の変更は、指定より前でいちばん近いキーフレーム（0 ms か 333 ms）になる。
+  playback.seek(300);
+  assert.equal(playback.time, 0);
+  playback.seek(500);
+  assert.equal(playback.time, 333);
+  assert.deepEqual(playback.image().rgba, pictures[4]);
+  h.time += 400;
+  assert.equal(playback.finished(), true);
+  assert.equal(playback.finished(), false); // 終わりの通知は 1 回だけ
+  assert.equal(playback.time, 583);
+  assert.deepEqual(playback.image().rgba, pictures[7]);
+  assert.deepEqual(h.warnings, []);
+});
+
+test('FLV の再生: 復号できない映像や音声は、警告を残して飛ばす', () => {
+  const h = host();
+  const playback = new FlvPlayback(h, parseFLV(asset('tone-adpcm.flv')));
+  playback.play(0);
+  assert.equal(playback.image(), null);
+  assert.deepEqual(h.warnings, ['video: FLV audio format adpcm is not supported (it will be silent)']);
+  // H.264 は、ホストがデコーダを渡さなければ映らない。
+  const flv = parseFLV(flvBytes);
+  flv.video.forEach((t) => { t.codec = 'avc'; t.packetType = 1; });
+  const avc = new FlvPlayback(h, flv);
+  avc.play(0);
+  assert.equal(avc.image(), null);
+  assert.equal(h.warnings[1], 'video: codec avc needs a decoder from the host (it will not be shown)');
+});
