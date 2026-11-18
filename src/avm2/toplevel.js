@@ -1,5 +1,5 @@
 // AS3 の基本の組み込み: Object、Class、Function、Array、String、Number / int / uint、Boolean、Math、Error とその派生、大域関数。
-import { ASArray, ASClass, ASFunction, ASObject, ASThrown, publicKey } from './object.js';
+import { ASArray, ASClass, ASFunction, ASObject, ASThrown, ASVector, publicKey } from './object.js';
 
 const MAX_ARRAY = 1 << 24;
 
@@ -18,7 +18,7 @@ export function installToplevel(vm) {
       toString: (self) => (self instanceof ASClass ? `[class ${self.shortName}]` : self instanceof ASFunction ? 'function Function() {}' : `[object ${vm.classOf(self)?.shortName ?? 'Object'}]`),
       valueOf: (self) => self,
       toLocaleString: (self) => str(self),
-      hasOwnProperty: (self, [name]) => (self instanceof ASArray && /^\d+$/.test(str(name)) ? Number(str(name)) in self.items
+      hasOwnProperty: (self, [name]) => ((self instanceof ASArray || self instanceof ASVector) && /^\d+$/.test(str(name)) ? vm.hasProperty(self, vm.keyName(Number(str(name))))
         : vm.hasTrait(self, publicName(str(name))) || (self instanceof ASObject && self.values.has(publicKey(str(name))))),
       propertyIsEnumerable: (self, [name]) => vm.enumerate(self).map(String).includes(str(name)),
       isPrototypeOf: (self, [v]) => { for (let p = v instanceof ASObject ? (v.proto !== undefined ? v.proto : v.klass?.prototype) : null; p; p = p.proto) if (p === self) return true; return false; },
@@ -226,6 +226,7 @@ export function installToplevel(vm) {
     if (flags & 1) return (a, b) => { const x = str(a).toLowerCase(), y = str(b).toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; };
     return compare;
   };
+  vm.sorting = { quicksort, comparer }; // Vector の sort も同じ手順を使う
   c.Array = vm.defineClass({
     name: 'Array', dynamic: true,
     allocate: () => new ASArray(vm),
@@ -335,7 +336,12 @@ export function installToplevel(vm) {
     c[name] = vm.defineClass({ name, base: c.Error, dynamic: true, construct: (self, args) => vm.call(c.Error.constructorFn, self, args), callAsFunction: (args) => vm.construct(c[name], args) });
   }
   c.Namespace = vm.defineClass({
-    name: 'Namespace', final: true, getters: { uri: (self) => self.namespace?.uri ?? '', prefix: () => undefined },
+    name: 'Namespace', final: true, getters: { uri: (self) => self.namespace?.uri ?? '', prefix: (self) => self.namespace?.prefix },
+    // new Namespace(uri) / new Namespace(接頭辞, uri)
+    construct: (self, args) => {
+      const uri = args.length >= 2 ? args[1] : args[0];
+      self.namespace = { kind: 'namespace', uri: uri instanceof ASObject && uri.namespace ? uri.namespace.uri : uri === undefined ? '' : str(uri), prefix: args.length >= 2 ? str(args[0]) : undefined };
+    },
     methods: { toString: (self) => self.namespace?.uri ?? '', valueOf: (self) => self.namespace?.uri ?? '' },
   });
 

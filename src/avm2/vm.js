@@ -5,10 +5,16 @@
 // 命令数・割り当て数・呼び出しの深さに上限を設ける。
 import { parseABC } from './abc.js';
 import { execute } from './interp.js';
-import { ASArray, ASClass, ASFunction, ASObject, ASThrown, AVM2LimitError, PUBLIC, nsKey, publicKey } from './object.js';
+import { installDate } from './date.js';
+import { installJSON } from './json.js';
+import { ASArray, ASClass, ASFunction, ASObject, ASThrown, ASVector, AVM2LimitError, PUBLIC, nsKey, publicKey } from './object.js';
+import { installRegExp } from './regexp.js';
 import { installToplevel } from './toplevel.js';
+import { installVector } from './vector.js';
+import { installXML } from './xml.js';
 
 const EMPTY = Object.freeze([]);
+const PUBLIC_SPACES = Object.freeze([{ kind: 'package', uri: '' }]);
 
 export class AVM2 {
   /**
@@ -35,6 +41,11 @@ export class AVM2 {
     this.definitions = new Map(); // 大域の定義: キー → 値を持つ大域オブジェクト（スクリプトなら初期化を伴う）
     this.nativeGlobal = null;
     installToplevel(this);
+    installVector(this);
+    installRegExp(this);
+    installDate(this);
+    installJSON(this);
+    installXML(this);
   }
 
   /** 割り当ての計上。上限を超えたら止める（スクリプトからは捕まえられない）。 */
@@ -131,7 +142,11 @@ export class AVM2 {
     if (m.resolved) return m.resolved;
     if (m.kind === 'QName') return (m.resolved = { name: m.name, keys: [`${nsKey(m.ns ?? { kind: 'any', uri: '' })}|${m.name}`], attribute: m.attribute });
     if (m.kind === 'Multiname') return (m.resolved = { name: m.name, keys: m.nsSet.map((ns) => `${nsKey(ns)}|${m.name}`), attribute: m.attribute });
-    if (m.kind === 'TypeName') return (m.resolved = { ...this.resolveName(abc, m.base, stack), typeParams: m.params });
+    if (m.kind === 'TypeName') {
+      // 型引数つきの名前（Vector.<T>）。土台がまた型引数つき、という入れ子（循環しうる）は認めない。
+      const base = abc.multinames[m.base]?.kind === 'TypeName' ? { name: '', keys: EMPTY } : this.resolveName(abc, m.base, stack);
+      return (m.resolved = { ...base, typeParams: m.params });
+    }
     // ここから下は実行時に決まる
     let name = m.name;
     if (m.kind === 'MultinameL' || m.kind === 'RTQNameL') name = stack.pop();
@@ -142,8 +157,23 @@ export class AVM2 {
     }
     // 数値の名前（配列の添字）はそのまま持つ。QName オブジェクトなら、その名前空間と名前を使う。
     if (name instanceof ASObject && name.qname) return { name: name.qname.name, keys: [`${nsKey(name.qname.ns)}|${name.qname.name}`] };
-    const text = typeof name === 'number' ? name : this.toStr(name);
+    return m.attribute ? { ...this.keyName(name, spaces), attribute: true } : this.keyName(name, spaces);
+  }
+
+  /**
+   * 実行時の値 key を名前にした参照（obj[key]）。数値はそのまま（配列の添字）、オブジェクトは raw に持ち、
+   * 使う側で文字列にする（Dictionary だけは、オブジェクトそのものをキーにする）。
+   */
+  keyName(key, spaces = PUBLIC_SPACES) {
+    if (key instanceof ASObject) return { name: '', keys: EMPTY, late: true, raw: key, spaces };
+    const text = typeof key === 'number' ? key : this.toStr(key);
     return { name: text, keys: spaces.map((ns) => `${nsKey(ns)}|${text}`), late: true };
+  }
+
+  // オブジェクトを名前にした参照を、文字列の名前にする。
+  #textName(rn) {
+    const text = this.toStr(rn.raw);
+    return { name: text, keys: rn.spaces.map((ns) => `${nsKey(ns)}|${text}`), late: true };
   }
 
   // --- クラスの組み立て ---
@@ -208,7 +238,7 @@ export class AVM2 {
       isInterface: inst.isInterface, dynamic: !inst.sealed, final: inst.final,
     });
     for (const i of inst.interfaces) {
-      const found = this.#lookupClass(abc, i);
+      const found = this.lookupClass(abc, i);
       if (found) for (const x of [found, ...found.interfaces]) klass.interfaces.add(x);
     }
     const classScope = [...scope, { object: klass }];
@@ -233,12 +263,14 @@ export class AVM2 {
     return klass;
   }
 
-  #lookupClass(abc, multinameIndex) {
-    const { keys } = this.resolveName(abc, multinameIndex, EMPTY);
+  /** 型の名前（multiname）からクラスを得る。Vector.<T> は、型引数を当てはめたクラスになる。無ければ undefined。 */
+  lookupClass(abc, multinameIndex, depth = 0) {
+    if (depth > 4) return undefined; // 型引数の入れ子の上限（循環した定義への備え）
+    const { keys, typeParams } = this.resolveName(abc, multinameIndex, EMPTY);
     const holder = this.globalHolder(keys);
     for (const key of keys) {
       const v = holder?.values.get(key);
-      if (v instanceof ASClass) return v;
+      if (v instanceof ASClass) return typeParams && v === this.classes.Vector ? this.applyType(v, typeParams.map((p) => (p ? this.lookupClass(abc, p, depth + 1) ?? null : null))) : v;
     }
     return undefined;
   }
@@ -461,10 +493,28 @@ export class AVM2 {
     return rn.late || rn.keys.some((key) => key.startsWith(`${PUBLIC}|`)) ? publicKey(rn.name) : null;
   }
 
+  // Vector の添字。範囲外（負や小数を含む）は RangeError。数値でない名前なら undefined を返す（メンバーとして探す）。
+  #vectorIndex(obj, rn, limit) {
+    if (!this.#isIndex(rn.name)) {
+      if (typeof rn.name !== 'number') return undefined;
+    } else if (Number(rn.name) < limit) return Number(rn.name);
+    return this.throwError('RangeError', 1125, `The index ${rn.name} is out of range ${obj.items.length}.`);
+  }
+
   getProperty(obj, rn) {
     this.#nullCheck(obj, rn);
+    if (obj.xml || obj.list) return this.xml.get(obj, rn); // XML / XMLList: 名前は、子の要素や属性を指す
+    if (rn.raw !== undefined) {
+      if (obj instanceof ASObject && obj.dict) return obj.dict.get(rn.raw);
+      rn = this.#textName(rn);
+    }
     // 配列と文字列の添字
     if (obj instanceof ASArray && this.#isIndex(rn.name)) return obj.items[Number(rn.name)];
+    if (obj instanceof ASVector) {
+      const i = this.#vectorIndex(obj, rn, obj.items.length);
+      if (i !== undefined) return obj.items[i];
+    }
+    if (obj.bytes && this.#isIndex(rn.name)) return this.byteAt(obj, Number(rn.name)); // ByteArray の添字
     if (typeof obj === 'string' && this.#isIndex(rn.name)) return obj[Number(rn.name)];
     const trait = this.#findTrait(obj, rn);
     if (trait) {
@@ -513,6 +563,31 @@ export class AVM2 {
   /** プロパティへの代入。init は、定数の初期化（initproperty）のとき真。 */
   setProperty(obj, rn, value, init = false) {
     this.#nullCheck(obj, rn);
+    if (obj.xml || obj.list) {
+      this.xml.set(obj, rn, value);
+      return;
+    }
+    if (rn.raw !== undefined) {
+      if (obj instanceof ASObject && obj.dict) {
+        if (!obj.dict.has(rn.raw)) this.charge(1);
+        obj.dict.set(rn.raw, value);
+        return;
+      }
+      rn = this.#textName(rn);
+    }
+    if (obj.bytes && this.#isIndex(rn.name)) {
+      this.setByteAt(obj, Number(rn.name), value);
+      return;
+    }
+    if (obj instanceof ASVector) {
+      // 末尾のひとつ先への代入は、長さが固定でなければ要素を足す。
+      const i = this.#vectorIndex(obj, rn, obj.items.length + (obj.fixed ? 0 : 1));
+      if (i !== undefined) {
+        if (i === obj.items.length) this.charge(1);
+        obj.items[i] = obj.klass.vector.convert(value);
+        return;
+      }
+    }
     if (obj instanceof ASArray && this.#isIndex(rn.name)) {
       const i = Number(rn.name);
       if (i >= 1 << 24) this.throwError('RangeError', 1005, `Array index out of bounds ${i}.`);
@@ -546,6 +621,12 @@ export class AVM2 {
 
   hasProperty(obj, rn) {
     if (obj === null || obj === undefined) return false;
+    if (obj.xml || obj.list) return this.xml.has(obj, rn);
+    if (rn.raw !== undefined) {
+      if (obj instanceof ASObject && obj.dict) return obj.dict.has(rn.raw);
+      rn = this.#textName(rn);
+    }
+    if (obj instanceof ASVector && this.#isIndex(rn.name)) return Number(rn.name) < obj.items.length;
     if (obj instanceof ASArray && this.#isIndex(rn.name)) return Number(rn.name) in obj.items;
     if (this.#findTrait(obj, rn)) return true;
     if (obj === this.nativeGlobal) return rn.keys.some((k) => obj.values.has(k));
@@ -558,20 +639,33 @@ export class AVM2 {
 
   deleteProperty(obj, rn) {
     if (!(obj instanceof ASObject)) return false;
+    if (obj.xml || obj.list) return this.xml.delete(obj, rn);
+    if (rn.raw !== undefined) {
+      if (obj.dict) {
+        obj.dict.delete(rn.raw);
+        return true;
+      }
+      rn = this.#textName(rn);
+    }
     if (obj instanceof ASArray && this.#isIndex(rn.name)) {
       delete obj.items[Number(rn.name)];
       return true;
     }
     if (this.#findTrait(obj, rn)) return false;
     const key = this.#publicName(rn);
-    return key !== null && obj.values.delete(key);
+    if (key === null) return false;
+    // 動的なプロパティの削除は、そのプロパティが無くても true になる（実機で確認）。
+    return obj.values.delete(key) || !!obj.klass?.dynamic;
   }
 
   /** obj.name(...args)。 */
   callProperty(obj, rn, args) {
     this.#nullCheck(obj, rn);
+    if (rn.raw !== undefined && !(obj instanceof ASObject && obj.dict)) rn = this.#textName(rn);
     const trait = this.#findTrait(obj, rn);
     if (trait?.kind === 'method') return this.call(trait.fn, obj, args);
+    // XML / XMLList に無いメソッドは、文字列にしたものに対して呼ぶ（x.name.toUpperCase() など）。
+    if (obj.xml || obj.list) return this.callProperty(this.xml.string(obj), rn, args);
     // 数値や文字列などの基本型では、無いメソッドの呼び出しは「関数ではない」になる（オブジェクトでは「プロパティが無い」。実機で確認）。
     if (!(obj instanceof ASObject) && !this.hasProperty(obj, rn)) this.throwError('TypeError', 1006, `${rn.name} is not a function.`);
     const fn = this.getProperty(obj, rn);
@@ -583,13 +677,19 @@ export class AVM2 {
   /** 列挙できる名前（動的なプロパティと配列の添字）。for..in 用。 */
   enumerate(obj) {
     if (!(obj instanceof ASObject)) return [];
+    if (obj.xml || obj.list) return this.xml.enumerate(obj);
     const names = [];
     if (obj instanceof ASArray) for (let i = 0; i < obj.items.length; i++) if (i in obj.items) names.push(i);
+    if (obj instanceof ASVector) for (let i = 0; i < obj.items.length; i++) names.push(i);
     const traits = this.#traitsOf(obj);
     const prefix = `${PUBLIC}|`;
     for (const key of obj.values.keys()) {
-      if (key.startsWith(prefix) && !traits?.has(key) && !obj.hidden?.has(key)) names.push(key.slice(prefix.length));
+      if (!key.startsWith(prefix) || traits?.has(key) || obj.hidden?.has(key)) continue;
+      // 整数の形をした名前は、数値として列挙される（実機で確認）。
+      const name = key.slice(prefix.length);
+      names.push(/^(0|[1-9]\d{0,8})$/.test(name) && Number(name) < 0x10000000 ? Number(name) : name);
     }
+    if (obj.dict) names.push(...obj.dict.keys()); // Dictionary の、オブジェクトのキー
     return names;
   }
 
@@ -614,6 +714,8 @@ export class AVM2 {
     if (klass === c.Boolean) return typeof v === 'boolean';
     if (!(v instanceof ASObject)) return false;
     if (v instanceof ASClass) return klass === c.Class;
+    // Vector.<*> は、数値以外を要素にする Vector のどれにも当てはまる。
+    if (v instanceof ASVector && klass.vector && !klass.vector.type) return !v.klass.vector.numeric;
     return v.klass?.isSubclassOf(klass) ?? false;
   }
 
@@ -635,7 +737,7 @@ export class AVM2 {
   coerceByName(abc, typeIndex, v) {
     if (typeIndex === 0) return v;
     const m = abc.multinames[typeIndex];
-    if (m.typeClass === undefined) m.typeClass = this.#lookupClass(abc, typeIndex) ?? null;
+    if (m.typeClass === undefined) m.typeClass = this.lookupClass(abc, typeIndex) ?? null;
     return m.typeClass ? this.coerceTo(m.typeClass, v) : v;
   }
 
@@ -709,6 +811,7 @@ export class AVM2 {
   /** == の比較。 */
   equals(a, b) {
     if (a === b) return true;
+    if (this.xml.is(a) || this.xml.is(b)) return this.xml.equals(a, b);
     const nullish = (v) => v === null || v === undefined;
     if (nullish(a) || nullish(b)) return nullish(a) && nullish(b);
     const ta = typeof a, tb = typeof b;
@@ -737,6 +840,7 @@ export class AVM2 {
   /** + 演算子。数値どうしなら和、どちらかが文字列なら連結。 */
   add(a, b) {
     if (typeof a === 'number' && typeof b === 'number') return a + b;
+    if (this.xml.is(a) && this.xml.is(b)) return this.xml.concat(a, b); // XML どうしの + は、XMLList をつなぐ
     // 片方が文字列なら、もう片方は文字列として読む（オブジェクトは valueOf より toString が先。実機で確認）。
     const hint = typeof a === 'string' || typeof b === 'string' ? 'string' : 'default';
     const pa = this.toPrimitive(a, hint);
@@ -752,7 +856,7 @@ export class AVM2 {
   typeOf(v) {
     if (v === null) return 'object';
     if (v instanceof ASFunction) return 'function';
-    if (v instanceof ASObject) return v.xml ? 'xml' : 'object';
+    if (v instanceof ASObject) return v.xml || v.list ? 'xml' : 'object';
     return typeof v;
   }
 }

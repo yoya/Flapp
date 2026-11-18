@@ -56,7 +56,8 @@ export function execute(vm, fn, thisValue, args) {
     for (const list of [scopes, saved]) {
       for (let i = list.length - 1; i >= 0; i--) {
         const s = list[i];
-        if (s.with || s.object?.klass?.name === 'global' ? vm.hasProperty(s.object, rn) : vm.hasTrait(s.object, rn)) return s.object;
+        // XML を with で積んだとき（x.(条件) の絞り込み）は、子の要素や属性のほかに、メソッド（text() など）も見つかる。
+        if (s.with || s.object?.klass?.name === 'global' ? vm.hasProperty(s.object, rn) || (vm.xml.is(s.object) && vm.hasTrait(s.object, rn)) : vm.hasTrait(s.object, rn)) return s.object;
       }
     }
     const holder = vm.globalHolder(rn.keys);
@@ -71,11 +72,17 @@ export function execute(vm, fn, thisValue, args) {
     return undefined;
   };
   const slotKey = (obj, n) => (obj instanceof ASClass ? obj.staticSlotKeys : obj?.klass?.slotKeys)?.[n];
-  const typeFor = (index) => {
-    const rn = name(index);
-    const holder = vm.globalHolder(rn.keys);
-    for (const key of rn.keys) { const v = holder?.values.get(key); if (v instanceof ASClass) return v; }
-    return undefined;
+  const typeFor = (index) => vm.lookupClass(abc, index);
+  // for..in / for each の列挙。名前の一覧は列挙の開始時（位置 0）に作り、途中はそれを使い回す
+  // （1 回の繰り返しごとに作り直すと、要素数の 2 乗の時間がかかる）。
+  let enumerations = null;
+  const enumerate = (obj, i) => {
+    let names = i > 0 ? enumerations?.get(obj) : undefined;
+    if (!names) {
+      names = vm.enumerate(obj);
+      if (obj instanceof ASObject) (enumerations ??= new Map()).set(obj, names);
+    }
+    return names;
   };
 
   let pc = 0;
@@ -154,6 +161,20 @@ export function execute(vm, fn, thisValue, args) {
             break;
           }
 
+          // --- XML (E4X) ---
+          case 0x59: { // getdescendants: x..name
+            const rn = name(a[0]);
+            const obj = pop();
+            if (!vm.xml.is(obj)) vm.throwError('TypeError', 1016, `Descendants operator (..) not supported on type ${vm.className(obj)}.`);
+            stack.push(vm.xml.descendants(obj, rn));
+            break;
+          }
+          case 0x78: if (!vm.xml.is(stack[stack.length - 1])) vm.throwError('TypeError', 1123, `Filter operator not supported on type ${vm.className(stack[stack.length - 1])}.`); break; // checkfilter
+          case 0x06: break; // dxns: 既定の XML 名前空間の指定は使わない
+          case 0x07: pop(); break; // dxnslate
+          case 0x71: stack.push(vm.xml.escapeElement(pop())); break;
+          case 0x72: stack.push(vm.xml.escapeAttribute(pop())); break;
+
           // --- 呼び出しと生成 ---
           case 0x46: case 0x4c: case 0x4f: { // callproperty / callproplex / callpropvoid
             const list = popArgs(a[1]);
@@ -204,7 +225,7 @@ export function execute(vm, fn, thisValue, args) {
             break;
           }
           case 0x56: stack.push(new ASArray(vm, popArgs(a[0]))); break;
-          case 0x53: { popArgs(a[0]); break; } // applytype: 型引数は使わない（Vector.<T> は Vector として扱う）
+          case 0x53: { const params = popArgs(a[0]); stack.push(vm.applyType(pop(), params)); break; } // applytype: Vector.<T>
           case 0x47: return undefined;
           case 0x48: return vm.coerceByName(abc, method.returnType, pop());
           case 0x03: throw new ASThrown(pop());
@@ -265,7 +286,7 @@ export function execute(vm, fn, thisValue, args) {
           case 0xae: { const b = pop(); stack.push(vm.lessThan(b, pop()) === false); break; }
           case 0xaf: { const b = pop(); stack.push(vm.lessThan(b, pop()) === true); break; }
           case 0xb0: { const b = pop(); stack.push(vm.lessThan(pop(), b) === false); break; }
-          case 0xb4: { const obj = pop(); const key = pop(); stack.push(vm.hasProperty(obj, { name: typeof key === 'number' ? key : vm.toStr(key), keys: [publicKey(vm.toStr(key))], late: true })); break; }
+          case 0xb4: { const obj = pop(); const key = pop(); stack.push(vm.hasProperty(obj, vm.keyName(key))); break; }
 
           // --- 分岐 ---
           case 0x10: pc = x.target; break;
@@ -287,8 +308,8 @@ export function execute(vm, fn, thisValue, args) {
 
           // --- 列挙 (for..in / for each) ---
           case 0x32: { // hasnext2: 局所変数のオブジェクトと位置を進める
-            const names = vm.enumerate(locals[a[0]]);
             const i = vm.toInt32(locals[a[1]]);
+            const names = enumerate(locals[a[0]], i);
             if (i < names.length) {
               locals[a[1]] = i + 1;
               stack.push(true);
@@ -299,13 +320,13 @@ export function execute(vm, fn, thisValue, args) {
             }
             break;
           }
-          case 0x1f: { const i = vm.toInt32(pop()); const obj = pop(); stack.push(i < vm.enumerate(obj).length ? i + 1 : 0); break; }
-          case 0x1e: { const i = vm.toInt32(pop()); const obj = pop(); stack.push(vm.enumerate(obj)[i - 1]); break; }
+          case 0x1f: { const i = vm.toInt32(pop()); const obj = pop(); stack.push(i < enumerate(obj, i).length ? i + 1 : 0); break; }
+          case 0x1e: { const i = vm.toInt32(pop()); const obj = pop(); stack.push(enumerate(obj, i)[i - 1]); break; }
           case 0x23: {
             const i = vm.toInt32(pop());
             const obj = pop();
-            const key = vm.enumerate(obj)[i - 1];
-            stack.push(key === undefined ? undefined : vm.getProperty(obj, { name: key, keys: [publicKey(key)], late: true }));
+            const key = enumerate(obj, i)[i - 1];
+            stack.push(key === undefined ? undefined : vm.getProperty(obj, vm.keyName(key)));
             break;
           }
 
