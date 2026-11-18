@@ -12,6 +12,7 @@ SWF ファイルを読み込んで、ブラウザの Canvas に再生します�
   ボタン、マスク、ブレンド、フィルタ（ぼかし・影・光彩・色行列）
 - **スクリプト**: ActionScript 1 / 2 (AVM1) と ActionScript 3 (AVM2)
 - **音**: イベント音とストリーム音（PCM、ADPCM、MP3）
+- **ビデオ**: SWF に埋め込まれたビデオと FLV ファイル（Sorenson H.263、Screen Video。ブラウザでは H.264 と AAC も）
 - **入力**: マウスとキーボード
 
 SWF は信用できない入力として扱います。
@@ -22,7 +23,7 @@ SWF は信用できない入力として扱います。
 
 未対応のもの:
 
-- ビデオ（FLV、`NetStream`）
+- VP6 と Screen Video v2 のビデオ、ActionScript 1 / 2 からのビデオの操作（`NetStream`）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
@@ -38,7 +39,7 @@ Node.js（22 で動作を確認）とブラウザが要ります。
 npm run serve
 ```
 
-`http://localhost:8123/web/index.html` を開き、SWF ファイルを選ぶか、ページにドロップします。
+`http://localhost:8123/web/index.html` を開き、SWF ファイル（または FLV ファイル）を選ぶか、ページにドロップします。
 サーバはリポジトリ直下を、このマシン (127.0.0.1) にだけ公開します。
 
 - 音は、ページを最初にクリックするかキーを押した後から鳴ります（ブラウザの制限）。
@@ -52,7 +53,11 @@ import { Movie } from './src/player/movie.js';
 import { CanvasRenderer } from './src/render/canvas.js';
 
 const renderer = new CanvasRenderer(canvas);
-const movie = await Movie.load(bytes, { trace: console.log, rasterize: renderer.rasterizer() });
+const movie = await Movie.load(bytes, {
+  trace: console.log,
+  rasterize: renderer.rasterizer(),
+  media: (url) => (url === 'movie.flv' ? flvBytes : null), // NetStream.play(url) が再生する FLV（プレイヤーは自分では取りに行かない）
+});
 await renderer.prepare(movie); // JPEG などのビットマップを復号する
 setInterval(() => {
   movie.advance(); // 1 フレーム進める
