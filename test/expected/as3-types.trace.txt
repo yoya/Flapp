@@ -1,0 +1,29 @@
+-- typeof
+number number string boolean object undefined object object function object object
+-- int / uint / Number
+3.5 3 1 -1 -3 3 -3 12 16 0 0 0 1 5
+4294967295 3 12.5 0 NaN 0 NaN 1 1000 31
+Infinity -Infinity NaN 0.30000000000000004 1e+21 1e-7 123456789012345680000 10000000000 2147483648 -2147483648 2 2147483645 -3 -2147483648 -6
+int overflow -2147483648
+uint underflow -1
+-- String
+1 null undefined true 1 1,2 [object Object] anull aundefined 12 12 2 true true false
+12 e 101 4 8 World Wor Wor lo,  Wor HELLO, WORLD hello, world Hello,World 12 Hello, AS3 Hello, World!1
+-- Boolean
+false false true false false true true true y z 0 0
+-- equality
+true false true false false true true true false false false
+-- is / as
+true true false false true true true false true true true true true true
+null s null 5  null null
+-- Number methods
+ff 11111111 3.14 0 1.23e+3 1.23e+3 1.79769313486231e+308 2147483647 -2147483648 4294967295
+-- Math
+-2 -1 -1 3 -2 3 5 Infinity -Infinity 1024 4 3.141592653589793 0.7853981633974483 0
+-- global functions
+12 31 5 NaN 350 0.5 true false false a%20b%26c/d Aあ a%20b%2Fc%3Fd%3De あ
+-- number formatting
+0 2 3 -0 0.3 0.3 1.00 0.13 0.38 1.4 8.35 1000000000000000000000.00 0.00 -2
+1e+22 1.23456789012345e+22 1.23456789012345e+25 1e+100 1.5e+300 1.23456789012345e+100 1e+308 1.79769313486231e+308 1.2345678901234568e-300 1e-100 1.2345678901234566e-7 123456789.12345678 0.000001 1e-7 1000000000000000 10000000000000000 123456789012345680 4.35 0.30000000000000004 0.3333333333333333 33.333333333333336 66666666666666660000 666666666666666600000
+1234.57 1234.57 0.000012 1.00e+21 1.23e+5 0.5 3 1.2 73 -ff 0 11
+3 5 true

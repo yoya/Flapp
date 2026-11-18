@@ -1,0 +1,33 @@
+(x=3, y=4) 3 4 5 (x=0, y=0) true false (x=4, y=5) (x=2, y=3)
+(x=4, y=3)
+8 6 10
+(x=0.5, y=-2)
+5 (x=7.5, y=15) (x=2, y=0) 2
+(x=1.5, y=-2) (x=0.5, y=-2)
+-- Rectangle
+(x=10, y=20, w=30, h=40) 10 20 30 40 10 40 20 60 (x=10, y=20) (x=40, y=60) (x=30, y=40) (x=0, y=0, w=0, h=0)
+true false true true true false false true true
+true false (x=35, y=55, w=5, h=5) (x=0, y=0, w=0, h=0) (x=0, y=0, w=40, h=60) (x=10, y=20, w=30, h=40) (x=10, y=20, w=30, h=40)
+(x=0, y=20, w=40, h=40)
+(x=0, y=20, w=100, h=40)
+(x=0, y=30, w=100, h=30)
+(x=0, y=30, w=100, h=5)
+(x=-5, y=20, w=110, h=25)
+(x=-10, y=25, w=110, h=25)
+(x=1, y=2, w=99, h=48)
+(x=1, y=2, w=10, h=10)
+(x=1, y=2, w=7, h=8)
+(x=1, y=2, w=9, h=10) false true
+(x=0, y=0, w=0, h=0) true
+(x=1, y=2, w=3, h=4)
+(x=10, y=20, w=30, h=40)
+-- display
+(x=110, y=60) (x=120, y=65) (x=5, y=5) (x=-100, y=-50) (x=1, y=2)
+(x=5, y=5, w=20, h=10) (x=20, y=15, w=40, h=10) (x=120, y=65, w=40, h=10) (x=120, y=65, w=40, h=10) (x=20, y=15, w=40, h=10) (x=5, y=5, w=20, h=10) (x=120, y=65, w=40, h=10) (x=6710886.4, y=6710886.4, w=0, h=0)
+(x=-5, y=20, w=10, h=40) 10 40
+true false true false true false false
+true false true (x=10, y=100, w=40, h=40)
+true true false true true
+(x=-5, y=-5, w=110, h=10) (x=0, y=0, w=100, h=0) 110 10
+TypeError 1034
+TypeError 2007

@@ -1,0 +1,137 @@
+0:   Leaf constructor leafA parent=first stage=true 1 false
+0:   Leaf added leafA true parent=true
+0:   Leaf addedToStage leafA
+0:  Branch constructor first leafA=true leafB=false 2 parent=root1
+0:  Branch added first first 2
+0: Main constructor first=first second=null 1
+0:  Branch frameConstructed first 1 leafB=false 2
+0: Main frameConstructed second=false 1
+0: Main script 1
+0:  Branch script 1 first
+0:   Leaf script 1 leafA
+0: Main exitFrame
+0:   Leaf enterFrame leafA 2 parent=true
+0:  Branch enterFrame first 2 leafB=false 3
+1: Main enterFrame second=false late=false 2
+1:  Branch added first instance3 3
+1:   Leaf constructor leafB parent=first stage=true 1 false
+1:   Leaf added leafB true parent=true
+1:  Branch added first leafB 3
+1:   Leaf addedToStage leafB
+1:   Leaf constructor leafA parent=second stage=true 1 false
+1:   Leaf added leafA true parent=true
+1:   Leaf addedToStage leafA
+1:  Branch constructor second leafA=true leafB=false 2 parent=root1
+1:  Branch added second second 2
+1:  Branch frameConstructed first 2 leafB=true 3
+1: Main frameConstructed second=true 2
+1:  Branch frameConstructed second 1 leafB=false 2
+1: Main script 2
+1:  Branch script 2 first leafB=true
+1:   Leaf script 2 leafA
+1:   Leaf script 1 leafB
+1:  Branch script 1 second
+1:   Leaf script 1 leafA
+1: Main exitFrame
+1:   Leaf removed leafB parent=true
+1:  Branch removed first leafB 3 leafB=true
+1:   Leaf enterFrame leafA 1 parent=true
+1:  Branch enterFrame first 3 leafB=false 2
+2: Main enterFrame second=true late=false 3
+2:   Leaf enterFrame leafB 2 parent=false
+2:   Leaf enterFrame leafA 2 parent=true
+2:  Branch enterFrame second 2 leafB=false 3
+2:  Branch added second instance6 3
+2:   Leaf constructor leafB parent=second stage=true 1 false
+2:   Leaf added leafB true parent=true
+2:  Branch added second leafB 3
+2:   Leaf addedToStage leafB
+2:   Leaf constructor late parent=root1 stage=true 1 false
+2:   Leaf added late true parent=true
+2:   Leaf addedToStage late
+2:  Branch frameConstructed first 3 leafB=false 2
+2: Main frameConstructed second=true 3
+2:  Branch frameConstructed second 2 leafB=true 3
+2:   Leaf script 2 leafB
+2: Main script 3
+2:  Branch script 3 first leafB=false
+2:   Leaf script 1 leafA
+2:  Branch script 2 second leafB=true
+2:   Leaf script 2 leafA
+2:   Leaf script 1 leafB
+2:   Leaf script 1 late
+2: Main exitFrame
+2:   Leaf removed leafB parent=true
+2:  Branch removed second leafB 3 leafB=true
+2:   Leaf enterFrame leafA 2 parent=true
+2:  Branch enterFrame first 1 leafB=false 2
+3: Main enterFrame second=true late=true 3
+3:   Leaf enterFrame leafB 2 parent=false
+3:   Leaf enterFrame leafA 1 parent=true
+3:  Branch enterFrame second 3 leafB=false 2
+3:   Leaf enterFrame leafB 2 parent=false
+3:   Leaf enterFrame late 2 parent=true
+3:  Branch frameConstructed first 1 leafB=false 2
+3: Main frameConstructed second=true 3
+3:  Branch frameConstructed second 3 leafB=false 2
+3:   Leaf script 2 leafB
+3:  Branch script 1 first
+3:   Leaf script 2 leafA
+3:  Branch script 3 second leafB=false
+3:   Leaf script 1 leafA
+3:   Leaf script 2 late
+3: Main exitFrame
+3:   Leaf enterFrame leafA 1 parent=true
+3:  Branch enterFrame first 2 leafB=false 3
+4: Main enterFrame second=true late=true 3
+4:   Leaf enterFrame leafB 2 parent=false
+4:   Leaf enterFrame leafA 2 parent=true
+4:  Branch enterFrame second 1 leafB=false 2
+4:   Leaf enterFrame leafB 2 parent=false
+4:   Leaf enterFrame late 1 parent=true
+4:  Branch added first instance16 3
+4:   Leaf constructor leafB parent=first stage=true 1 false
+4:   Leaf added leafB true parent=true
+4:  Branch added first leafB 3
+4:   Leaf addedToStage leafB
+4:  Branch frameConstructed first 2 leafB=true 3
+4: Main frameConstructed second=true 3
+4:  Branch frameConstructed second 1 leafB=false 2
+4:  Branch script 2 first leafB=true
+4:   Leaf script 1 leafA
+4:   Leaf script 1 leafB
+4:  Branch script 1 second
+4:   Leaf script 2 leafA
+4:   Leaf script 1 late
+4: Main exitFrame
+4:   Leaf removed leafB parent=true
+4:  Branch removed first leafB 3 leafB=true
+4:   Leaf enterFrame leafA 2 parent=true
+4:  Branch enterFrame first 3 leafB=false 2
+5: Main enterFrame second=true late=true 3
+5:   Leaf enterFrame leafB 2 parent=false
+5:   Leaf enterFrame leafA 1 parent=true
+5:  Branch enterFrame second 2 leafB=false 3
+5:   Leaf enterFrame leafB 2 parent=false
+5:   Leaf enterFrame late 2 parent=true
+5:   Leaf enterFrame leafB 2 parent=false
+5:  Branch added second instance18 3
+5:   Leaf constructor leafB parent=second stage=true 1 false
+5:   Leaf added leafB true parent=true
+5:  Branch added second leafB 3
+5:   Leaf addedToStage leafB
+5:  Branch frameConstructed first 3 leafB=false 2
+5: Main frameConstructed second=true 3
+5:  Branch frameConstructed second 2 leafB=true 3
+5:   Leaf script 2 leafB
+5:  Branch script 3 first leafB=false
+5:   Leaf script 2 leafA
+5:  Branch script 2 second leafB=true
+5:   Leaf script 1 leafA
+5:   Leaf script 1 leafB
+5:   Leaf script 2 late
+5: Main exitFrame
+5:   Leaf removed leafB parent=true
+5:  Branch removed second leafB 3 leafB=true
+5:   Leaf enterFrame leafA 1 parent=true
+5:  Branch enterFrame first 1 leafB=false 2

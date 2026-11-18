@@ -1,0 +1,5 @@
+2 2 true [object Stage] true true true [object Shape] instance1
+click null 20 20 -
+rollOver top 10 10 null
+click top 10 10 null
+click null 120 20 -

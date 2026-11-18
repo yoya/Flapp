@@ -1,0 +1,87 @@
+[object Sprite] [object Sprite] [object Shape] null null null 0 0 root1
+-- add
+ event added s s 2 true false
+ event added s b 3 true false
+ event added b b 2 true false
+ event added b a 3 true false
+ event added a a 2 true false
+ event added a root1 3 true false
+ event addedToStage a a 2 false false
+ event addedToStage b b 2 false false
+ event addedToStage s s 2 false false
+true
+1 1 true true true true true 0 true true true a
+-- reorder
+ event added c c 2 true false
+ event added c root1 3 true false
+ event addedToStage c c 2 false false
+ event added d d 2 true false
+ event added d root1 3 true false
+ event addedToStage d d 2 false false
+d,a,c
+a,c,d
+c,a,d
+d,a,c
+d,c,a
+c,d,a
+d,a,c
+true null 2
+-- reparent
+ event removed b b 2 true false
+ event removed b a 3 true false
+ event removed b root1 3 true false
+ event removedFromStage b b 2 false false
+ event removedFromStage s s 2 false false
+ event added b b 2 true false
+ event added b c 3 true false
+ event added b root1 3 true false
+ event addedToStage b b 2 false false
+ event addedToStage s s 2 false false
+ b c
+-- remove
+ event removed c c 2 true false
+ event removed c root1 3 true false
+ event removedFromStage c c 2 false false
+ event removedFromStage b b 2 false false
+ event removedFromStage s s 2 false false
+true null null null c d,a
+ event removed d d 2 true false
+ event removed d root1 3 true false
+ event removedFromStage d d 2 false false
+d a
+-- errors
+2025
+2007
+2024
+2150
+2006
+2006
+2006
+2025
+2006
+a
+-- graphics
+100 50 0 0
+200 50 5 7.3 2 1 0
+0.5 50
+0.2 10
+50 100 90
+-90
+170
+106.1 106.1
+0.5 false
+2
+-1
+22 22
+0 0
+30 20
+14 4
+10 10
+100 50
+0 0
+0 0
+290 70 1
+0 1 0 false true instance
+5 5
+ event added root1 root1 2 true false
+ event addedToStage root1 root1 2 false false

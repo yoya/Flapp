@@ -1,0 +1,3 @@
+hello AS3
+7 x3 number 3.5 3 a12 3a
+[object Main] true [object Stage] true true 1 1 root1

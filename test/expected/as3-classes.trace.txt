@@ -1,0 +1,33 @@
+generic says ... Pochi says wan Tama says nya x3
+[Animal generic] [Animal Pochi] [Cat] [Animal Pochi] [Cat]
+true true false true false true null true
+3 undefined animal dog:Pochi:3
+4 Pochi Pochi
+P Pochi
+-- dynamic / sealed
+sealed 1056
+sealed read 1069
+5 6 undefined true true true true
+undefined false 1
+-- closures
+Pochi says wan Pochi says wan true
+30 30 30
+1 2 3
+1,10,0, 1,2,0, 1,2,2,3,4 2
+3:b
+5,6,1,7 8,10,0,
+-- static / const / getter
+1 2 2 3
+const write 1074
+100 212
+read only 1074
+-- super and override
+Koro Jr. says wan! 4 wan/wan true true
+-- this in function
+1
+2 3
+-- class objects
+[class Dog] true [class Dog] true true Dog Dog int String null Array
+Mike says nya x9 true
+cast 1034
+true true 43 421 3 2 true false
