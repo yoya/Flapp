@@ -8,6 +8,7 @@ import { installGeom } from './geom.js';
 import { installMedia } from './media.js';
 import { installNet } from './net.js';
 import { installText } from './text.js';
+import { installVideo } from './video.js';
 import { ASArray, ASClass, ASFunction, ASObject, publicKey } from './object.js';
 import { installUtils } from './utils.js';
 
@@ -114,6 +115,8 @@ export function installFlash(vm, movie, types) {
   c.SecurityErrorEvent = eventClass('SecurityErrorEvent', errorFields, { SECURITY_ERROR: 'securityError' }, false, c.ErrorEvent);
   c.ProgressEvent = eventClass('ProgressEvent', [['bytesLoaded', 0, num], ['bytesTotal', 0, num]], { PROGRESS: 'progress', SOCKET_DATA: 'socketData' });
   c.HTTPStatusEvent = eventClass('HTTPStatusEvent', [['status', 0, (v) => vm.toInt32(v)]], { HTTP_STATUS: 'httpStatus' });
+  c.NetStatusEvent = eventClass('NetStatusEvent', [['info', null, same]], { NET_STATUS: 'netStatus' });
+  c.AsyncErrorEvent = eventClass('AsyncErrorEvent', [['text', '', str], ['error', null, same]], { ASYNC_ERROR: 'asyncError' }, false, c.ErrorEvent);
 
   // current に登録されたリスナーのうち、段階 phase（1: キャプチャ、2: ターゲット、3: バブリング）で呼ぶものを呼ぶ。
   // リスナーの中の例外は、ほかのリスナーや dispatchEvent の呼び出し元には伝わらない。
@@ -627,6 +630,7 @@ export function installFlash(vm, movie, types) {
     if (d.character.button) return c.SimpleButton;
     if (d instanceof types.MovieClip) return c.MovieClip;
     if (d instanceof types.TextField) return c.TextField;
+    if (d instanceof types.VideoObject) return c.Video;
     return d.character.type === 'morph' ? c.MorphShape : c.Shape;
   };
   /** 表示オブジェクト d に対応する AS3 のオブジェクトを作る（コンストラクタはまだ呼ばない）。 */
@@ -641,8 +645,8 @@ export function installFlash(vm, movie, types) {
   /** コンストラクタを呼ぶ（子が作られた後）。名前があれば、親の同名のプロパティに入れる。 */
   display.construct = (d) => {
     // クリップ以外（図形など）は、イベントを聞くものがいなければ AS3 のオブジェクトを作らずに済ませる。
-    // テキストフィールドは、名前で参照されるので必ず作る。
-    const field = d instanceof types.TextField;
+    // テキストフィールドとビデオは、名前で参照されるので必ず作る。
+    const field = d instanceof types.TextField || d instanceof types.VideoObject;
     if (!d.as3 && !field && !heard(d, 'added')) return;
     const fresh = !d.as3;
     const obj = display.wrap(d);
@@ -719,5 +723,6 @@ export function installFlash(vm, movie, types) {
     staticMethods: { allowDomain: () => {}, allowInsecureDomain: () => {}, loadPolicyFile: () => {} },
   });
   installNet(vm, movie);
+  installVideo(vm, movie, media.gainOf);
   void ASArray;
 }

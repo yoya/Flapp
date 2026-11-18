@@ -235,7 +235,7 @@ export class CanvasRenderer {
       this.#drawChildren(ctx, child.sortedChildren(), 0, Infinity, m, cx, mask);
     } else if (child.character.type === 'shape') {
       this.#drawShape(ctx, child.character.paths, m, cx, mask);
-    } else if (child.character.type === 'edittext') {
+    } else if (child.character.type === 'edittext' || child.character.type === 'video') {
       this.#drawShape(ctx, child.paths(), m, cx, mask);
     } else if (child.character.type === 'morph') {
       this.#drawShape(ctx, child.character.pathsAt(child.ratio), m, cx, mask);
@@ -423,6 +423,8 @@ export class CanvasRenderer {
 
   // 色変換を反映した画像と、描画時に掛けるアルファを返す。まだ復号されていなければ null。
   #bitmapSource(def, cx) {
+    // ブラウザのデコーダが出したビデオの絵は、そのまま描ける画像として渡される（色変換は、アルファの乗算だけを反映する）。
+    if (def.image) return { image: def.image, alpha: cx ? Math.max(0, Math.min(1, cx.am / 256)) : 1 };
     let image = this.bitmaps.get(def);
     // スクリプトが画素を書き換えたビットマップ（version が進んでいる）は、画像を作り直す。
     if (image && def.version !== undefined && image.version !== def.version) {

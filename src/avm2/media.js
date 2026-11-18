@@ -135,6 +135,8 @@ export function installMedia(vm, movie) {
   vm.defineClass({ name: 'flash.media::ID3Info', dynamic: true });
 
   return {
+    /** SoundTransform を、ミキサーにかける倍率にする（NetStream の音量用）。 */
+    gainOf: (v) => gain(kept(need(v, 'sndTransform'))),
     // スプライトごとの音量（その中のタイムラインが鳴らす音にかかる）。
     getSoundTransform: (self) => transform(self.display.soundTransform ?? { volume: 1, ll: 1, lr: 0, rl: 0, rr: 1 }),
     setSoundTransform: (self, v) => {

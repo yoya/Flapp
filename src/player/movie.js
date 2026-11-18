@@ -8,6 +8,8 @@ import { TextFieldObject } from '../avm1/textfield.js';
 import { AVMFunction } from '../avm1/object.js';
 import { Drawing } from './drawing.js';
 import { SoundMixer, buildStream } from './sound.js';
+import { decodable, embeddedSequence } from './video.js';
+import { parseDefineVideoStream, parseVideoFrame } from '../swf/video.js';
 import { parseDefineButtonSound, parseDefineSound, parseSoundStreamBlock, parseSoundStreamHead, parseStartSound } from '../swf/sound.js';
 import { parseBitmap } from '../swf/bitmap.js';
 import { BUTTON_COND, parseDefineButton, parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
@@ -142,6 +144,9 @@ export class Movie {
    *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
    *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
    *   audio: 音の出力（player/sound.js の冒頭を参照。ブラウザでは audio/webaudio.js）。省略すると音は出ない
+   *   media: (url) => Uint8Array | Promise<Uint8Array> | null   AS3 の NetStream.play(url) が再生する FLV ファイルを返す関数。
+   *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
+   *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
    *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
    *             ブラウザでは CanvasRenderer の rasterizer()）。省略すると、表示オブジェクトの draw は警告を残して何もしない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
@@ -171,7 +176,9 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video } = {}) {
+    this.media = media ?? null;
+    this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
     this.boundFields = new Set(); // 変数と連動しているテキストフィールド
     this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
@@ -212,7 +219,7 @@ export class Movie {
     this.unconstructed = new Set(); // AS3: 表示リストには入ったが、まだコンストラクタを呼んでいないクリップ
     // ActionScript 3 のムービーは AVM2 で、それ以外は AVM1 で動かす。
     this.avm2 = this.isAS3 ? new AVM2({ trace: traceOut, now: this.now, random, ...avm }) : null;
-    if (this.avm2) installFlash(this.avm2, this, { MovieClip, TextField });
+    if (this.avm2) installFlash(this.avm2, this, { MovieClip, TextField, VideoObject });
     this.avm = this.isAS3 ? null : new AVM1({
       version: swf.version,
       trace: traceOut,
@@ -247,6 +254,7 @@ export class Movie {
     const due = this.avm?.pending.splice(0) ?? []; // 前のフレームまでに予約された処理（読み込み失敗の通知など）
     this.#guard(() => this.avm?.runTimers());
     const as3 = this.avm2?.display;
+    this.#guard(() => as3?.runStreams()); // 終わりまで再生した NetStream の通知
     as3?.runTimers();
     this.clips = this.clips.filter((clip) => (clip.listed = !clip.removed));
     const clips = this.clips.slice();
@@ -589,6 +597,16 @@ export class Movie {
     return field;
   }
 
+  /** AS3: new Video(幅, 高さ) の表示オブジェクト（表示リストの外に作る）を作って、as3 と結び付ける。 */
+  newVideo(as3, width, height) {
+    const video = new VideoObject(this, { type: 'video', id: -3, order: -1, width, height, codec: null, frames: null, smoothing: false }, 0, PLACE_DEFAULTS, null);
+    video.name = this.nextInstanceName();
+    video.removed = true;
+    video.as3 = as3;
+    as3.display = video;
+    return video;
+  }
+
   /** テキストフィールドの状態 edit（DefineEditText と同じ形）を描画命令にする。 */
   textPaths(edit) {
     return editTextToPaths(edit, this.#font);
@@ -832,6 +850,16 @@ export class Movie {
           const sound = parseDefineSound(tag);
           if (!['pcm', 'pcm-native', 'adpcm', 'mp3'].includes(sound.format)) this.warn(`sound ${sound.id}: format ${sound.format} is not supported (it will be silent)`);
           this.#define({ type: 'sound', ...sound });
+        } else if (tag.code === 60) {
+          const video = parseDefineVideoStream(tag);
+          if (!decodable(video.codec)) this.warn(`video ${video.id}: codec ${video.codec} is not supported (it will not be shown)`);
+          this.#define({ type: 'video', ...video, frames: new Map() });
+        } else if (tag.code === 61) {
+          // フレームのデータは、ビデオのキャラクタに番号つきで集める。どれを表示するかは、置くときの ratio で決まる。
+          const frame = parseVideoFrame(tag);
+          const video = this.dictionary.get(frame.streamId);
+          if (video?.type === 'video') video.frames.set(frame.frameNum, frame.data);
+          else this.warn(`video frame for an undefined video stream ${frame.streamId}`);
         } else if (tag.code === 17) {
           const { buttonId, sounds } = parseDefineButtonSound(tag);
           const button = this.dictionary.get(buttonId);
@@ -1125,6 +1153,77 @@ export class TextField extends DisplayObject {
     const px = m.a * x + m.c * y + m.tx;
     const py = m.b * x + m.d * y + m.ty;
     return px >= this.box.xmin && px <= this.box.xmax && py >= this.box.ymin && py <= this.box.ymax;
+  }
+}
+
+/**
+ * ビデオ（DefineVideoStream を置いたもの、または AS3 の new Video()）。
+ * 埋め込みのビデオは、置くときの ratio が「何番のフレームを表示するか」を表す。
+ * source が設定されていれば、そちら（NetStream）の絵を表示する。
+ */
+export class VideoObject extends DisplayObject {
+  #sequence = null;
+  #paths = null; // { image, width, height, list }
+
+  constructor(movie, character, depth, desc, parent) {
+    super(character, depth, desc, parent);
+    this.movie = movie;
+    this.source = null; // 絵の出どころ { image(): 画像 | null }
+    this.smoothing = character.smoothing ?? false;
+    this.#cleared = null;
+  }
+
+  #cleared = null; // clear() したときの絵 { image, version }。次の絵が来るまで、何も表示しない
+
+  // 絵の出どころから、今の画像をもらう。
+  #current() {
+    if (this.source) return this.source.image();
+    const { codec, frames } = this.character;
+    if (!frames?.size || !decodable(codec)) return null;
+    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`));
+    return this.#sequence.show(this.ratio);
+  }
+
+  /** 今表示する画像（player/video.js の形）。無ければ null。 */
+  image() {
+    const image = this.#current();
+    if (this.#cleared && image === this.#cleared.image && image?.version === this.#cleared.version) return null;
+    this.#cleared = null;
+    return image;
+  }
+
+  /** 表示している絵を消す（次のフレームの絵が来れば、また表示される）。 */
+  clear() {
+    const image = this.#current();
+    this.#cleared = { image, version: image?.version };
+  }
+
+  /** 描画命令: 画像を、ビデオの枠（キャラクタの幅と高さ）いっぱいに引き伸ばして塗った矩形。画像が無ければ空。 */
+  paths() {
+    const image = this.image();
+    if (!image) return [];
+    const { width, height } = this.character;
+    const p = this.#paths;
+    if (!p || p.image !== image || p.width !== image.width || p.height !== image.height || p.smooth !== this.smoothing) {
+      const w = width * 20, h = height * 20;
+      this.#paths = {
+        image, width: image.width, height: image.height, smooth: this.smoothing,
+        list: [{
+          kind: 'fill', evenOdd: false, path: [['M', 0, 0], ['L', w, 0], ['L', w, h], ['L', 0, h], ['Z']],
+          style: { type: 'bitmap', bitmap: image, matrix: { a: w / image.width, b: 0, c: 0, d: h / image.height, tx: 0, ty: 0 }, repeat: false, smooth: this.smoothing },
+        }],
+      };
+    }
+    return this.#paths.list;
+  }
+
+  bounds(m) {
+    return transformBounds({ xmin: 0, xmax: this.character.width * 20, ymin: 0, ymax: this.character.height * 20 }, m);
+  }
+
+  hitPoint(x, y) {
+    const p = this.globalToLocal(x, y);
+    return p.x >= 0 && p.x <= this.character.width * 20 && p.y >= 0 && p.y <= this.character.height * 20;
   }
 }
 
@@ -1608,7 +1707,7 @@ export class MovieClip extends DisplayObject {
       movie.warn(`sprite ${this.character.id} cannot place character ${character.id} defined after it`);
       return undefined;
     }
-    if (!['sprite', 'shape', 'morph', 'edittext'].includes(character.type)) {
+    if (!['sprite', 'shape', 'morph', 'edittext', 'video'].includes(character.type)) {
       movie.warn(`character ${character.id} (${character.type}) cannot be placed`);
       return undefined;
     }
@@ -1626,7 +1725,8 @@ export class MovieClip extends DisplayObject {
     // 子の 1 フレーム目のアクションは待ち行列に入るだけなので、実行される時には親への登録は済んでいる。
     const child = character.type === 'sprite' ? new MovieClip(movie, character, depth, desc, this.level + 1, this)
       : character.type === 'edittext' ? new TextField(movie, character, depth, desc, this)
-        : new DisplayObject(character, depth, desc, this);
+        : character.type === 'video' ? new VideoObject(movie, character, depth, desc, this)
+          : new DisplayObject(character, depth, desc, this);
     this.children.set(depth, child);
     if (movie.avm2 && this.removed) child.removed = true;
     if (movie.avm2 && !(child instanceof MovieClip)) {
