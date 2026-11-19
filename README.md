@@ -58,7 +58,7 @@ npm run serve
 - `trace()` の出力、スクリプトが要求した URL、警告は、ステージの下に表示されます。
 - 「この SWF を信用する」をオンにする（または URL に `?trust` を付ける。`trust` が無いか `trust=0` なら信用しません）と、スクリプトによるページの移動（`getURL`、`navigateToURL`）と、
   読み込み（`fetch`）を行います。読み込めるのは、`LoadVars`・`XML`・`loadVariables`・`URLLoader` のデータ、`loadMovie`・`MovieClipLoader`・
-  `loadMovieNum`・`Loader` の画像（JPEG・PNG・GIF）と SWF、`loadSound`・`Sound.load` の MP3 です。http / https 以外の URL（`javascript:` など）は開きません。
+  `loadMovieNum`・`Loader` の画像（JPEG・PNG・GIF）と SWF、`loadSound`・`Sound.load` の MP3 です。`NetStream.play` の FLV も、同じように http / https から取ります。http / https 以外の URL（`javascript:` など）は開きません。
   別のサーバからの読み込みは、相手が CORS で許しているときだけできます。既定は信用しません（信用できない SWF では、オンにしないでください）。
 
 ## コードから使う

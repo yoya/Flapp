@@ -132,7 +132,8 @@
   }));
   canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
 
-  // base は、?swf= で読んだときの SWF の URL。そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
+  // base は、?swf= で読んだときの SWF の URL。信用しないときは、そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
+  // 信用するときは、ページの移動や読み込みと同じく、http / https の URL から取る（trustedHttp）。
   async function play(bytes, label, base) {
     clearInterval(timer);
     stopVideo();
@@ -147,12 +148,6 @@
       playFLV(bytes, label, info, warnings);
       return;
     }
-    const media = base && (async (url) => {
-      const target = new URL(url, new URL(base, location.href));
-      if (target.origin !== location.origin) return null;
-      const res = await fetch(target);
-      return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
-    });
     // trace() の出力。画面に残すのは最後の 500 行まで。
     const traces = document.getElementById('traces');
     traces.textContent = '';
@@ -166,8 +161,15 @@
     // スクリプトが要求した URL は、trace の欄へ表示する。信用していなければ、開きも読みもしない
     // （NetStream.play のファイルだけは、?swf= で読んだときに同じサーバから渡す）。
     const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''}`
-      + (kind === 'play' ? (base ? '（同じサーバから読みます）' : '（読みません）') : trust.checked ? '' : '（信用していないので、開きも読みもしません）'));
-    const network = trust.checked ? trustedNetwork(base, trace) : undefined;
+      + (trust.checked ? '' : kind === 'play' ? (base ? '（同じサーバから読みます）' : '（読みません）') : '（信用していないので、開きも読みもしません）'));
+    const http = trust.checked ? trustedHttp(base, trace) : null;
+    const network = http?.network;
+    const media = http ? http.media : base && (async (url) => {
+      const target = new URL(url, new URL(base, location.href));
+      if (target.origin !== location.origin) return null;
+      const res = await fetch(target);
+      return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+    });
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
@@ -200,10 +202,11 @@
   }
 
   /**
-   * SWF を信用するときの、移動と読み込み（Movie.load の network オプション）。相対 URL は、?swf= で読んだときはその SWF の URL から、
-   * ファイルを選んだときはこのページの URL から解決する。http / https 以外（javascript: や file: など）は、開きも読みもしない。
+   * SWF を信用するときの、移動と読み込み（Movie.load の network オプション）と、NetStream.play のファイル（media オプション）。
+   * 相対 URL は、?swf= で読んだときはその SWF の URL から、ファイルを選んだときはこのページの URL から解決する。
+   * http / https 以外（javascript: や file: など）は、開きも読みもしない。
    */
-  function trustedNetwork(base, trace) {
+  function trustedHttp(base, trace) {
     const resolve = (url) => {
       try {
         const target = new URL(url, new URL(base ?? location.href, location.href));
@@ -212,7 +215,7 @@
       trace(`[blocked] ${url}（http / https 以外は、開きも読みもしません）`);
       return null;
     };
-    return {
+    const network = {
       // 移動: target が空か _self / _parent / _top ならこのページを、それ以外の名前なら新しいタブ（そのウィンドウ名）を開く。
       // POST で送る中身があれば、フォームを作って送る。GET なら、中身を URL の後ろに付ける。
       navigate({ url, target, method, data }) {
@@ -245,6 +248,20 @@
         }
       },
     };
+    // NetStream.play(url): FLV のバイト列を返す。読めなければ null（見つからない扱い）。
+    const media = async (url) => {
+      const from = resolve(url);
+      if (!from) return null;
+      try {
+        const res = await fetch(from);
+        if (!res.ok) trace(`[play] ${from.href}: HTTP ${res.status}`);
+        return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+      } catch (e) {
+        trace(`[play] ${from.href}: ${e.message}`);
+        return null;
+      }
+    };
+    return { network, media };
   }
 
   document.getElementById('file').addEventListener('change', async (e) => {
