@@ -18,6 +18,7 @@ import { parseDefineMorphShape } from '../swf/morph.js';
 import { parseSWF } from '../swf/parse.js';
 import { toBool, toStr } from '../avm1/convert.js';
 import { LegacyText } from '../swf/legacy.js';
+import { layoutRunsOf, mergeFormat, mergeRange, parseHtml, sameFormat, toHtml } from './richtext.js';
 import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
 import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
@@ -198,6 +199,7 @@ export class Movie {
     this.media = media ?? null;
     this.network = network ?? null;
     this.storage = storage ?? null;
+    this.measureText = null; // (文字, 書式) => 幅（twips）。描く側（render/canvas.js の prepare）が、端末のフォントで測る関数を入れる
     this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
@@ -1260,7 +1262,7 @@ export class DisplayObject {
 // 書式の既定値（createTextField で作ったフィールド。実機の getTextFormat の値）。
 const DEFAULT_FORMAT = {
   font: 'Times Roman', size: 12, color: 0, bold: false, italic: false, underline: false, url: '', target: '', align: 'left',
-  leftMargin: 0, rightMargin: 0, indent: 0, leading: 0, bullet: false,
+  leftMargin: 0, rightMargin: 0, indent: 0, leading: 0, bullet: false, blockIndent: 0, letterSpacing: 0, kerning: false, display: 'block', tabStops: [],
 };
 const rgbOf = (n) => ({ r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: 255 });
 
@@ -1282,7 +1284,9 @@ export class TextField extends DisplayObject {
     this.format = { ...this.newFormat };
     this.html = edit?.html ?? false;
     this.htmlText = this.html ? edit.text : null; // html が真のとき、代入された HTML そのもの
+    this.fmts = null; // 文字ごとの書式（範囲ごとの書式や HTML の書式があるときだけ。無ければ、全体が this.format）
     this.text = edit ? (this.html ? plainText(edit.text) : edit.text) : '';
+    if (this.html && edit) this.setHtml(edit.text, false, edit.multiline);
     this.type = edit && !edit.readOnly ? 'input' : 'dynamic';
     this.multiline = edit?.multiline ?? false;
     this.wordWrap = edit?.wordWrap ?? false;
@@ -1324,6 +1328,7 @@ export class TextField extends DisplayObject {
   setText(text, fromScript) {
     this.text = text.replace(/\r\n|\n/g, '\r'); // 改行は CR で持つ
     this.format = { ...this.newFormat };
+    this.fmts = null;
     this.changed();
     if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text); // SWF 5 以前の変数はバイト列
   }
@@ -1364,6 +1369,97 @@ export class TextField extends DisplayObject {
     return avm.getVariable(frame, this.variable);
   }
 
+  // --- 文字ごとの書式 ---
+
+  /** 文字ごとの書式の並び（無ければ、全体が this.format として作る）。 */
+  #materialize() {
+    return (this.fmts ??= Array.from({ length: this.text.length }, () => this.format));
+  }
+
+  /** i 番目の文字の書式。 */
+  formatAt(i) {
+    return this.fmts?.[i] ?? this.format;
+  }
+
+  // 全部が同じ書式なら、文字ごとの並びをやめる。this.format は、最初の文字の書式に合わせる。
+  #settle() {
+    if (this.fmts) {
+      if (this.fmts.length === 0) this.fmts = null;
+      else if (this.fmts.every((f) => sameFormat(f, this.fmts[0]))) { this.format = this.fmts[0]; this.fmts = null; } else this.format = this.fmts[0];
+    }
+    this.changed();
+  }
+
+  /** 範囲 a〜b（文字の位置。b は含まない）の書式。違う項目は null。範囲が空なら null。 */
+  getFormat(a, b) {
+    if (b <= a) return null;
+    return this.fmts ? mergeRange(this.fmts, a, b) : { ...this.format };
+  }
+
+  /** 範囲 a〜b の書式に、partial の null でない項目を重ねる（partial は書式の項目の一部）。 */
+  setFormat(partial, a, b) {
+    if (b <= a) return;
+    const fmts = this.#materialize();
+    const cache = new Map();
+    for (let i = a; i < b; i++) {
+      let merged = cache.get(fmts[i]);
+      if (!merged) { merged = mergeFormat(fmts[i], partial); cache.set(fmts[i], merged); }
+      fmts[i] = merged;
+    }
+    this.#settle();
+  }
+
+  /**
+   * 範囲 a〜b を str に置き換える。入る文字の書式は、置き換える範囲の最後の文字（範囲が空なら、その直前の文字）の書式、
+   * 範囲の前に文字が無ければ最初の文字、文字が無ければ newFormat（実機で確認）。選択位置は呼ぶ側で決める。
+   */
+  replace(a, b, str) {
+    const old = this.fmts ?? null;
+    const at = Math.max(0, Math.min(b, this.text.length) - 1);
+    const insert = this.text.length === 0 ? this.newFormat : old ? old[at] : this.format;
+    const before = old ? old.slice(0, a) : Array.from({ length: a }, () => this.format);
+    const after = old ? old.slice(b) : Array.from({ length: this.text.length - b }, () => this.format);
+    this.text = this.text.slice(0, a) + str.replace(/\n/g, '\r') + this.text.slice(b);
+    this.fmts = [...before, ...Array.from({ length: str.length }, () => insert), ...after];
+    this.htmlText = null;
+    if (this.fmts.length === 0) this.format = { ...this.newFormat };
+    this.#settle();
+  }
+
+  /** HTML を文字列と書式にして入れる。書式を指定しない文字は newFormat。 */
+  setHtml(html, fromScript, multiline = this.multiline) {
+    const { text, fmts } = parseHtml(html, this.newFormat, { multiline, condenseWhite: this.condenseWhite === true });
+    this.text = text;
+    this.fmts = fmts;
+    this.format = fmts[0] ?? { ...this.newFormat };
+    this.htmlText = html;
+    this.#settle();
+    if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
+  }
+
+  // 文字の寸法の概算（端末のフォントの寸法は実機と同じにならない）: 1 文字 = 大きさの半分、1 行 = 大きさの 1.15 倍（行の中で最大）。
+  approxWidth() {
+    let best = 0, width = 0;
+    for (let i = 0; i <= this.text.length; i++) {
+      if (i === this.text.length || this.text[i] === '\r') { best = Math.max(best, width); width = 0; } else width += this.formatAt(i).size * 0.5;
+    }
+    return Math.round(best);
+  }
+
+  approxHeight() {
+    if (!this.text) return 0;
+    let total = 0, line = 0;
+    for (let i = 0; i <= this.text.length; i++) {
+      if (i === this.text.length || this.text[i] === '\r') { total += (line || this.format.size) * 1.15; line = 0; } else line = Math.max(line, this.formatAt(i).size);
+    }
+    return Math.round(total);
+  }
+
+  /** 今の文字列と書式を、実機と同じ形の HTML にしたもの。 */
+  toHtml() {
+    return toHtml(this.text, this.fmts ?? Array.from({ length: this.text.length }, () => this.format));
+  }
+
   /** 描画命令（図形と同じ形式）。内容が変わるまで同じ配列を返す。 */
   paths() {
     if (!this.#paths) {
@@ -1374,6 +1470,8 @@ export class TextField extends DisplayObject {
         height: f.size * 20, color: rgbOf(f.color), bold: f.bold, italic: f.italic, align: f.align,
         leftMargin: f.leftMargin * 20, rightMargin: f.rightMargin * 20, indent: f.indent * 20, leading: f.leading * 20,
         text: this.text, html: false, password: this.password, multiline: this.multiline, wordWrap: this.wordWrap,
+        measure: this.movie.measureText, // 描く側が文字の幅を測る関数（無ければ概算）
+        runs: this.fmts ? layoutRunsOf(this.text, this.fmts) : !this.embedFonts && this.text && (this.wordWrap || f.bullet || f.blockIndent) ? [{ text: this.text, fmt: f }] : null, // 端末のフォントで、折り返しや箇条書きがあるときは、書式が 1 つでも同じ配置を使う // 文字ごとの書式があるときだけ（text と同じ並び）
         border: this.border, background: this.background, borderColor: rgbOf(this.borderColor), backgroundColor: rgbOf(this.backgroundColor),
       }, this.character.library);
     }

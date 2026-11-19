@@ -71,6 +71,15 @@ function css(color, cx) {
   return `rgba(${r},${g},${b},${a / 255})`;
 }
 
+// 端末のフォントの指定（CSS の font）。端末にある名前とは限らないので、名前から見当をつけた系統を後ろに付ける（実機の既定の
+// "Times Roman" は明朝系）。r は { family, bold, italic, size }（size は描く単位の数）。
+function deviceFont(r) {
+  const generic = { _sans: 'sans-serif', _serif: 'serif', _typewriter: 'monospace' }[r.family];
+  const fallback = /times|serif|georgia|garamond|palatino|book|mincho|明朝/i.test(r.family) ? 'serif' : /courier|mono|consolas|typewriter/i.test(r.family) ? 'monospace' : 'sans-serif';
+  const family = generic ?? (r.family ? `"${r.family.replace(/["\\]/g, '')}", ${fallback}` : 'sans-serif');
+  return `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}${r.size}px ${family}`;
+}
+
 const resetTransform = (ctx) => ctx.setTransform(1, 0, 0, 1, 0, 0);
 
 export class CanvasRenderer {
@@ -95,6 +104,20 @@ export class CanvasRenderer {
    * @param {import('../player/movie.js').Movie} movie
    */
   async prepare(movie) {
+    // テキストの折り返しのために、端末のフォントでの文字の幅（twips）を測る関数を渡す。
+    const probe = new OffscreenCanvas(1, 1).getContext('2d');
+    const widths = new Map();
+    movie.measureText = (ch, f) => {
+      const font = deviceFont({ family: f.font, bold: f.bold, italic: f.italic, size: f.size * 20 });
+      const key = `${font}|${ch}`;
+      let w = widths.get(key);
+      if (w === undefined) {
+        probe.font = font;
+        w = probe.measureText(ch).width;
+        widths.set(key, w);
+      }
+      return w;
+    };
     for (const def of movie.dictionary.values()) {
       if (def.type !== 'bitmap' || !def.encoded || this.bitmaps.has(def)) continue;
       try {
@@ -636,17 +659,37 @@ export class CanvasRenderer {
     this.#releaseLayer(layer);
   }
 
-  // 埋め込みの字形が無いテキストを、端末のフォントで描く（実機と同じ見た目にはならない）。
+  // 埋め込みの字形が無いテキストを、端末のフォントで描く（実機と同じ見た目にはならない）。op.runs があれば、書式の違う文字の
+  // まとまり（色・大きさ・太字・斜体・下線・字間）を、1 行に順に並べる。位置揃えは、測った幅の合計で決める。
   #text(ctx, op, m, cx) {
-    const generic = { _sans: 'sans-serif', _serif: 'serif', _typewriter: 'monospace' }[op.family];
-    const family = generic ?? (op.family ? `"${op.family.replace(/["\\]/g, '')}", sans-serif` : 'sans-serif');
     ctx.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
-    ctx.font = `${op.italic ? 'italic ' : ''}${op.bold ? 'bold ' : ''}${op.size}px ${family}`;
     ctx.textBaseline = 'top';
-    ctx.textAlign = op.align === 'right' || op.align === 'center' ? op.align : 'left';
-    ctx.fillStyle = css(op.color, cx);
-    const x = op.align === 'right' ? op.x + op.width : op.align === 'center' ? op.x + op.width / 2 : op.x;
-    ctx.fillText(op.text, x, op.y);
+    if (!op.runs) {
+      ctx.font = deviceFont(op);
+      ctx.textAlign = op.align === 'right' || op.align === 'center' ? op.align : 'left';
+      ctx.fillStyle = css(op.color, cx);
+      const x = op.align === 'right' ? op.x + op.width : op.align === 'center' ? op.x + op.width / 2 : op.x;
+      ctx.fillText(op.text, x, op.y);
+      return;
+    }
+    ctx.textAlign = 'left';
+    const spaced = 'letterSpacing' in ctx;
+    const widths = op.runs.map((r) => {
+      ctx.font = deviceFont(r);
+      if (spaced) ctx.letterSpacing = `${r.letterSpacing}px`;
+      return ctx.measureText(r.text).width;
+    });
+    const total = widths.reduce((sum, w) => sum + w, 0);
+    let x = op.x + (op.align === 'right' ? op.width - total : op.align === 'center' ? (op.width - total) / 2 : 0);
+    op.runs.forEach((r, i) => {
+      ctx.font = deviceFont(r);
+      if (spaced) ctx.letterSpacing = `${r.letterSpacing}px`;
+      ctx.fillStyle = css(r.color, cx);
+      ctx.fillText(r.text, x, op.y);
+      if (r.underline) ctx.fillRect(x, op.y + r.size * 1.02, widths[i], Math.max(r.size / 16, 20));
+      x += widths[i];
+    });
+    if (spaced) ctx.letterSpacing = '0px';
   }
 
   // --- ビットマップ ---

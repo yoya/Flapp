@@ -1,4 +1,5 @@
 // フォントとテキストの解釈（仕様 10 章）。
+import { CHAR_KEYS } from '../player/richtext.js';
 import { shapeToPaths } from '../shape/paths.js';
 import { Reader, SWFError } from './reader.js';
 import { shapeRecords } from './shape.js';
@@ -184,6 +185,91 @@ export function plainText(html) {
     .replace(/\r$/, '');
 }
 
+// 文字ごとに書式が違うテキスト（edit.runs は { text, fmt } の並びで、text をつなげたものが edit.text）の配置。
+// 段落（CR で終わる）ごとに、最初の文字の書式で位置揃え・余白・字下げ・行間・箇条書きを決める。wordWrap なら、空白の位置で折り返す
+// （端末のフォントの幅は分からないので、折り返しの判断だけは 1 文字 = 大きさの半分（全角は 1 倍）の概算）。埋め込みのフォントで全部の字形が
+// あれば字形の塗り、無ければ { kind: 'text', runs }（描画側が、端末のフォントで 1 行ぶんを順に並べる）。
+function richText(edit, ops, content, font, glyphOf, outlines) {
+  const { xmin, xmax, ymin } = edit.bounds;
+  const base = edit.runs[0]?.fmt;
+  const chars = [];
+  let at = 0;
+  for (const run of edit.runs) for (const unit of run.text) { chars.push({ ch: content[at] ?? unit, f: run.fmt }); at += unit.length; }
+  const paragraphs = [[]];
+  for (const c of chars) {
+    if (c.ch === '\r' || c.ch === '\n') paragraphs.push([]);
+    else paragraphs[paragraphs.length - 1].push(c);
+  }
+  const unitsPerEm = font?.unitsPerEm ?? 1024;
+  const sizeOf = (c) => c.f.size * 20;
+  const widthOf = (c) => {
+    if (outlines) return (font.advances[glyphOf.get(c.ch.codePointAt(0))] * sizeOf(c)) / unitsPerEm + c.f.letterSpacing * 20;
+    // edit.measure は、描く側が測った文字の幅（twips）。無ければ概算（半角は大きさの半分、全角は 1 倍）。
+    const measured = edit.measure?.(c.ch, c.f);
+    return (measured ?? (c.ch.codePointAt(0) >= 0x2e80 ? sizeOf(c) : sizeOf(c) * 0.5)) + c.f.letterSpacing * 20;
+  };
+  let y = ymin + GUTTER;
+  paragraphs.forEach((par, n) => {
+    if (!edit.multiline && n > 0) return;
+    const pf = par[0]?.f ?? base;
+    // 箇条書きの点は左端から大きさの約 1.7 倍、文字は約 3 倍のところから始まる（実機の画面から）。
+    const left = xmin + GUTTER + (pf.leftMargin + pf.blockIndent) * 20 + (pf.bullet ? sizeOf({ f: pf }) * 3 : 0);
+    const right = xmax - GUTTER - pf.rightMargin * 20;
+    // 行に分ける。
+    const lines = [];
+    let line = [], width = 0, lastSpace = -1;
+    const limit = () => right - left - (lines.length === 0 ? pf.indent * 20 : 0);
+    for (const c of par) {
+      const w = widthOf(c);
+      if (edit.wordWrap && line.length && width + w > limit() && c.ch !== ' ') {
+        if (lastSpace >= 0) { const rest = line.splice(lastSpace + 1); lines.push(line); line = rest; } else { lines.push(line); line = []; }
+        width = line.reduce((sum, x) => sum + widthOf(x), 0);
+        lastSpace = -1;
+      }
+      line.push(c);
+      width += w;
+      if (c.ch === ' ') lastSpace = line.length - 1;
+    }
+    lines.push(line);
+    lines.forEach((chars2, row) => {
+      const size = chars2.length ? Math.max(...chars2.map(sizeOf)) : sizeOf({ f: pf });
+      const height = (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : size * 1.15) + pf.leading * 20;
+      const x0 = left + (row === 0 ? pf.indent * 20 : 0);
+      if (pf.bullet && row === 0 && par.length) {
+        ops.push({ kind: 'text', text: '•', x: left - sizeOf({ f: pf }) * 1.3, y, width: sizeOf({ f: pf }), align: 'left', size: sizeOf({ f: pf }), family: pf.font, bold: pf.bold, italic: pf.italic, color: rgb(pf.color) });
+      }
+      if (outlines) {
+        const total = chars2.reduce((sum, c) => sum + widthOf(c), 0);
+        const extra = right - x0 - total;
+        let x = x0 + (pf.align === 'right' ? extra : pf.align === 'center' ? extra / 2 : 0);
+        const ascent = (font.ascent / unitsPerEm) * size;
+        for (const c of chars2) {
+          const index = glyphOf.get(c.ch.codePointAt(0));
+          const path = font.glyphPath(index);
+          if (path) ops.push({ kind: 'fill', style: { type: 'solid', color: rgb(c.f.color) }, evenOdd: true, path: placeGlyph(path, sizeOf(c) / unitsPerEm, x, y + ascent, IDENTITY) });
+          x += widthOf(c);
+        }
+      } else if (chars2.length) {
+        // 書式が同じ文字の続きごとの 1 まとまり。
+        const runs = [];
+        for (const c of chars2) {
+          const last = runs[runs.length - 1];
+          if (last && CHAR_KEYS.every((k) => last.f[k] === c.f[k])) last.text += c.ch;
+          else runs.push({ text: c.ch, f: c.f });
+        }
+        ops.push({
+          kind: 'text', x: x0, y, width: right - x0, align: pf.align, size,
+          runs: runs.map((r) => ({ text: r.text, size: r.f.size * 20, family: r.f.font, bold: r.f.bold, italic: r.f.italic, underline: r.f.underline, color: rgb(r.f.color), letterSpacing: r.f.letterSpacing * 20 })),
+        });
+      }
+      y += height;
+    });
+  });
+  return ops;
+}
+
+const rgb = (n) => ({ r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: 255 });
+
 /**
  * テキストフィールドの初期表示を描画命令にする。書式は全体で 1 つだけ（HTML の書式タグは反映しない）。
  * 埋め込みフォントに字形があればグリフの塗り、無ければ { kind: 'text' }（描画側が端末のフォントで描く）。
@@ -210,6 +296,7 @@ export function editTextToPaths(edit, getFont) {
   const font = edit.fontId === undefined ? undefined : getFont(edit.fontId);
   const glyphOf = new Map(font?.codes?.map((code, index) => [code, index]));
   const outlines = edit.useOutlines && font?.advances && [...content].every((ch) => /[\r\n]/.test(ch) || glyphOf.has(ch.codePointAt(0)));
+  if (edit.runs) return richText(edit, ops, content, font, glyphOf, outlines);
   const scale = font ? edit.height / font.unitsPerEm : 0;
   const ascent = outlines ? font.ascent * scale : edit.height * 0.9; // 端末フォントの寸法は概算
   const lineHeight = (outlines ? (font.ascent + font.descent) * scale : edit.height * 1.15) + edit.leading;

@@ -1,0 +1,19 @@
+default Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block
+set range undefined
+range Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/null/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/null/false/false///left/0/0/0/false/0/false/block
+one index Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block
+set index Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/16711680/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block
+whole Times Roman/12/16711680/null/false/false///left/0/0/0/false/0/false/block
+out of range null/null/null/null/null/null/null/null/null/null/null/null/null/null/null/block | Times Roman/12/16711680/false/false/false///left/0/0/0/false/0/false/block | null/null/null/null/null/null/null/null/null/null/null/null/null/null/null/block | Times Roman/12/16711680/false/false/false///left/0/0/0/false/0/false/block
+html text xyzwl
+html out <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><B>x</B><I>y</I><U>z</U><FONT FACE="Arial" SIZE="20" COLOR="#FF0000">w<FONT FACE="Times Roman" SIZE="12" COLOR="#000000"><A HREF="http://a/" TARGET="t">l</A></FONT></FONT></FONT></P>
+html fmt Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/true///left/0/0/0/false/0/false/block | Arial/20/16711680/false/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false/http://a//t/left/0/0/0/false/0/false/block
+html p a\rb\rc\rd\re\r
+html p out <P ALIGN="CENTER"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">a</FONT></P><P ALIGN="RIGHT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">b</FONT></P><P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">c</FONT></P><P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">d</FONT></P><LI><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">e</FONT></LI>
+entities a&b <c> "d" | <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">a&amp;b &lt;c&gt; &quot;d&quot;</FONT></P>
+not html <b>plain</b> | <b>plain</b>
+html text set <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">a&lt;b&gt;</FONT></P>
+replaceText abcZZdef | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/false/0/false/block
+newTextFormat Times Roman/22/65280/false/false/false///left/0/0/0/false/0/false/block | 22
+empty null null null
+done

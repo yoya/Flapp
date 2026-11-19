@@ -8,7 +8,7 @@ JavaScript で動きます。
 SWF ファイルを読み込んで、ブラウザの Canvas に再生します。依存パッケージはありません。
 
 - **ファイル**: 無圧縮、zlib 圧縮 (CWS)、LZMA 圧縮 (ZWS) の SWF
-- **表示**: 図形（単色・グラデーション・ビットマップの塗りと線）、ビットマップ、モーフ、文字（静的なテキストとテキストフィールド）、
+- **表示**: 図形（単色・グラデーション・ビットマップの塗りと線）、ビットマップ、モーフ、文字（静的なテキストと、テキストフィールド。範囲ごとの書式と、`htmlText` の書式タグ・箇条書き・折り返し）、
   ボタン、マスク、ブレンド、9 分割拡大、シーン、フィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み）
 - **スクリプト**: ActionScript 1 / 2 (AVM1) と ActionScript 3 (AVM2)
 - **音**: イベント音とストリーム音（PCM、ADPCM、MP3）
@@ -36,7 +36,8 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
   クラスは、いつも読み込んだ側の子のドメインとして扱います）、AS1 / 2 で版の違う SWF を読み込んだときの、版ごとのスクリプトの規則
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
-- テキストフィールドへの文字入力、範囲ごとの書式
+- テキストフィールドへの文字入力、`<img>` タグ、`StyleSheet` の `TextField` への適用
+- `Matrix3D`、`XMLDocument` / `XMLNode`（AS3 の旧 XML）
 - スクリプトから作る `DisplacementMapFilter` と `ShaderFilter`、描画 API のビットマップの塗り（`beginBitmapFill`、`lineBitmapStyle`）と `drawPath` / `drawGraphicsData`
 - 共有ライブラリ（`ImportAssets`）
 

@@ -1,0 +1,43 @@
+default Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+range bold Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/true/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0//false/false///left/0/0/0/0/0/false/0/false/block
+getTextFormat() null
+one char true,false,true,
+color mix ,,12,16711680,0
+htmlText mix <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#FF0000" LETTERSPACING="0" KERNING="0">ab<B>c</B><FONT COLOR="#000000"><B>d</B>ef</FONT></FONT></P>
+range errors 2006
+range end>len ERR 2006
+range begin>end /////////////////block
+whole setTextFormat Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+append after whole Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block | abcde
+append default Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+text resets Times Roman/30/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+replaceText mid abcZZdef,16711680,16711680,16711680,0
+replaceText over Qef,0
+replaceSelected abcXdef,true
+html basic xyzw | Times Roman/12/0/true/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/true///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+html basic out <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><B><I>x</I></B><I>y</I><I><U>z</U></I><I>w</I></FONT></P>
+html font wv | Arial/20/16711680/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+html font out <P ALIGN="LEFT"><FONT FACE="Arial" SIZE="20" COLOR="#FF0000" LETTERSPACING="0" KERNING="0"><I>w</I><FONT FACE="Times Roman" SIZE="12" COLOR="#000000"><I>v</I></FONT></FONT></P>
+html size rel Times Roman/16/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/10/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+html link lm | Times Roman/12/0/false/true/false/http://a.example//_blank/left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+html link out <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><A HREF="http://a.example/" TARGET="_blank"><I>l</I></A><I>m</I></FONT></P>
+html p ERR 2006
+html p out <P ALIGN="CENTER"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>abc</I></FONT></P>
+html br a\rb\rc & <d> "e" 'f'  g Ah
+html li a\rb\rc | Times Roman/12/0/false/true/false///left/0/0/0/0/0/true/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/true/0/false/block
+html li out <LI><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>a</I></FONT></LI><LI><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>b</I></FONT></LI><P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>c</I></FONT></P>
+html textformat Times Roman/12/0/false/true/false///left/10/5/3/2/4/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+html tf out <TEXTFORMAT LEFTMARGIN="10" RIGHTMARGIN="5" INDENT="3" LEADING="2" BLOCKINDENT="4"><P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>xy</I></FONT></P></TEXTFORMAT>
+html ls Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/2/true/block
+html nested Times Roman/12/0/true/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/true/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/true/true/false///left/0/0/0/0/0/false/0/false/block
+html nested out <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><B><I>abc</I></B></FONT></P>
+html unknown abc
+html empty 0,
+text then htmlText <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><I>a&lt;b&gt;&amp;c</I></FONT></P>
+html not parse text <b>x</b>
+condense a b c
+tabstops 10,20
+bullet Times Roman/12/0/false/true/false///left/0/0/0/0/0/true/0/false/block
+align para Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false////0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+format fonts Courier New/14/1193046/false/true/false///left/0/0/0/0/0/false/0/false/block
+done

@@ -1,9 +1,9 @@
 // flash.text: TextField、TextFormat と、その定数のクラス。
 //
 // 文字列や書式の状態は、プレイヤーのテキストフィールド（player/movie.js の TextField）が持つ。
-// 書式はフィールド全体で 1 つ（範囲ごとの書式や HTML の書式タグは反映しない）。
+// 書式は文字ごとに持つ（player/richtext.js）。範囲ごとの書式と HTML の書式は、実機の読み書きに合わせてある。
 // 文字の寸法（textWidth など）は概算で、端末のフォントで決まる実機の値とは一致しない。
-import { plainText } from '../swf/text.js';
+import { mergeFormat } from '../player/richtext.js';
 import { ASArray, ASObject, publicKey } from './object.js';
 
 // TextFormat の項目。[名前, getTextFormat が返す既定値]
@@ -53,25 +53,41 @@ export function installText(vm, movie) {
   // プレイヤー側の書式 { font, size, ... } を TextFormat にする。
   const formatObject = (format) => {
     const obj = vm.construct(c.TextFormat, []);
-    for (const [name, initial] of FORMAT) obj.values.set(publicKey(name), (name === 'font' ? format.font || null : format[name]) ?? initial); // フォントの指定が無ければ既定のフォント
-    obj.values.set(publicKey('tabStops'), new ASArray(vm, []));
+    for (const [name, initial] of FORMAT) {
+      const v = format[name];
+      obj.values.set(publicKey(name), v === null ? null : name === 'font' ? v || initial : v ?? initial); // フォントの指定が無ければ既定のフォント
+    }
+    obj.values.set(publicKey('tabStops'), format.tabStops === null ? null : new ASArray(vm, [...(format.tabStops ?? [])]));
     obj.values.set(publicKey('display'), 'block');
     return obj;
   };
-  // TextFormat の null でない項目を、プレイヤー側の書式に写す。
-  const applyFormat = (format, obj) => {
+  // 項目がすべて null の TextFormat（空の範囲を読んだとき。display だけ "block"。実機で確認）。
+  const emptyFormatObject = () => {
+    const obj = vm.construct(c.TextFormat, []);
+    obj.values.set(publicKey('display'), 'block');
+    return obj;
+  };
+  // TextFormat の null でない項目を、プレイヤー側の書式の一部（{ 項目: 値 }）にする。
+  const partialOf = (obj) => {
     if (!(obj instanceof ASObject) || obj.klass !== c.TextFormat) vm.throwError('TypeError', 2007, 'Parameter format must be non-null.');
+    const out = {};
     for (const [name, initial] of FORMAT) {
       const v = value(obj, name);
       if (v === null || v === undefined) continue;
-      format[name] = typeof initial === 'string' ? str(v) : typeof initial === 'boolean' ? bool(v) : name === 'color' ? vm.toUint32(v) & 0xffffff : num(v);
+      out[name] = typeof initial === 'string' ? str(v) : typeof initial === 'boolean' ? bool(v) : name === 'color' ? vm.toUint32(v) & 0xffffff : num(v);
     }
+    const stops = value(obj, 'tabStops');
+    if (stops instanceof ASArray) out.tabStops = stops.items.map((x) => num(x));
+    const display = value(obj, 'display');
+    if (display !== null && display !== undefined) out.display = str(display);
+    return out;
   };
+  const applyFormat = (format, obj) => { Object.assign(format, partialOf(obj)); };
 
   // --- 文字の寸法（概算）と、自動の大きさ合わせ ---
   const lines = (f) => f.text.split('\r');
-  const textWidth = (f) => Math.round(Math.max(0, ...lines(f).map((line) => line.length)) * f.format.size * 0.5);
-  const textHeight = (f) => (f.text ? Math.round(lines(f).length * f.format.size * 1.15) : 0);
+  const textWidth = (f) => f.approxWidth();
+  const textHeight = (f) => f.approxHeight();
   // autoSize が none 以外なら、枠を文字に合わせる（左右 2 px ずつの余白つき）。right は右端、center は中央を保つ。
   const fit = (f) => {
     f.changed();
@@ -87,26 +103,6 @@ export function installText(vm, movie) {
   };
   // 改行は CR で持つ。LF は CR に、CR LF は CR 2 つになる（実機で確認）。
   const setText = (f, text) => { f.setText(text.replace(/\n/g, '\r'), false); fit(f); };
-
-  // --- htmlText: 読むと、今の文字列と書式を実機と同じ形の HTML にしたものが返る ---
-  const html = (f) => {
-    if (!f.text) return '';
-    const t = f.format;
-    const color = `#${(t.color & 0xffffff).toString(16).toUpperCase().padStart(6, '0')}`;
-    const wrap = (body) => {
-      let out = body;
-      if (t.underline) out = `<U>${out}</U>`;
-      if (t.italic) out = `<I>${out}</I>`;
-      if (t.bold) out = `<B>${out}</B>`;
-      if (t.url) out = `<A HREF="${t.url}" TARGET="${t.target}">${out}</A>`;
-      return out;
-    };
-    // 余白や字下げ、行間があれば、段落を TEXTFORMAT で包む。
-    const layout = [['LEFTMARGIN', t.leftMargin], ['RIGHTMARGIN', t.rightMargin], ['INDENT', t.indent], ['LEADING', t.leading], ['BLOCKINDENT', t.blockIndent]]
-      .filter(([, v]) => v).map(([name, v]) => ` ${name}="${str(v)}"`).join('');
-    return lines(f).map((line) => `${layout ? `<TEXTFORMAT${layout}>` : ''}<P ALIGN="${t.align.toUpperCase()}"><FONT FACE="${t.font || 'Times Roman'}" SIZE="${str(t.size)}" COLOR="${color}" LETTERSPACING="${str(t.letterSpacing ?? 0)}" KERNING="${t.kerning ? 1 : 0}">`
-      + `${wrap(line.replace(/[&<>"']/g, (ch) => ESCAPED[ch]))}</FONT></P>${layout ? '</TEXTFORMAT>' : ''}`).join('');
-  };
 
   const flag = (name) => [(self) => F(self)[name], (self, v) => { F(self)[name] = bool(v); F(self).changed(); }];
   const color = (name) => [(self) => F(self)[name], (self, v) => { F(self)[name] = vm.toUint32(v) & 0xffffff; F(self).changed(); }];
@@ -130,16 +126,16 @@ export function installText(vm, movie) {
       F(self).htmlText = null;
       setText(F(self), str(v));
     }],
-    htmlText: [(self) => html(F(self)), (self, v) => {
+    // 読むと、今の文字列と書式を実機と同じ形の HTML にしたものが返る。書くと、タグを書式として読む（複数行でないフィールドでは、<br> や
+    // 段落の切れ目は改行にならない。実機で確認）。
+    htmlText: [(self) => F(self).toHtml(), (self, v) => {
       if (v === null || v === undefined) vm.throwError('TypeError', 2007, 'Parameter text must be non-null.');
-      F(self).htmlText = str(v);
-      // 複数行でないフィールドでは、<br> や段落の切れ目は改行にならない（実機で確認）。
-      const text = plainText(str(v));
-      setText(F(self), F(self).multiline ? text : text.replace(/\r/g, ''));
+      F(self).setHtml(str(v), true);
+      fit(F(self));
     }],
     length: [(self) => F(self).text.length, null],
     // 文字色は、今の文字とこれから入る文字の両方に付く。
-    textColor: [(self) => F(self).newFormat.color, (self, v) => { F(self).newFormat.color = F(self).format.color = vm.toUint32(v) & 0xffffff; F(self).changed(); }],
+    textColor: [(self) => F(self).newFormat.color, (self, v) => { const color = vm.toUint32(v) & 0xffffff; F(self).newFormat = { ...F(self).newFormat, color }; F(self).setFormat({ color }, 0, F(self).text.length); F(self).format = { ...F(self).format, color }; F(self).changed(); }],
     type: [(self) => F(self).type, (self, v) => { F(self).type = oneOf(v, ['dynamic', 'input'], 'type'); }],
     autoSize: [(self) => F(self).autoSize, (self, v) => { F(self).autoSize = oneOf(v, ['none', 'left', 'center', 'right'], 'autoSize'); fit(F(self)); }],
     multiline: flag('multiline'), wordWrap: flag('wordWrap'), selectable: flag('selectable'), border: flag('border'), background: flag('background'),
@@ -169,7 +165,8 @@ export function installText(vm, movie) {
       const f = F(self);
       if (num(v) >= 0) { f.box.ymax = f.box.ymin + Math.round(num(v) * 20); f.changed(); }
     }],
-    defaultTextFormat: [(self) => formatObject(F(self).newFormat), (self, v) => { applyFormat(F(self).newFormat, v); }],
+    // 代入した書式の null でない項目が、これから入る文字の書式に重なる（実機で確認）。
+    defaultTextFormat: [(self) => formatObject(F(self).newFormat), (self, v) => { F(self).newFormat = mergeFormat(F(self).newFormat, partialOf(v)); }],
   };
   c.TextField = vm.defineClass({
     name: 'flash.text::TextField', base: c.InteractiveObject,
@@ -183,28 +180,53 @@ export function installText(vm, movie) {
     getters: Object.fromEntries(Object.entries(props).map(([name, [get]]) => [name, get])),
     setters: Object.fromEntries(Object.entries(props).filter(([, [, set]]) => set).map(([name, [, set]]) => [name, set])),
     methods: {
-      appendText: (self, [v]) => { const f = F(self); const format = f.format; setText(f, f.text + str(v)); f.format = format; },
+      // 足した文字は、最後の文字の書式になり、これから入る文字の書式もそれになる（実機で確認）。
+      appendText: (self, [v]) => {
+        const f = F(self), last = f.text.length ? f.formatAt(f.text.length - 1) : null;
+        f.replace(f.text.length, f.text.length, str(v));
+        if (last) f.newFormat = { ...last };
+        fit(f);
+      },
       // 範囲は文字列の長さに収める。始まりが負か、終わりが始まりより前なら、何もしない（実機で確認）。
+      // 入る文字の書式は、置き換える範囲の最後の文字のもの（f.replace）。
       replaceText: (self, [begin, end, v]) => {
         const f = F(self);
         const a = Math.min(vm.toInt32(begin), f.text.length), b = Math.min(vm.toInt32(end), f.text.length);
-        if (a >= 0 && b >= a) setText(f, f.text.slice(0, a) + str(v) + f.text.slice(b));
+        if (a >= 0 && b >= a) { f.replace(a, b, str(v)); fit(f); }
       },
-      replaceSelectedText: (self, [v]) => { const f = F(self); const [a, b] = f.selection ?? [0, 0]; setText(f, f.text.slice(0, a) + str(v) + f.text.slice(b)); f.selection = [a + str(v).length, a + str(v).length]; },
+      replaceSelectedText: (self, [v]) => {
+        const f = F(self), [a, b] = f.selection ?? [0, 0];
+        f.replace(a, b, str(v));
+        f.selection = [a + str(v).length, a + str(v).length];
+        fit(f);
+      },
       setSelection: (self, [begin, end]) => { const f = F(self); const clamp = (v) => Math.min(Math.max(vm.toInt32(v), 0), f.text.length); f.selection = [clamp(begin), clamp(end)].sort((x, y) => x - y); },
-      // 書式はフィールド全体で 1 つなので、範囲の指定は確かめるだけ。
+      // 範囲（begin〜end。end は含まない）の書式。範囲の中で違う項目は null。begin だけなら、その 1 文字。
+      // begin が文字の数以上、end が文字の数より後ろなら RangeError #2006。end が begin 以下なら、項目がすべて null（実機で確認）。
       getTextFormat: (self, [begin = -1, end = -1]) => {
-        const f = F(self);
-        if (vm.toInt32(begin) !== -1) index(f, begin, 'beginIndex');
-        if (vm.toInt32(end) !== -1) index(f, end, 'endIndex');
-        if (!f.text) return vm.construct(c.TextFormat, []); // 文字が無ければ、どの項目も null
-        return formatObject(f.format);
+        const f = F(self), len = f.text.length;
+        let a = vm.toInt32(begin), b = vm.toInt32(end);
+        if (a === -1 && b === -1) { a = 0; b = len; if (!len) return vm.construct(c.TextFormat, []); } // 文字が無ければ、どの項目も null
+        else {
+          if (a < 0 || a >= len) vm.throwError('RangeError', 2006, 'The supplied index is out of bounds.');
+          if (b === -1) b = a + 1;
+          if (b > len) vm.throwError('RangeError', 2006, 'The supplied index is out of bounds.');
+        }
+        return b <= a ? emptyFormatObject() : formatObject(f.getFormat(a, b));
       },
+      // 範囲を省くと、全体に重なる（これから入る文字の書式 defaultTextFormat は変わらない。実機で確認）。
       setTextFormat: (self, [format, begin = -1, end = -1]) => {
-        const f = F(self);
-        if (vm.toInt32(begin) !== -1) index(f, begin, 'beginIndex');
-        if (vm.toInt32(end) !== -1) index(f, end, 'endIndex');
-        applyFormat(f.format, format);
+        const f = F(self), len = f.text.length;
+        const partial = partialOf(format);
+        let a = vm.toInt32(begin), b = vm.toInt32(end);
+        if (a === -1 && b === -1) {
+          a = 0; b = len;
+        } else {
+          index(f, a, 'beginIndex');
+          if (b === -1) b = Math.min(a + 1, len); else index(f, b, 'endIndex');
+        }
+        f.setFormat(partial, a, b);
+        if (!len) f.format = mergeFormat(f.format, partial);
         fit(f);
       },
       getLineText: (self, [i]) => { const [list, at] = lineAt(F(self), i); return list[at] + (at < list.length - 1 ? '\r' : ''); },
