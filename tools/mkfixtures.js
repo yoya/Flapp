@@ -566,6 +566,17 @@ export const fixtures = {
       End(),
     ],
   }),
+  // FSCommand2（Flash Lite の命令。アクション 0x2D）の前後で trace し、赤い四角を置く。実機が、この命令で何をするかを見る。
+  fscommand2: swf({
+    version: 4,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 1200, [255, 0, 0]),
+      DoAction([PushString('before'), [0x26], PushString('1'), PushString('FullScreen'), PushString('2'), [0x2d], [0x17], PushString('after'), [0x26]]),
+      PlaceObject2({ depth: 1, id: 1, matrix: { tx: 400, ty: 400 } }),
+      ShowFrame(), End(),
+    ],
+  }),
   // zlib 圧縮 (CWS)。
   'cws-hello': swf({
     version: 8, zlib: true,
