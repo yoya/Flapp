@@ -155,7 +155,7 @@ export const MAGIC = {
   _parent: { get: (c) => c.parent?.scriptObject() },
   // ルートは親をたどって求める（ルート自身を作っている最中は、まだ movie.root が無い）。
   _root: { get: (c) => rootOf(c).scriptObject() },
-  _level0: { get: (c) => rootOf(c).scriptObject() },
+  _level0: { get: (c) => (c.movie.levels?.get(0) ?? rootOf(c)).scriptObject() },
 };
 
 // getURL / loadVariables のメソッドの指定。"GET" と "POST" だけが意味を持つ（大文字小文字は問わない）。ほかは送らない（''）。
@@ -189,7 +189,10 @@ export class MovieClipObject extends AVMObject {
     const child = this.clip.childByName(name, this.vm.caseInsensitive);
     if (child) return child.scriptObject();
     const magic = this.#magic(name);
-    return magic ? magic.get(this.clip, this.vm) : NONE;
+    if (magic) return magic.get(this.clip, this.vm);
+    // _level1 などは、そのレベルのルート（無ければ undefined）。
+    const level = /^_level(\d+)$/i.exec(name);
+    return level && level[1] !== '0' ? this.clip.movie.levels?.get(Number(level[1]))?.scriptObject() ?? NONE : NONE;
   }
 
   ownSet(name, value, receiver) {
@@ -286,8 +289,9 @@ export function installMovieClip(vm) {
     getDepth: (self) => self.clip.depth - DEPTH_OFFSET,
     getNextHighestDepth: (self) => Math.max(0, self.clip.highestDepth() - DEPTH_OFFSET + 1),
     getInstanceAtDepth: (self, [depth]) => self.clip.children.get(depthArg(depth))?.scriptObject?.(),
-    getBytesLoaded: (self) => self.clip.movie.fileLength,
-    getBytesTotal: (self) => self.clip.movie.fileLength,
+    // 読み込んだクリップは、読み込んだファイルの大きさ（読み込みの途中は 0）。
+    getBytesLoaded: (self) => self.clip.loadInfo?.loaded ?? self.clip.movie.fileLength,
+    getBytesTotal: (self) => self.clip.loadInfo?.total ?? self.clip.movie.fileLength,
     swapDepths: (self, [target]) => {
       const parent = self.clip.parent;
       if (!parent) return;
@@ -336,17 +340,18 @@ export function installMovieClip(vm) {
     // --- 外部への移動と読み込み ---
     // 要求を記録して、移動と変数の読み込みはホストに任せる（ホストが何もしなければ、何も起きない）。ムービーの読み込みは行わない。
     // 読み込みは行わない。実機で読み込みに失敗したときと同じく、次のフレームの後でクリップが空になる。
-    unloadMovie: (self) => { self.clip.unload(); },
+    unloadMovie: (self) => { vm.unloadClip(self); },
     // メソッド（GET / POST）を指定すると、このクリップの変数を一緒に送る。
+    // 対象がレベル（"_level1" など）なら、そのレベルへの読み込み（loadMovieNum と同じ）。
     getURL: (self, [url, target, method]) => {
       const req = { kind: 'getURL', url: toStr(vm, url), target: target === undefined ? '' : toStr(vm, target), method: sendMethod(method) };
+      const level = /^_level(\d+)$/i.exec(req.target);
+      if (level) return void vm.loadMovie({ level: Number(level[1]) }, req.url, req.method, self);
       vm.request(req);
       vm.navigate({ ...req, data: req.method ? vm.clipVariables(self) : '' });
     },
-    loadMovie: (self, [url, method]) => {
-      vm.request({ kind: 'loadMovie', url: toStr(vm, url), target: self.targetPath(), method: method === undefined ? '' : toStr(vm, method) });
-      vm.later(() => self.clip.unload());
-    },
+    // 画像か SWF を読み込んで、このクリップの中身と置き換える。
+    loadMovie: (self, [url, method]) => { vm.loadMovie({ clip: self }, toStr(vm, url), sendMethod(method), self); },
     // 読み込んだ "a=1&b=2" を、このクリップの変数に入れる。
     loadVariables: (self, [url, method]) => {
       const how = sendMethod(method);

@@ -51,9 +51,27 @@
     summary.push(result);
     try {
       // URL に ?matchPlayer を付けると、見た目を実機に寄せる指定で描く（Movie.load の同名のオプション）。
-      const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer(), { matchPlayer: new URLSearchParams(location.search).has('matchPlayer') });
-      const frame = entry.frame ?? Math.min(SETTLE_FRAME, movie.root.totalFrames);
+      // 読み込み（loadMovie、Loader など）は、SWF と同じサーバの中のファイルだけを読む（実機にも、同じローカルのファイルを読ませてある）。
+      const base = new URL(entry.swf, location.href);
+      const fetchLocal = async (url) => {
+        const target = new URL(url, base);
+        if (target.origin !== location.origin) return null;
+        const res = await fetch(target);
+        return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+      };
+      const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer(), {
+        matchPlayer: new URLSearchParams(location.search).has('matchPlayer'), media: fetchLocal, network: { load: ({ url }) => fetchLocal(url) },
+      });
+      let frame = entry.frame ?? Math.min(SETTLE_FRAME, movie.root.totalFrames);
       for (let i = 1; i < frame; i++) movie.advance();
+      // ほかのファイルを読み込むムービーは、読み込み（非同期）が済むように、イベントループを回しながら実機の撮影の時機
+      // （再生開始から約 2.5 秒）まで進める。
+      if (!entry.frame && movie.requests.some((r) => ['loadMovie', 'load', 'loadSound'].includes(r.kind))) {
+        for (; frame < Math.round(movie.frameRate * 2.5); frame++) {
+          movie.advance();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
       result.frame = frame;
 
       // 実機は色管理をせずに SWF の RGB 値をそのまま画面へ書く。画像に付いたディスプレイの
@@ -75,6 +93,8 @@
       const ours = document.createElement('canvas');
       const renderer = new CanvasRenderer(ours);
       await renderer.prepare(movie);
+      renderer.render(movie, scale);
+      await renderer.decoded(); // 読み込んだ画像の復号は、描くときに始まる
       renderer.render(movie, scale);
       if (movie.warnings.length) result.warnings = movie.warnings;
 

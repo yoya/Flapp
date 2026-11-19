@@ -83,6 +83,97 @@ export function installNet(vm) {
   });
   defineClass(vm, 'LoadVars', loadVarsProto, () => undefined);
 
+  // --- ムービーと画像の読み込み（loadMovie、loadMovieNum、MovieClipLoader） ---
+  // 中身を入れ替えたクリップ（読み込み、unloadMovie）は、スクリプトが付けた変数とメソッドを失う（実機で確認）。
+  const clearVariables = (object) => {
+    object.props.clear();
+    object.proto = vm.movieClipProto;
+  };
+  /** unloadMovie: 中身を取り除いて、変数も消す。途中の読み込みは取り消す。 */
+  vm.unloadClip = (object) => {
+    object.clip.loadToken = null;
+    clearVariables(object);
+    object.clip.unload();
+  };
+  // 対象ごとの、いちばん新しい読み込みの印。読み込みの途中で、同じ対象に別の読み込みや unloadMovie があれば、前の読み込みは捨てる。
+  const levelTokens = new Map();
+  const tokenOf = (into) => (into.clip ? into.clip.clip.loadToken : levelTokens.get(into.level));
+  const setToken = (into, token) => {
+    if (into.clip) into.clip.clip.loadToken = token;
+    else levelTokens.set(into.level, token);
+  };
+  /**
+   * into（{ clip: MovieClipObject } か { level: 番号 }）に、url の画像か SWF を読み込む。読み込みはホストに任せる。
+   * method が "GET" / "POST" なら、sender（クリップ）の変数を一緒に送る。url が空なら、中身を取り除く（unloadMovie と同じ）。
+   * notify(名前, 引数) は、MovieClipLoader のリスナーへの通知（onLoadStart / onLoadProgress / onLoadComplete / onLoadInit / onLoadError）。
+   */
+  vm.loadMovie = (into, url, method, sender, notify = () => {}) => {
+    const movie = (into.clip ?? sender)?.clip?.movie ?? vm.currentTarget?.clip?.movie;
+    if (!movie) return false;
+    const target = into.clip ? into.clip.targetPath() : `_level${into.level}`;
+    const how = method === 'GET' || method === 'POST' ? method : '';
+    vm.request({ kind: 'loadMovie', url, target, method: how });
+    if (url === '') {
+      setToken(into, null);
+      if (into.clip) vm.unloadClip(into.clip);
+      else movie.setLevel(into.level, null);
+      return true;
+    }
+    const token = {};
+    setToken(into, token);
+    const sent = how && sender ? vm.clipVariables(sender) : '';
+    const address = how === 'GET' && sent ? `${url}${url.includes('?') ? '&' : '?'}${sent}` : url;
+    if (into.clip) into.clip.clip.loadInfo = { loaded: 0, total: 0 };
+    const later = (fn) => vm.later(fn);
+    // 読めなかったとき: 対象のクリップは空になり、onLoadError(対象, "URLNotFound") が届く（実機で、無いファイルを指定したときと同じ）。
+    const fail = () => {
+      if (!into.clip) return;
+      into.clip.clip.unload();
+      notify('onLoadError', [into.clip, 'URLNotFound']);
+    };
+    const data = how === 'POST' ? new TextEncoder().encode(sent) : null;
+    vm.load({ url: address, method: how || 'GET', data, contentType: data ? 'application/x-www-form-urlencoded' : null }, (bytes) => {
+      // 後から別の読み込みや unloadMovie があった読み込みは、中身を差し替えない（失敗の通知だけは届く。実機で確認）。
+      if (tokenOf(into) !== token) {
+        if (!bytes && into.clip) notify('onLoadError', [into.clip, 'URLNotFound']);
+        return;
+      }
+      if (!bytes) return fail();
+      movie.loadContent(bytes, later, (content) => {
+        if (tokenOf(into) !== token || into.clip?.clip.removed) return;
+        setToken(into, null);
+        if (content?.library?.isAS3) movie.warn(`${url}: an ActionScript 3 movie cannot be loaded into an ActionScript 1/2 movie`);
+        if (!content || content.library?.isAS3) return fail();
+        const version = content.library?.version;
+        if (version && (version >= 6) !== (vm.version >= 6) || version && (version >= 7) !== (vm.version >= 7)) {
+          movie.warn(`${url}: the loaded movie is SWF ${version}; its scripts run with the rules of SWF ${vm.version}`);
+        }
+        const object = into.clip ?? null;
+        if (object) {
+          notify('onLoadStart', [object]);
+          notify('onLoadProgress', [object, content.size, content.size]);
+          notify('onLoadProgress', [object, content.size, content.size]);
+          if (object.clip.removed) return;
+        }
+        const clip = object ? object.clip : movie.setLevel(into.level, content);
+        // onLoadComplete の時点で、SWF のフレーム数は見えるが、1 フレーム目はまだ実行されていない（実機で確認）。
+        if (object && !content.bitmap) {
+          clearVariables(object);
+          clip.replaceContent(content);
+        }
+        if (object) notify('onLoadComplete', [object, 0]);
+        if (object && content.bitmap && !clip.removed) {
+          // スクリプトが付けた変数とメソッドは消える（位置や変形は残る）。実機で確認。
+          clearVariables(object);
+          clip.replaceContent(content);
+        }
+        clip.loadInfo = { loaded: content.size, total: content.size };
+        if (object) clip.loadInit = () => notify('onLoadInit', [object]);
+      });
+    });
+    return true;
+  };
+
   // --- MovieClipLoader ---
   const loaderProto = new AVMObject(vm, vm.objectProto);
   const clipOf = (target) => {
@@ -102,20 +193,24 @@ export function installNet(vm) {
       if (at >= 0) self.loadListeners.splice(at, 1);
       return at >= 0;
     },
-    // 読み込みは行わない。対象のクリップは空になり、リスナーに onLoadError(対象, "URLNotFound") が届く。
+    // loadClip(URL, 対象): 対象（クリップか、レベルの番号）に画像か SWF を読み込み、経過をリスナーに伝える。
+    // 読めなければ、対象のクリップは空になり、リスナーに onLoadError(対象, "URLNotFound") が届く。
     loadClip: (_, self, [url, target]) => {
+      if (!(self instanceof AVMObject)) return false;
+      const notify = (name, args) => { for (const listener of (self.loadListeners ?? []).slice()) callMethod(listener, name, args); };
+      if (typeof target === 'number') return Number.isInteger(target) && target >= 0 ? vm.loadMovie({ level: target }, toStr(vm, url), '', null, notify) : false;
       const object = clipOf(target);
-      if (!object || !(self instanceof AVMObject)) return false;
-      vm.request({ kind: 'loadMovie', url: toStr(vm, url), target: object.targetPath(), method: '' });
-      vm.later(() => {
-        object.clip.unload();
-        for (const listener of (self.loadListeners ?? []).slice()) callMethod(listener, 'onLoadError', [object, 'URLNotFound']);
-      });
-      return true;
+      if (!object) return false;
+      return vm.loadMovie({ clip: object }, toStr(vm, url), '', null, notify);
     },
     unloadClip: (_, self, [target]) => {
+      if (typeof target === 'number') {
+        const movie = vm.currentTarget?.clip?.movie;
+        if (Number.isInteger(target) && target >= 0 && movie) movie.setLevel(target, null);
+        return !!movie;
+      }
       const object = clipOf(target);
-      object?.clip.unload();
+      if (object) vm.unloadClip(object);
       return !!object;
     },
     getProgress: (_, self, [target]) => {

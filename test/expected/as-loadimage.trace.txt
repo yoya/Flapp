@@ -1,0 +1,17 @@
+after loadMovie: 80 40 kept? function 1/1
+loadClip true
+progress right after: 0/0
+onLoadStart _level0.holder frame>0=true
+onLoadProgress _level0.holder 691/691
+onLoadProgress _level0.holder 691/691
+onLoadComplete _level0.holder status=0 size=0x0
+onLoadStart _level0.gif frame>0=true
+onLoadProgress _level0.gif 1285/1285
+onLoadProgress _level0.gif 1285/1285
+onLoadComplete _level0.gif status=0 size=0x0
+onLoadInit _level0.gif size=32x24 frames=1/1
+onLoadInit _level0.holder size=32x24 frames=1/1
+frame 3 box: 64 24 x=50 xscale=200 tag=undefined undefined 1/1 name=box
+frame 3 holder: 32 24 y=100
+progress: 691/691 gif=32x24
+box size via getBounds: 32 24

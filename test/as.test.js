@@ -30,6 +30,7 @@ for (const file of readdirSync(dir).filter((f) => /^as-.*\.swf$/.test(f)).sort()
       for (let i = 0; i < FRAMES; i++) {
         time += 1000 / movie.frameRate;
         movie.advance();
+        await new Promise((resolve) => setImmediate(resolve)); // 読み込んだ SWF の解析（非同期）を進める
       }
     }
     const expected = realTrace(readFileSync(new URL(`expected/${name}.${withInput ? 'input.' : ''}trace.txt`, import.meta.url)), encoding);

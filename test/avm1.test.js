@@ -108,14 +108,14 @@ test('getURL は要求を記録し、移動はホストの network.navigate に�
     ...getURL2('next.swf', '/clip', 0x42), // ムービーの読み込み（POST）: 移動ではない
     ...getURL2('http://example.com/b', '_self', 0x01), // 移動（GET）: ルートの変数を付ける
     ...getURL2('FSCommand:quit', '', 0x00), // fscommand は移動ではない
-    ...getURL2('other.swf', '_level1', 0x00), // レベルへの読み込みも移動ではない
+    ...getURL2('other.swf', '_level1', 0x00), // レベルへの読み込み（loadMovieNum）は、移動ではない
   ]], { onRequest: (r) => seen.push(r.url), network: { navigate: (r) => navigated.push(r) } });
   assert.deepEqual(movie.requests, [
     { kind: 'getURL', url: 'http://example.com/a', target: '_blank', method: '' },
     { kind: 'loadMovie', url: 'next.swf', target: '/clip', method: 'POST' },
     { kind: 'getURL', url: 'http://example.com/b', target: '_self', method: 'GET' },
     { kind: 'getURL', url: 'FSCommand:quit', target: '', method: '' },
-    { kind: 'getURL', url: 'other.swf', target: '_level1', method: '' },
+    { kind: 'loadMovie', url: 'other.swf', target: '_level1', method: '' },
   ]);
   assert.deepEqual(seen, ['http://example.com/a', 'next.swf', 'http://example.com/b', 'FSCommand:quit', 'other.swf']);
   assert.deepEqual(navigated, [
@@ -204,6 +204,7 @@ test('LoadVars / XML の送信と、変数を付けた getURL / loadVariables �
     'navigate POST http://example.com/form _blank [score=12&user=yo%20ya]', // send: 中身を付けて移動する
     'load POST xml-echo.txt [<a b="1">x</a>] application/x-www-form-urlencoded',
     'navigate GET http://example.com/page _self [count=3&greeting=hi%20there&an]', // getURL(…, "GET"): ルートの変数を付ける
+    'load GET next.swf [] null', // getURL(…, "_level1") は、レベルへの読み込み
     'load POST vars.txt [color=red] application/x-www-form-urlencoded', // box.loadVariables(…, "POST"): box の変数を送る
   ]);
   assert.deepEqual(movie.warnings, []);

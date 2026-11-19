@@ -66,6 +66,8 @@ export class CanvasRenderer {
     this.bitmaps = new WeakMap(); // ビットマップ定義 → 描画に使える画像
     this.tinted = new WeakMap(); // ビットマップ定義 → Map(色変換 → 変換済みの画像)
     this.padded = new WeakMap(); // 画像 → 縁を 1 画素延ばした画像
+    this.decoding = new WeakSet(); // 復号を始めたビットマップ定義（読み込んだ画像など、prepare の後で現れたもの）
+    this.decodes = new Set(); // 済んでいない復号（Promise）
     this.blended = new WeakMap(); // 画像 → { z, image }: 実機と同じに、横方向に右隣の画素を混ぜて拡大した画像（#blendRight）
     this.layers = []; // 使い回すレイヤー
   }
@@ -113,8 +115,13 @@ export class CanvasRenderer {
     this.base = twipsToPixels;
     // ルートにもスクリプトが位置や色変換を設定できる（_root._x など）。
     // AS3 のムービーは、ステージの子（ルートと、スクリプトがステージに直接入れたもの）を描く。
+    // AS1 / AS2 のムービーは、レベル（_level0 がルート。loadMovieNum で読み込んだものは、その上に重なる）を番号の小さい順に描く。
     if (movie.stage) this.#drawContent(ctx, movie.stage, twipsToPixels, IDENTITY_CX, false);
-    else if (movie.root.visible) this.#drawContent(ctx, movie.root, concat(twipsToPixels, movie.root.matrix), concatCx(IDENTITY_CX, movie.root.cxform), false);
+    else {
+      for (const level of movie.levelsFromTop().reverse()) {
+        if (level.visible) this.#drawContent(ctx, level, concat(twipsToPixels, level.matrix), concatCx(IDENTITY_CX, level.cxform), false);
+      }
+    }
   }
 
   /** Movie.load の rasterize オプションに渡す関数（AS3 の BitmapData.draw が、表示オブジェクトを画像にするのに使う）。 */
@@ -128,7 +135,7 @@ export class CanvasRenderer {
    */
   #rasterize(movie, d, m, width, height) {
     const sub = new CanvasRenderer(new OffscreenCanvas(width, height));
-    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded, blended: this.blended });
+    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded, blended: this.blended, decoding: this.decoding, decodes: this.decodes });
     sub.base = { a: m.a / 20, b: m.b / 20, c: m.c / 20, d: m.d / 20, tx: m.tx, ty: m.ty };
     sub.#drawContent(sub.ctx, d, sub.base, IDENTITY_CX, false);
     return sub.ctx.getImageData(0, 0, width, height).data;
@@ -462,6 +469,22 @@ export class CanvasRenderer {
     return result;
   }
 
+  #decodeLater(def) {
+    if (this.decoding.has(def)) return;
+    this.decoding.add(def);
+    const movie = this.movie;
+    const done = createImageBitmap(new Blob([def.encoded.bytes], { type: def.encoded.type })).then((image) => {
+      this.bitmaps.set(def, def.alpha ? withAlpha(image, def.alpha) : image);
+    }, (e) => movie?.warn(`bitmap ${def.id} cannot be decoded: ${e.message}`));
+    this.decodes.add(done);
+    done.finally(() => this.decodes.delete(done));
+  }
+
+  /** 描いている途中で始めた画像の復号（読み込んだ画像など）が済むのを待つ。済んだら、描き直せば画像も描かれる。 */
+  async decoded() {
+    while (this.decodes.size) await Promise.all([...this.decodes]);
+  }
+
   // 色変換を反映した画像と、描画時に掛けるアルファを返す。まだ復号されていなければ null。
   #bitmapSource(def, cx) {
     // ブラウザのデコーダが出したビデオの絵は、そのまま描ける画像として渡される（色変換は、アルファの乗算だけを反映する）。
@@ -473,6 +496,11 @@ export class CanvasRenderer {
       this.tinted.delete(def);
     }
     if (!image) {
+      // prepare の後で現れた JPEG / PNG / GIF（読み込んだ画像）は、ここで復号を始める。済むまでは描かない。
+      if (def.encoded) {
+        this.#decodeLater(def);
+        return null;
+      }
       if (!def.rgba) return null;
       image = new OffscreenCanvas(def.width, def.height);
       image.getContext('2d').putImageData(new ImageData(def.rgba, def.width, def.height), 0, 0);

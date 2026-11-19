@@ -12,7 +12,7 @@ import { SoundMixer, buildStream } from './sound.js';
 import { decodable, embeddedSequence } from './video.js';
 import { parseDefineVideoStream, parseVideoFrame } from '../swf/video.js';
 import { parseDefineButtonSound, parseDefineSound, parseSoundStreamBlock, parseSoundStreamHead, parseStartSound } from '../swf/sound.js';
-import { parseBitmap } from '../swf/bitmap.js';
+import { imageFile, parseBitmap } from '../swf/bitmap.js';
 import { BUTTON_COND, parseDefineButton, parsePlaceObject, parseRemoveObject, parseSetBackgroundColor } from '../swf/display.js';
 import { parseDefineMorphShape } from '../swf/morph.js';
 import { parseSWF } from '../swf/parse.js';
@@ -167,7 +167,7 @@ export class Movie {
    */
   static async load(bytes, options = {}) {
     const movie = new Movie(await parseSWF(bytes, options), options);
-    await movie.#decodeBitmaps();
+    await movie.#decodeBitmaps(movie.library);
     if (movie.avm2) {
       movie.#framePhase(); // AS3: 1 フレーム目の frameConstructed、フレームスクリプト、exitFrame
       movie.#guard(() => movie.avm2.display.loaded()); // 読み込みが済んだことを loaderInfo に伝える
@@ -178,10 +178,9 @@ export class Movie {
 
   #phaseDepth = 0;
 
-  #jpegTables;
-  #pendingBitmaps = [];
   #bitmapPixelBudget;
   #queue = []; // 実行待ちのアクション { clip, code } / { clip, method, args }
+  #late = []; // このフレームのアクションが全部済んだ後に実行する処理（loadMovie の onLoadInit）
   #initQueue = []; // DoInitAction（通常のアクションより先に実行する）
   #initDone = new Set(); // 実行済みの DoInitAction のスプライト ID
   #instanceNames = 0;
@@ -197,6 +196,7 @@ export class Movie {
     this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
     this.#bitmapPixelBudget = maxBitmapPixels;
     this.version = swf.version;
+    this.encoding = encoding;
     this.legacy = swf.version < 6 ? new LegacyText(encoding) : null; // SWF 5 以前の文字列の扱い
     this.fileLength = swf.fileLength;
     this.frameSize = swf.frameSize; // twips
@@ -205,6 +205,9 @@ export class Movie {
     this.backgroundColor = null; // SetBackgroundColor が無ければ null
     this.dictionary = new Map(); // キャラクタ ID → 定義
     this.exports = new Map(); // 書き出し名（リンケージ ID）→ キャラクタ ID
+    // このムービー自身の SWF の定義。loadMovie などで読み込んだ SWF は、それぞれ別のライブラリを持つ（loadLibrary）。
+    // クリップは、自分の属するライブラリからキャラクタを引く（MovieClip.library）。
+    this.library = { dictionary: this.dictionary, exports: this.exports, version: swf.version, legacy: this.legacy, jpegTables: undefined, pending: [], main: true };
     this.maxInstances = maxInstances;
     this.instances = 0;
     this.mouse = { x: 0, y: 0 }; // ステージ座標（twips）
@@ -248,8 +251,10 @@ export class Movie {
     });
     this.emptySprite = { type: 'sprite', id: -1, order: -1, timeline: Object.assign([[]], { labels: new Map() }) };
 
-    const timeline = this.#buildTimeline(swf.tags, null);
+    const timeline = this.#buildTimeline(swf.tags, null, this.library);
     this.root = new MovieClip(this, { type: 'sprite', id: 0, order: Infinity, timeline }, 0, PLACE_DEFAULTS, 0, null);
+    // AS1 / AS2 のレベル（_level0 がルート。loadMovieNum などで、上に重ねて別のムービーを読み込める）。番号 → ルートのクリップ
+    this.levels = new Map([[0, this.root]]);
     // AS3 のステージ。ルートを子に持つ入れ物で、スクリプトが stage.addChild で入れたものはルートの兄弟になる。
     // ルートの parent は null のままにしておく（ルートを「親の無いクリップ」として扱っている箇所が多いため）。
     this.stage = null;
@@ -299,6 +304,100 @@ export class Movie {
   }
 
   /**
+   * 読み込んだファイル（loadMovie / Loader）を、表示できる中身にする。結果は done に渡す（画像はその場で、SWF は解析が済んでから
+   * later で予約した処理の中で）。{ bitmap }（画像）、{ character, library }（SWF。character はルートのタイムライン）、null（どちらでもない）。
+   */
+  loadContent(bytes, later, done) {
+    let image = null;
+    try {
+      image = imageFile(bytes, this.#bitmapPixelBudget);
+    } catch (e) {
+      if (e.name !== 'SWFError') throw e;
+      this.warn(`loaded image cannot be read: ${e.message}`);
+      done(null);
+      return;
+    }
+    if (image) {
+      this.#bitmapPixelBudget -= image.width * image.height;
+      done({ bitmap: { type: 'bitmap', id: -1, ...image }, size: bytes.length });
+      return;
+    }
+    const magic = String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0, bytes[2] ?? 0);
+    if (magic !== 'FWS' && magic !== 'CWS' && magic !== 'ZWS') {
+      done(null);
+      return;
+    }
+    this.loadLibrary(bytes).then((content) => later(() => done(content)), (e) => {
+      if (e.name !== 'SWFError') this.warn(`loaded movie cannot be read: ${e.message}`);
+      else this.warn(`loaded movie cannot be read: ${e.message}`);
+      later(() => done(null));
+    });
+  }
+
+  /**
+   * 読み込んだ SWF を解析して、そのライブラリ（辞書、書き出し名、版）と、ルートのタイムラインを作る。
+   * 解析の上限（大きさ、ビットマップの画素数、表示オブジェクトの数）は、このムービーと共有する。
+   */
+  async loadLibrary(bytes) {
+    const swf = await parseSWF(bytes);
+    const attributes = swf.tags.find((t) => t.code === 69);
+    const legacy = swf.version < 6 ? new LegacyText(this.encoding) : null;
+    const library = {
+      dictionary: new Map(), exports: new Map(), version: swf.version, legacy, jpegTables: undefined, pending: [], main: false,
+      isAS3: !!attributes && attributes.length >= 1 && (attributes.body[0] & 0x08) !== 0, frameSize: swf.frameSize, fileLength: swf.fileLength,
+    };
+    for (const w of swf.warnings) this.warn(`loaded movie: ${w}`);
+    const timeline = this.#buildTimeline(swf.tags, null, library);
+    await this.#decodeBitmaps(library);
+    // 図形のビットマップの塗りは、キャラクタ ID ではなくビットマップの定義そのものを持たせる（描画側は、このムービーの辞書しか知らない）。
+    const bind = (value, depth) => {
+      if (!value || typeof value !== 'object' || depth > 6) return;
+      if (value.type === 'bitmap' && typeof value.bitmapId === 'number' && !value.bitmap) {
+        const bitmap = library.dictionary.get(value.bitmapId);
+        if (bitmap?.type === 'bitmap') value.bitmap = bitmap;
+      }
+      for (const v of Array.isArray(value) ? value : Object.values(value)) if (v && typeof v === 'object' && v.type !== 'sprite') bind(v, depth + 1);
+    };
+    for (const def of library.dictionary.values()) if (def.type === 'shape' || def.type === 'morph') bind(def, 0);
+    return { character: { type: 'sprite', id: 0, order: Infinity, timeline, library }, library, size: swf.fileLength };
+  }
+
+  /**
+   * AS1 / AS2: レベル n に中身を読み込む（loadMovieNum）。レベルが無ければ作る。content が null なら、レベルを取り除く
+   * （_level0 は取り除かず、空にする）。読み込んだクリップを返す。
+   */
+  setLevel(n, content) {
+    let clip = this.levels.get(n);
+    if (!content) {
+      if (!clip) return null;
+      if (n === 0) clip.unload();
+      else {
+        clip.unload();
+        clip.removed = true;
+        this.levels.delete(n);
+      }
+      return null;
+    }
+    if (!clip) {
+      clip = new MovieClip(this, this.emptySprite, n, PLACE_DEFAULTS, 0, null);
+      clip.levelNumber = n;
+      this.levels.set(n, clip);
+    }
+    clip.replaceContent(content);
+    return clip;
+  }
+
+  /** レベルのルートを、番号の大きい順（手前から）に返す。 */
+  levelsFromTop() {
+    return [...this.levels].sort((a, b) => b[0] - a[0]).map(([, clip]) => clip);
+  }
+
+  /** このフレームのアクションが全部済んだ後に、run を実行する（loadMovie の onLoadInit 用。積んだ順に実行する）。 */
+  queueLate(run) {
+    if (this.avm) this.#late.push(run);
+  }
+
+  /**
    * 1 フレーム進め、たまったアクションを実行する。
    * クリップは新しく作られたものから順に処理し、ルートが最後になる（実機の trace の順序から確認した規則）。
    * このフレームで新しく作られるクリップは、1 フレーム目を表示したままにする。
@@ -316,6 +415,8 @@ export class Movie {
     as3?.broadcast('enterFrame'); // AS3 の enterFrame は、再生ヘッドが進んだ後に届く（実機で確認）
     this.onFrameConstructed?.(); // 各クリップがこのフレームの子を作り終え、フレームのスクリプトを実行する前（検証用の観測点）
     if (as3) this.#framePhase();
+    this.runActions();
+    for (const run of this.#late.splice(0)) this.#queue.push({ run });
     this.runActions();
     for (const fn of due) this.#guard(fn);
     this.runActions();
@@ -405,7 +506,8 @@ export class Movie {
       }
       return null;
     };
-    const button = key ? find(this.root) : null;
+    let button = null;
+    for (const level of key ? this.levelsFromTop() : []) if ((button = find(level))) break;
     for (const action of button?.character.button.actions ?? []) if (action.key === key) this.queueAction(button.parent, action.code);
     this.runActions();
     this.#keyChars.set(code, ascii);
@@ -534,13 +636,17 @@ export class Movie {
         if (child instanceof MovieClip) {
           const found = find(child);
           if (found) return found;
-        } else if (clip !== this.root && child.hitPoint(this.mouse.x, this.mouse.y)) {
+        } else if (clip.parent && child.hitPoint(this.mouse.x, this.mouse.y)) {
           return clip;
         }
       }
       return null;
     };
-    return find(this.root);
+    for (const level of this.levelsFromTop()) {
+      const found = find(level);
+      if (found) return found;
+    }
+    return null;
   }
 
   // --- ボタン ---
@@ -581,20 +687,20 @@ export class Movie {
       }
       const m = invert(child.worldMatrix());
       const local = { x: m.a * x + m.c * y + m.tx, y: m.b * x + m.d * y + m.ty };
-      if (button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0))) return child;
+      if (button.records.some((rec) => rec.hitTest && this.#hits(rec, local, 0, child.library.dictionary))) return child;
     }
     return null;
   }
 
   // 配置の記述 place（キャラクタと行列）が、親の座標系の点 p を含むか。図形は塗りの内側、スプライトは 1 フレーム目の中身で判定する。
-  #hits(place, p, depth) {
-    const character = this.dictionary.get(place.characterId);
+  #hits(place, p, depth, dictionary) {
+    const character = dictionary.get(place.characterId);
     if (!character || depth > 8) return false;
     const m = invert(place.matrix ?? IDENTITY);
     const q = { x: m.a * p.x + m.c * p.y + m.tx, y: m.b * p.x + m.d * p.y + m.ty };
     if (character.type === 'shape') return insidePaths(character.paths, q.x, q.y);
     if (character.type === 'sprite') {
-      return (character.timeline[0] ?? []).some((op) => op.op === 'place' && op.characterId !== undefined && this.#hits(op, q, depth + 1));
+      return (character.timeline[0] ?? []).some((op) => op.op === 'place' && op.characterId !== undefined && this.#hits(op, q, depth + 1, dictionary));
     }
     return false;
   }
@@ -605,7 +711,7 @@ export class Movie {
     if (this.#pressed?.removed) this.#pressed = null;
     let hit = null;
     this.#guard(() => { // ハンドラの有無を調べるときに、スクリプトの getter が動くことがある
-      hit = this.#mouseInside ? this.#buttonAt(this.root, this.mouse.x, this.mouse.y) : null;
+      for (const level of this.#mouseInside ? this.levelsFromTop() : []) if ((hit = this.#buttonAt(level, this.mouse.x, this.mouse.y))) break;
     });
     if (this.#pressed) {
       // 押したまま出入りする
@@ -630,7 +736,7 @@ export class Movie {
       target.setButtonState(state);
       for (const action of button.actions) if (action.cond & BUTTON_COND[event]) this.queueAction(target.parent, action.code);
       const sound = target.character.buttonSounds?.[event]; // DefineButtonSound
-      const defined = sound && this.dictionary.get(sound.soundId);
+      const defined = sound && target.library.dictionary.get(sound.soundId);
       if (defined?.type === 'sound') this.sounds.start(defined, sound.info, target.parent);
     } else {
       // クリップは、_up / _over / _down というフレームラベルがあれば、ハンドラより先にそのフレームへ移って止まる。
@@ -662,8 +768,8 @@ export class Movie {
   }
 
   /** テキストフィールドの状態 edit（DefineEditText と同じ形）を描画命令にする。 */
-  textPaths(edit) {
-    return editTextToPaths(edit, this.#font);
+  textPaths(edit, library = this.library) {
+    return editTextToPaths(edit, fontsOf(library));
   }
 
   /** 名前の照合用の小文字化。SWF 5 以前は英字だけを対象にする（2 バイト文字を壊さない）。 */
@@ -849,7 +955,7 @@ export class Movie {
 
   // タグ列を、定義（辞書へ）とフレームごとの操作（配置・削除・アクション）に分ける。
   // 定義は先にすべて辞書へ入れる（本来は読み込みの進行に合わせて増えるが、再生結果は変わらない）。
-  #buildTimeline(tags, sprite) {
+  #buildTimeline(tags, sprite, lib) {
     const frames = [];
     frames.labels = new Map(); // フレームラベル → フレーム番号
     let ops = [];
@@ -861,7 +967,7 @@ export class Movie {
           frames.push(ops);
           ops = [];
         } else if (tag.code === 4 || tag.code === 26 || tag.code === 70) {
-          ops.push({ op: 'place', ...parsePlaceObject(tag, this.version) });
+          ops.push({ op: 'place', ...parsePlaceObject(tag, lib.version) });
         } else if (tag.code === 5 || tag.code === 28) {
           ops.push({ op: 'remove', ...parseRemoveObject(tag) });
         } else if (tag.code === 12) {
@@ -873,19 +979,19 @@ export class Movie {
         } else if (tag.code === 19) {
           if (streamHead) streamBlocks.push({ frame: frames.length + 1, ...parseSoundStreamBlock(tag, streamHead) });
         } else if (tag.code === 43) {
-          const name = new Reader(tag.body, this.legacy !== null).string();
+          const name = new Reader(tag.body, lib.legacy !== null).string();
           if (!frames.labels.has(name)) frames.labels.set(name, frames.length + 1);
         } else if (sprite) {
           // 定義タグはスプライトの中には置けない（仕様 13 章）。
         } else if (tag.code === 59 && tag.length >= 2) {
           ops.push({ op: 'init', spriteId: tag.body[0] | (tag.body[1] << 8), code: tag.body.subarray(2) });
         } else if (tag.code === 56) {
-          const r = new Reader(tag.body, this.legacy !== null);
+          const r = new Reader(tag.body, lib.legacy !== null);
           for (let n = r.u16(); n > 0; n--) {
             const id = r.u16();
-            this.exports.set(r.string(), id);
+            lib.exports.set(r.string(), id);
           }
-        } else if ((tag.code === 82 || tag.code === 72) && this.avm2) {
+        } else if ((tag.code === 82 || tag.code === 72) && this.avm2 && lib.main) {
           // DoABC: フラグ（u32）と名前の後に ABC が続く。古い形 (72) は ABC だけ。
           let at = 0;
           if (tag.code === 82) {
@@ -894,7 +1000,7 @@ export class Movie {
           }
           const lazy = tag.code === 82 && (tag.body[0] & 1) !== 0;
           this.#loadABC(tag.body.subarray(at), lazy);
-        } else if (tag.code === 76 && this.avm2) {
+        } else if (tag.code === 76 && this.avm2 && lib.main) {
           const r = new Reader(tag.body);
           for (let n = r.u16(); n > 0; n--) {
             const id = r.u16();
@@ -903,53 +1009,53 @@ export class Movie {
         } else if (tag.code === 14) {
           const sound = parseDefineSound(tag);
           if (!['pcm', 'pcm-native', 'adpcm', 'mp3'].includes(sound.format)) this.warn(`sound ${sound.id}: format ${sound.format} is not supported (it will be silent)`);
-          this.#define({ type: 'sound', ...sound });
+          this.#define({ type: 'sound', ...sound }, lib);
         } else if (tag.code === 60) {
           const video = parseDefineVideoStream(tag);
           if (video.numFrames > 0 && !decodable(video.codec)) this.warn(`video ${video.id}: codec ${video.codec} is not supported (it will not be shown)`);
-          this.#define({ type: 'video', ...video, frames: new Map() });
+          this.#define({ type: 'video', ...video, frames: new Map() }, lib);
         } else if (tag.code === 61) {
           // フレームのデータは、ビデオのキャラクタに番号つきで集める。どれを表示するかは、置くときの ratio で決まる。
           const frame = parseVideoFrame(tag);
-          const video = this.dictionary.get(frame.streamId);
+          const video = lib.dictionary.get(frame.streamId);
           if (video?.type === 'video') video.frames.set(frame.frameNum, frame.data);
           else this.warn(`video frame for an undefined video stream ${frame.streamId}`);
         } else if (tag.code === 17) {
           const { buttonId, sounds } = parseDefineButtonSound(tag);
-          const button = this.dictionary.get(buttonId);
+          const button = lib.dictionary.get(buttonId);
           if (button?.button) button.buttonSounds = sounds;
         } else if (tag.code === 9) {
-          this.backgroundColor ??= parseSetBackgroundColor(tag);
+          if (lib.main) this.backgroundColor ??= parseSetBackgroundColor(tag);
         } else if (SHAPE_TAGS.has(tag.code)) {
           const shape = parseDefineShape(tag);
-          this.#define({ type: 'shape', id: shape.id, bounds: shape.bounds, paths: shapeToPaths(shape) });
+          this.#define({ type: 'shape', id: shape.id, bounds: shape.bounds, paths: shapeToPaths(shape) }, lib);
         } else if (tag.code === 7 || tag.code === 34) {
           // ボタンは、通常状態 (up) のキャラクタを置いた 1 フレームのスプライトとして扱う。
           // マウスに応じた状態の切り替えは MovieClip.setButtonState、イベントは Movie.mouseMove などが行う。
           const button = parseDefineButton(tag);
           const place = button.records.filter((rec) => rec.up).map((rec) => ({ op: 'place', move: false, ...rec }));
-          this.#define({ type: 'sprite', id: button.id, timeline: Object.assign([place], { labels: new Map() }), button });
+          this.#define({ type: 'sprite', id: button.id, timeline: Object.assign([place], { labels: new Map() }), button }, lib);
         } else if (tag.code === 46 || tag.code === 84) {
-          this.#define({ type: 'morph', ...parseDefineMorphShape(tag) });
+          this.#define({ type: 'morph', ...parseDefineMorphShape(tag) }, lib);
         } else if (tag.code === 10 || tag.code === 48 || tag.code === 75) {
-          this.#define({ type: 'font', ...parseDefineFont(tag) });
+          this.#define({ type: 'font', ...parseDefineFont(tag) }, lib);
         } else if (tag.code === 11 || tag.code === 33) {
           // 静的テキストは、グリフを並べた図形として扱う。
           const text = parseDefineText(tag);
-          this.#define({ type: 'shape', id: text.id, bounds: text.bounds, paths: textToPaths(text, this.#font) });
+          this.#define({ type: 'shape', id: text.id, bounds: text.bounds, paths: textToPaths(text, fontsOf(lib)) }, lib);
         } else if (tag.code === 37) {
-          const edit = parseDefineEditText(tag, this.legacy !== null);
-          if (this.legacy && edit.text !== undefined) edit.text = this.legacy.decode(edit.text); // 表示用
-          this.#define({ type: 'edittext', id: edit.id, bounds: edit.bounds, edit, fontName: this.#font(edit.fontId)?.name });
+          const edit = parseDefineEditText(tag, lib.legacy !== null);
+          if (lib.legacy && edit.text !== undefined) edit.text = lib.legacy.decode(edit.text); // 表示用
+          this.#define({ type: 'edittext', id: edit.id, bounds: edit.bounds, edit, fontName: fontsOf(lib)(edit.fontId)?.name }, lib);
         } else if (tag.code === 8) {
-          this.#jpegTables ??= tag.body;
+          lib.jpegTables ??= tag.body;
         } else if (BITMAP_TAGS.has(tag.code) && tag.length >= 2) {
           // 展開は非同期なので、ID だけ先に登録しておく。
           const def = { type: 'bitmap', id: tag.body[0] | (tag.body[1] << 8), width: 0, height: 0 };
-          if (this.#define(def)) this.#pendingBitmaps.push({ def, tag });
+          if (this.#define(def, lib)) lib.pending.push({ def, tag });
         } else if (tag.code === 39 && tag.tags) {
           const def = { type: 'sprite', id: tag.spriteId };
-          if (this.#define(def)) def.timeline = this.#buildTimeline(tag.tags, def);
+          if (this.#define(def, lib)) def.timeline = this.#buildTimeline(tag.tags, def, lib);
         }
       } catch (e) {
         if (e.name !== 'SWFError') throw e;
@@ -960,34 +1066,36 @@ export class Movie {
     return frames;
   }
 
-  #font = (id) => {
-    const font = this.dictionary.get(id);
-    return font?.type === 'font' ? font : undefined;
-  };
-
-  async #decodeBitmaps() {
-    for (const { def, tag } of this.#pendingBitmaps) {
+  async #decodeBitmaps(lib) {
+    for (const { def, tag } of lib.pending) {
       try {
-        Object.assign(def, await parseBitmap(tag, this.#jpegTables, this.#bitmapPixelBudget));
+        Object.assign(def, await parseBitmap(tag, lib.jpegTables, this.#bitmapPixelBudget));
         this.#bitmapPixelBudget -= def.width * def.height;
       } catch (e) {
         if (e.name !== 'SWFError') throw e;
         this.warn(`tag ${tag.name} at offset ${tag.offset}: ${e.message}`);
       }
     }
-    this.#pendingBitmaps = [];
+    lib.pending = [];
   }
 
-  #define(def) {
-    if (this.dictionary.has(def.id)) {
+  #define(def, lib) {
+    if (lib.dictionary.has(def.id)) {
       this.warn(`character ${def.id} is defined twice; the later definition is ignored`);
       return false;
     }
-    def.order = this.dictionary.size; // 定義された順番
-    this.dictionary.set(def.id, def);
+    def.order = lib.dictionary.size; // 定義された順番
+    if (!lib.main) def.library = lib; // 読み込んだ SWF の定義は、どのライブラリのものかを覚えておく
+    lib.dictionary.set(def.id, def);
     return true;
   }
 }
+
+// ライブラリのフォントを、ID で引く関数。
+const fontsOf = (lib) => (id) => {
+  const font = lib.dictionary.get(id);
+  return font?.type === 'font' ? font : undefined;
+};
 
 /** 表示リスト上の 1 オブジェクト。 */
 export class DisplayObject {
@@ -1193,7 +1301,7 @@ export class TextField extends DisplayObject {
         leftMargin: f.leftMargin * 20, rightMargin: f.rightMargin * 20, indent: f.indent * 20, leading: f.leading * 20,
         text: this.text, html: false, password: this.password, multiline: this.multiline, wordWrap: this.wordWrap,
         border: this.border, background: this.background, borderColor: rgbOf(this.borderColor), backgroundColor: rgbOf(this.backgroundColor),
-      });
+      }, this.character.library);
     }
     return this.#paths;
   }
@@ -1310,6 +1418,8 @@ export class MovieClip extends DisplayObject {
     super(character, depth, desc, parent);
     this.movie = movie;
     this.level = level; // 入れ子の深さ（ルートが 0）
+    // キャラクタを引くライブラリ。読み込んだ SWF のクリップは、その SWF のライブラリ。中身の無いクリップは、親のもの。
+    this.library = character.library ?? parent?.library ?? movie.library;
     this.frames = character.timeline;
     this.children = new Map(); // 深度 → DisplayObject
     this.currentFrame = 0; // 1 始まり。0 はまだ何も実行していない
@@ -1445,11 +1555,11 @@ export class MovieClip extends DisplayObject {
   }
 
   dotPath() {
-    return this.parent ? `${this.parent.dotPath()}.${this.name}` : '_level0';
+    return this.parent ? `${this.parent.dotPath()}.${this.name}` : `_level${this.levelNumber ?? 0}`;
   }
 
   slashPath() {
-    if (!this.parent) return '/';
+    if (!this.parent) return this.levelNumber ? `_level${this.levelNumber}` : '/';
     return `${this.parent.parent ? this.parent.slashPath() : ''}/${this.name}`;
   }
 
@@ -1541,8 +1651,8 @@ export class MovieClip extends DisplayObject {
 
   /** 書き出し名 exportName のシンボルを、名前 name・深度 depth で置く。 */
   attach(exportName, name, depth) {
-    const id = this.movie.exports.get(exportName);
-    const character = id === undefined ? undefined : this.movie.dictionary.get(id);
+    const id = this.library.exports.get(exportName);
+    const character = id === undefined ? undefined : this.library.dictionary.get(id);
     if (character?.type !== 'sprite') return undefined;
     const child = this.#instantiate(depth, { ...PLACE_DEFAULTS, characterId: id, name }, true);
     // Object.registerClass で登録されたクラスがあれば、そのインスタンスにする。
@@ -1580,9 +1690,29 @@ export class MovieClip extends DisplayObject {
     if (this.removed) return;
     for (const depth of [...this.children.keys()]) this.#remove(depth);
     this.#drawing = null;
+    this.picture = null;
     this.frames = Object.assign([], { labels: new Map() });
     this.currentFrame = 0;
     this.playing = false;
+  }
+
+  /**
+   * 中身を、読み込んだ画像か SWF に置き換える（loadMovie など）。このクリップ自体（名前、位置、変形）はそのまま残る。
+   * content は Movie.loadContent の結果。画像は 1 フレームのクリップになり、SWF はそのルートのタイムラインを再生する。
+   * 新しい中身の 1 フレーム目（画像なら、その表示）は、次のフレームの、このクリップの処理の中で始まる（実機で確認）。
+   * SWF のフレーム数は、すぐに見える。
+   */
+  replaceContent(content) {
+    if (this.removed) return;
+    this.unload();
+    this.contentPending = content;
+    if (content.bitmap) {
+      this.frames = Object.assign([[]], { labels: new Map() });
+      return;
+    }
+    this.character = content.character;
+    this.library = content.character.library;
+    this.frames = content.character.timeline;
   }
 
   /** スクリプトが作った子（深度 16384 以上。テキストフィールドなど）を取り除く。 */
@@ -1614,6 +1744,21 @@ export class MovieClip extends DisplayObject {
   /** このクリップを 1 フレーム進める（子は Movie.advance が別に進める）。最終フレームの次は 1 フレーム目へ戻る。 */
   tick() {
     this.movie.fire(this, 'enterFrame');
+    // 読み込んだ中身の始まり。1 フレーム目を実行し、このフレームのアクションが済んだ後に onLoadInit を届ける。
+    const content = this.contentPending;
+    if (content) {
+      this.contentPending = null;
+      if (content.bitmap) {
+        this.currentFrame = 1;
+        this.setPicture(content.bitmap, false);
+      } else {
+        this.playing = true;
+        if (this.frames.length > 0) this.#runFrame(1, true);
+      }
+      if (this.loadInit) this.movie.queueLate(this.loadInit);
+      this.loadInit = null;
+      return;
+    }
     if (this.playing && this.frames.length > 1) {
       this.isPlaying = true; // AS3 の isPlaying。最初は偽で、再生ヘッドが自分で進むと真になる
       if (this.currentFrame < this.frames.length) this.#runFrame(this.currentFrame + 1, true);
@@ -1635,7 +1780,7 @@ export class MovieClip extends DisplayObject {
       }
       if (op.op === 'sound') {
         // 途中のフレームを飛ばして移動するときは鳴らさない。
-        const sound = this.movie.dictionary.get(op.soundId);
+        const sound = this.library.dictionary.get(op.soundId);
         if (withActions && sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
         continue;
       }
@@ -1704,7 +1849,7 @@ export class MovieClip extends DisplayObject {
     this.scriptPending = true;
     for (const op of this.frames[target - 1]) {
       if (op.op === 'action') this.movie.queueAction(this, op.code);
-      const sound = op.op === 'sound' ? this.movie.dictionary.get(op.soundId) : undefined;
+      const sound = op.op === 'sound' ? this.library.dictionary.get(op.soundId) : undefined;
       if (sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
     }
   }
@@ -1770,7 +1915,7 @@ export class MovieClip extends DisplayObject {
   // dynamic: スクリプトからの配置。定義順の制約を外し、既にある深度は置き換える。
   #instantiate(depth, desc, dynamic = false, given = undefined) {
     const { movie } = this;
-    const character = given ?? movie.dictionary.get(desc.characterId);
+    const character = given ?? this.library.dictionary.get(desc.characterId);
     if (!character) {
       movie.warn(`character ${desc.characterId} is not defined`);
       return undefined;

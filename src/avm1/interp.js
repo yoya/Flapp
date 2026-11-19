@@ -466,9 +466,14 @@ export class AVM1 {
         case 0x08: break; // ToggleQuality
         case 0x09: clip()?.clip.movie.sounds.stop(); break; // StopSounds: 鳴っている音をすべて止める
         case 0x81: clip()?.gotoFrame(view.getUint16(data, true) + 1, false); break; // GotoFrame
-        case 0x83: { // GetURL: 要求を記録して、移動はホストに任せる
+        case 0x83: { // GetURL: 要求を記録して、移動はホストに任せる。対象がレベル（"_level1" など）なら、そのレベルへの読み込み
           const [url, next] = string(data);
           const req = { kind: 'getURL', url, target: string(next)[0], method: '' };
+          const level = /^_level(\d+)$/i.exec(req.target);
+          if (level) {
+            this.loadMovie({ level: Number(level[1]) }, url, '', clip());
+            break;
+          }
           this.request(req);
           this.navigate({ ...req, data: '' });
           break;
@@ -665,10 +670,15 @@ export class AVM1 {
             this.loadText({ ...req, body: sent }, (text) => { if (text !== undefined && into?.isMovieClip && !into.clip.removed) this.loadedVariables(into, text); });
             break;
           }
-          this.request(req);
-          if (kind === 'getURL') this.navigate({ ...req, data: sent });
-          // ムービーの読み込みは行わない。実機で読み込めなかったときと同じく、次のフレームの後で対象のクリップが空になる（ルートは残す）。
-          else if (into?.isMovieClip && into.clip.parent) this.later(() => into.clip.unload());
+          const level = /^_level(\d+)$/i.exec(target);
+          if (level) this.loadMovie({ level: Number(level[1]) }, url, req.method, clip()); // loadMovieNum
+          else if (kind === 'loadMovie') {
+            if (into?.isMovieClip) this.loadMovie({ clip: into }, url, req.method, clip());
+            else this.request(req);
+          } else {
+            this.request(req);
+            this.navigate({ ...req, data: sent });
+          }
           break;
         }
         case 0x9f: { // GotoFrame2

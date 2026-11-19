@@ -11,6 +11,29 @@ const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const GIF_MAGIC = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
 const startsWith = (bytes, magic) => magic.every((v, i) => bytes[i] === v);
 
+const GIF87_MAGIC = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61];
+
+/**
+ * 読み込んだ画像ファイル（loadMovie / Loader）が JPEG / PNG / GIF なら、その寸法と、復号器に渡すバイト列を返す。どれでもなければ null。
+ * 壊れた JPEG や、画素数の上限を超える画像は SWFError にする。
+ * @returns {{ width: number, height: number, encoded: { bytes: Uint8Array, type: string } } | null}
+ */
+export function imageFile(bytes, pixelBudget = DEFAULT_PIXEL_BUDGET) {
+  if (startsWith(bytes, PNG_MAGIC) || startsWith(bytes, GIF_MAGIC) || startsWith(bytes, GIF87_MAGIC)) {
+    const png = bytes[0] === 0x89;
+    if (bytes.length < 24) throw new SWFError('image data is truncated');
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const width = png ? view.getUint32(16) : view.getUint16(6, true);
+    const height = png ? view.getUint32(20) : view.getUint16(8, true);
+    checkSize(width, height, pixelBudget);
+    return { width, height, encoded: { bytes, type: png ? 'image/png' : 'image/gif' } };
+  }
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  const jpeg = normalizeJPEG([bytes]);
+  checkSize(jpeg.width, jpeg.height, pixelBudget);
+  return { width: jpeg.width, height: jpeg.height, encoded: { bytes: jpeg.bytes, type: 'image/jpeg' } };
+}
+
 function checkSize(width, height, pixelBudget) {
   if (width < 1 || height < 1) throw new SWFError(`bitmap size ${width}x${height} is not supported`);
   if (width * height > pixelBudget) throw new SWFError(`bitmap ${width}x${height} exceeds the remaining pixel budget`);

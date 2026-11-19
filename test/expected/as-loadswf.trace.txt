@@ -1,0 +1,20 @@
+after loadMovie: old 1
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· '_level1'
+level1 right after: undefined
+onLoadStart _level0.holder
+onLoadComplete _level0.holder childVar=undefined frames=2
+child frame 1: this=_level1 _root=_level1 _level0=_level0 _parent=undefined inner=_level1.inner _target=_level1 1/2
+child attach _level1.made 10 size=25x25
+child frame 1: this=_level0.holder _root=_level0 _level0=_level0 _parent=_level0 inner=_level0.holder.inner _target=/holder 1/2
+child attach _level0.holder.made 10 size=25x25
+child frame 1: this=_level0.box _root=_level0 _level0=_level0 _parent=_level0 inner=_level0.box.inner _target=/box 1/2
+child attach _level0.box.made 10 size=25x25
+onLoadInit _level0.holder childVar=hello inner=_level0.holder.inner made=_level0.holder.made 1/2
+child frame 2: _level1 2/2
+child frame 2: _level0.holder 2/2
+child frame 2: _level0.box 2/2
+frame 4: box=_level0.box childVar=hello marker=undefined 2/2 x=100
+frame 4: level1=_level1 childVar=hello 2/2 inner=_level1.inner
+frame 4: bytes true true true
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· '_level1'
+frame 7: level1=undefined box=_level0.box 0 childVar=undefined
