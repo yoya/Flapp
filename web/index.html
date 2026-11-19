@@ -135,6 +135,7 @@
   // base は、?swf= で読んだときの SWF の URL。信用しないときは、そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
   // 信用するときは、ページの移動や読み込みと同じく、http / https の URL から取る（trustedHttp）。
   async function play(bytes, label, base) {
+    current?.saveSharedObjects(); // 替える前のムービーの SharedObject を保存する（信用していなければ、何もしない）
     clearInterval(timer);
     stopVideo();
     stopVideo = () => {};
@@ -173,7 +174,7 @@
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
-      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, network, matchPlayer, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, network, storage: trust.checked ? trustedStorage(label) : undefined, matchPlayer, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
@@ -199,6 +200,24 @@
         draw();
       }, 1000 / movie.frameRate);
     }
+  }
+
+  /**
+   * SWF を信用するときの、SharedObject の保存先（Movie.load の storage オプション）。localStorage に、SWF ごと（?swf= で読んだときは
+   * その URL、ファイルを選んだときはそのファイル名）に分けて書く。書けなければ（容量など）false。
+   */
+  function trustedStorage(id) {
+    const key = (name) => `flapp:so:${id}:${name}`;
+    return {
+      load(name) { try { return localStorage.getItem(key(name)); } catch { return null; } },
+      save(name, text) {
+        try {
+          if (text === null) localStorage.removeItem(key(name));
+          else localStorage.setItem(key(name), text);
+          return true;
+        } catch { return false; }
+      },
+    };
   }
 
   /**
@@ -264,6 +283,7 @@
     return { network, media };
   }
 
+  addEventListener('pagehide', () => current?.saveSharedObjects()); // 実機も、閉じるときに保存する
   document.getElementById('file').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (file) play(await file.arrayBuffer(), file.name);

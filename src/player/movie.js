@@ -158,6 +158,11 @@ export class Movie {
    *                   足したヘッダ（addRequestHeader、URLRequest.requestHeaders。{ 名前: 値 }、無ければ undefined）。
    *                   AS3 の URL は、実機と同じ規則で escape した文字列（空白・非 ASCII・% などを含むとき）で渡す。
    *                   読めなければ null を返す（スクリプトには、読み込みの失敗として伝わる）
+   *   storage: SharedObject の保存先（省略すると、再生中だけ値を持つ）。プレイヤーは自分では保存しない。
+   *             load: (名前) => 文字列 | null   getLocal したときに、保存してある文字列を返す
+   *             save: (名前, 文字列 | null) => 書けたか   flush() と saveSharedObjects() で書く。null はその名前を消す（clear()）
+   *             名前は、スクリプトが getLocal に渡したもの。SWF ごとの区別は、ホストが付ける（実機は SWF の URL で分ける）。
+   *             文字列は 100 KB まで。形式は player/sharedstore.js を参照
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
    *             - 埋め込みの H.263 / VP6 を整数倍で置いたとき、実機と同じに、横方向だけ右隣の画素と混ぜて描く
@@ -189,9 +194,10 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage } = {}) {
     this.media = media ?? null;
     this.network = network ?? null;
+    this.storage = storage ?? null;
     this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
@@ -249,6 +255,7 @@ export class Movie {
       language,
       request: this.request,
       navigate: (req) => this.navigate(req),
+      storage: this.storage,
       load: (req, done, options) => this.load(req, (fn) => this.avm.later(fn), done, options),
       now: this.now,
       random,
@@ -423,6 +430,12 @@ export class Movie {
   /** このフレームのアクションが全部済んだ後に、run を実行する（loadMovie の onLoadInit 用。積んだ順に実行する）。 */
   queueLate(run) {
     if (this.avm) this.#late.push(run);
+  }
+
+  /** 開いている SharedObject を、storage へ書く（ホストが、ページを閉じる前やムービーを替える前に呼ぶ。実機も終了時に書く）。 */
+  saveSharedObjects() {
+    this.avm?.saveShared?.();
+    this.avm2?.saveShared?.();
   }
 
   /**

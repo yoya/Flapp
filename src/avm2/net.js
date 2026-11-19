@@ -6,8 +6,9 @@
 // Loader も同じく、ホストに読み込みを任せて、画像（JPEG / PNG / GIF）と SWF を表示する。AS3 の SWF は、そのクラスをこのムービーの
 // 仮想機械に足して動かす（子のアプリケーションドメインと同じく、同じ名前のクラスは読み込んだ側のものが使われる）。
 // AS1 / AS2 の SWF は、表示はするが、スクリプトは動かない。
-// SharedObject は、このムービーを再生している間だけ値を持つ（保存はしない）。
+// SharedObject は、ホストが storage オプションを渡していれば、そこへ保存して読む。渡していなければ、再生している間だけ値を持つ。
 // Capabilities は固定の値を返す（再生している端末の情報は渡さない）。
+import { EMPTY_SHARED, decodeShared, encodeShared } from '../player/sharedstore.js';
 import { LegacyText } from '../swf/legacy.js';
 import { ASArray, ASClass, ASObject, publicKey } from './object.js';
 
@@ -154,15 +155,42 @@ export function installNet(vm, movie) {
     movie.request({ kind: 'sendToURL', url: requestOf(request, 'request').url ?? '', target: '', method: request.method ?? 'GET' });
     movie.load(hostRequest(request), display.later, () => {});
   }, 'sendToURL'));
-  // SharedObject: 名前ごとに 1 つ。data に入れた値は、再生している間だけ残る。
+  // SharedObject: 名前ごとに 1 つ。data に入れた値は、再生している間だけ残る。storage があれば、flush() と saveShared() で書き、
+  // 最初に getLocal したときに読む（player/sharedstore.js）。localPath は区別しない（SWF ごとの区別はホストが付ける）。
   const shared = new Map();
+  const plain = (v) => v instanceof ASObject && v.klass === c.Object;
+  const adapter = {
+    kind: (v) => {
+      if (v === undefined) return 'undefined';
+      if (v === null) return 'null';
+      if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return typeof v;
+      if (v instanceof ASArray) return v.klass === c.Array ? 'array' : 'skip';
+      if (v instanceof ASObject && v.klass === c.Date) return 'date';
+      return plain(v) ? 'object' : 'skip'; // 独自のクラスのインスタンス、関数、表示オブジェクトなどは保存しない
+    },
+    time: (d) => d.time,
+    items: (a) => Array.from(a.items), // 穴は undefined になる
+    entries: (o) => vm.enumerate(o).map((k) => [String(k), o.values.get(publicKey(String(k)))]),
+  };
+  const builder = {
+    undefined: () => undefined,
+    date: (t) => Object.assign(new ASObject(c.Date), { time: t }),
+    array: (items) => new ASArray(vm, items),
+    object: (entries) => { const o = new ASObject(c.Object); for (const [k, v] of entries) vm.setProperty(o, vm.keyName(k), v); return o; },
+  };
+  const save = (name, obj) => {
+    const text = encodeShared(obj.data, adapter);
+    return text !== null && movie.storage.save(name, text === EMPTY_SHARED ? null : text) === true;
+  };
+  vm.saveShared = () => { if (movie.storage) for (const [name, obj] of shared) save(name, obj); };
+  const nameOf = (self) => { for (const [name, obj] of shared) if (obj === self) return name; return undefined; };
   c.SharedObject = vm.defineClass({
     name: 'flash.net::SharedObject', base: c.EventDispatcher,
     getters: { data: (self) => self.data, size: () => 0, objectEncoding: () => 3, client: (self) => self },
     setters: { objectEncoding: () => {}, client: () => {} },
     methods: {
-      flush: () => 'flushed',
-      clear: (self) => { self.data = new ASObject(c.Object); },
+      flush: (self) => (!movie.storage || save(nameOf(self), self) ? 'flushed' : 'pending'), // 入りきらなければ保存できない（容量を増やす確認はしない）
+      clear: (self) => { self.data = new ASObject(c.Object); if (movie.storage) movie.storage.save(nameOf(self), null); },
       close: () => {}, setProperty: (self, [name, value]) => { vm.setProperty(self.data, vm.keyName(str(name)), value); },
     },
     staticMethods: {
@@ -171,7 +199,8 @@ export function installNet(vm, movie) {
         if (name === null || name === undefined || /[ ~%&\\;:"',<>?#]/.test(key)) vm.throwError('Error', 2134, 'Cannot create SharedObject.');
         if (!shared.has(key)) {
           if (shared.size >= MAX_SHARED) vm.throwError('Error', 2134, 'Cannot create SharedObject.');
-          shared.set(key, Object.assign(new ASObject(c.SharedObject), { data: new ASObject(c.Object) }));
+          const saved = movie.storage ? decodeShared(movie.storage.load(key), builder) : undefined;
+          shared.set(key, Object.assign(new ASObject(c.SharedObject), { data: plain(saved) ? saved : new ASObject(c.Object) }));
         }
         return shared.get(key);
       },

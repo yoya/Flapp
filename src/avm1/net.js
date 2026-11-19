@@ -4,6 +4,7 @@
 // スクリプトには「読み込みに失敗した」と伝える。実機で存在しないファイルを指定したときと同じ流れになる。
 import { toStr } from './convert.js';
 import { defineClass, defineMethods } from './globals.js';
+import { EMPTY_SHARED, decodeShared, encodeShared } from '../player/sharedstore.js';
 import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM } from './object.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
@@ -238,12 +239,48 @@ export function installNet(vm) {
   defineClass(vm, 'MovieClipLoader', loaderProto, () => undefined);
 
   // --- SharedObject ---
-  // 保存先を持たない。同じ名前なら再生中は同じオブジェクトを返すが、再生をやり直すと消える。
+  // 同じ名前なら再生中は同じオブジェクトを返す。保存先（storage オプション）があれば、flush() と saveShared() で書き、
+  // 最初に getLocal したときに読む。無ければ、再生をやり直すと消える。localPath は区別しない（SWF ごとの区別はホストが付ける）。
   const sharedProto = new AVMObject(vm, vm.objectProto);
   const shared = new Map(); // 名前 → SharedObject
+  const dateProto = () => g.get('Date').get('prototype');
+  const adapter = {
+    kind: (v) => {
+      if (v === undefined) return 'undefined';
+      if (v === null) return 'null';
+      if (typeof v !== 'object') return typeof v === 'function' || typeof v === 'symbol' ? 'skip' : typeof v;
+      if (v instanceof AVMArray) return 'array';
+      if (typeof v.time === 'number' && v.proto === dateProto()) return 'date';
+      return Object.getPrototypeOf(v) === AVMObject.prototype ? 'object' : 'skip'; // クリップや関数などは保存しない
+    },
+    time: (d) => d.time,
+    items: (a) => Array.from(a.items), // 穴は undefined になる
+    entries: (o) => o.ownKeys().reverse().map((k) => [k, o.ownGet(k, o)]), // 作った順
+  };
+  const builder = {
+    undefined: () => undefined,
+    date: (t) => Object.assign(new AVMObject(vm, dateProto()), { time: t }),
+    array: (items) => new AVMArray(vm, items),
+    object: (entries) => { const o = new AVMObject(vm, vm.objectProto); for (const [k, v] of entries) o.set(k, v); return o; },
+  };
+  // obj の data を保存先へ書く。書けたら true。
+  const save = (name, obj) => {
+    const data = obj.get('data');
+    const text = data instanceof AVMObject ? encodeShared(data, adapter) : null;
+    return text !== null && vm.storage.save(name, text === EMPTY_SHARED ? null : text) === true;
+  };
+  vm.saveShared = () => { if (vm.storage) for (const [name, obj] of shared) save(name, obj); };
   defineMethods(vm, sharedProto, {
-    flush: () => true,
-    clear: (_, self) => { if (self instanceof AVMObject) self.set('data', new AVMObject(vm, vm.objectProto)); },
+    flush: (_, self) => {
+      if (!vm.storage) return true;
+      for (const [name, obj] of shared) if (obj === self) return save(name, obj);
+      return false;
+    },
+    clear: (_, self) => {
+      if (!(self instanceof AVMObject)) return;
+      self.set('data', new AVMObject(vm, vm.objectProto));
+      for (const [name, obj] of shared) if (obj === self) vm.storage?.save(name, null);
+    },
     // 中身が空なら 0。そうでなければ、保存したときのおおよそのバイト数。
     getSize: (_, self) => {
       const data = self instanceof AVMObject ? self.get('data') : undefined;
@@ -259,7 +296,8 @@ export function installNet(vm) {
       if (/[ ~%&\;:"',<>?#]/.test(key)) return null;
       if (!shared.has(key) && shared.size < 1000) {
         const obj = new AVMObject(vm, sharedProto);
-        obj.define('data', new AVMObject(vm, vm.objectProto));
+        const saved = vm.storage ? decodeShared(vm.storage.load(key), builder) : undefined;
+        obj.define('data', saved instanceof AVMObject ? saved : new AVMObject(vm, vm.objectProto));
         shared.set(key, obj);
       }
       return shared.get(key) ?? null;

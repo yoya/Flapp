@@ -71,9 +71,10 @@ export class AVM1 {
    *   load: (要求, done, { sync }) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で
    *            呼ぶ（sync なら、ホストがその場で返したときはその場で呼ぶ）。既定は、読めなかった扱い（null）
    */
-  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
+  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, storage = null, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
     this.request = request;
     this.navigate = navigate;
+    this.storage = storage; // SharedObject の保存先（player/sharedstore.js の説明）。無ければ、再生中だけ値を持つ
     this.load = load ?? ((req, done, { sync = false } = {}) => (sync ? done(null) : this.later(() => done(null))));
     this.listeners = { Mouse: [], Key: [], Stage: [] }; // addListener で登録されたオブジェクト
     this.currentTarget = null;
