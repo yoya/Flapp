@@ -1,0 +1,47 @@
+mask default null
+mask set true,[object Sprite]
+mask null null
+blendMode default normal
+blendMode set multiply
+blendMode bogus ERR 2008
+blendMode null ERR 2007
+blendMode upper ERR 2008
+cacheAsBitmap false,true
+scrollRect default null
+scrollRect set (x=1, y=2, w=30, h=40) (x=1, y=2, w=30, h=40) false
+scrollRect null null
+scale9Grid ERR 2004
+accessibilityProperties ,true
+3D defaults 0,0,0,0,1
+3D set 10,30,0,0,1
+tabIndex ERR 2027
+tabEnabled false,false,true,false
+tabChildren true,false
+mouseChildren true,false
+mouseEnabled true,false,true
+focusRect ,false,
+contextMenu ,true
+hitArea ,true,
+dropTarget null
+buttonMode false,true,true
+startDrag ok
+MovieClip.enabled true,false
+MovieClip misc false,1,0,1,,0,,1
+getObjectsUnderPoint 1,0,false
+stage.quality HIGH,LOW,LOW
+stage.displayState normal,true,true,,true,true,false
+stage.scaleMode showAll,,240,160,true,true,true,4294967295
+stage.invalidate ok
+stage.set ERR 2008
+stage.focus true,false
+stage.frameRate 12,30
+getLineMetrics true,true,true,true
+tf props 1,5,0,,false,true,dynamic,false,false,none,false,false,false,false,normal,pixel,0,0,false,
+tf sel 1,3,3,el
+tf more 1,0,1,0,1,true,true
+tf methods -1,-1,5,Hello,0,5,0,true,
+tf replace BX world!
+tf format Arial,20,16711680,true,true,true,u,t,center,5,6,7,8
+tf html xy,true,true,true
+tf type ERR 2008
+done

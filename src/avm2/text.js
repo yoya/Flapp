@@ -156,6 +156,7 @@ export function installText(vm, movie) {
     maxScrollH: fixed(0), maxScrollV: fixed(1), bottomScrollV: fixed(1),
     selectionBeginIndex: [(self) => F(self).selection?.[0] ?? 0, null], selectionEndIndex: [(self) => F(self).selection?.[1] ?? 0, null],
     caretIndex: [(self) => F(self).selection?.[1] ?? 0, null],
+    selectedText: [(self) => { const f = F(self); const [a, b] = f.selection ?? [0, 0]; return f.text.slice(a, b); }, null],
     numLines: [(self) => lines(F(self)).length, null],
     textWidth: [(self) => textWidth(F(self)), null], textHeight: [(self) => textHeight(F(self)), null],
     // 幅と高さは枠の大きさ。代入は、拡大率ではなく枠を変える。代入した値がそのまま枠の大きさになるので、
@@ -212,6 +213,25 @@ export function installText(vm, movie) {
       getLineIndexOfChar: (self, [i]) => { const f = F(self); return f.text.slice(0, index(f, i, 'charIndex')).split('\r').length - 1; },
       getCharIndexAtPoint: () => -1,
       getLineIndexAtPoint: () => -1,
+      // 寸法は概算（textWidth と同じ、1 文字 = 文字の大きさの半分、行の高さ = 1.15 倍）。
+      getLineMetrics: (self, [i]) => {
+        const f = F(self), [list, at] = lineAt(f, i), size = f.format.size;
+        return vm.construct(c.TextLineMetrics, [2, Math.round(list[at].length * size * 0.5), Math.round(size * 1.15), Math.round(size * 0.9), Math.round(size * 0.25), f.format.leading ?? 0]);
+      },
+      getCharBoundaries: (self, [i]) => {
+        const f = F(self), n = vm.toInt32(i);
+        if (n < 0 || n >= f.text.length) return null;
+        const row = f.text.slice(0, n).split('\r').length - 1, col = n - f.text.slice(0, n).lastIndexOf('\r') - 1, size = f.format.size;
+        return vm.construct(c.Rectangle, [2 + col * size * 0.5, 2 + row * size * 1.15, size * 0.5, size * 1.15]);
+      },
+      // 段落は CR で区切られる。長さは、区切りの CR を含む。
+      getFirstCharInParagraph: (self, [i]) => { const f = F(self); return f.text.lastIndexOf('\r', index(f, i, 'charIndex') - 1) + 1; },
+      getParagraphLength: (self, [i]) => {
+        const f = F(self), start = f.text.lastIndexOf('\r', index(f, i, 'charIndex') - 1) + 1, end = f.text.indexOf('\r', start);
+        return end < 0 ? f.text.length - start : end - start + 1;
+      },
+      getImageReference: () => null,
+      getRawText: (self) => F(self).text,
     },
   });
   c.StaticText = vm.defineClass({ name: 'flash.text::StaticText', base: c.DisplayObject });

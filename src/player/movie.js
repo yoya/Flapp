@@ -593,6 +593,9 @@ export class Movie {
       let hit = null;
       if (!(child instanceof MovieClip) || child.leaf) {
         if (child.hitPoint(x, y)) hit = child instanceof TextField && child.mouseEnabled !== false ? child : PASS;
+      } else if (child.hitArea) {
+        // hitArea が決まっているクリップは、その形で当たる（本人の絵と子は当たらない）。
+        if (child.hitArea.hitPoint(x, y)) hit = child.mouseEnabled !== false ? child : PASS;
       } else if (child.states) {
         // スクリプトが作ったボタン: 当たり判定用の状態の形で決める。その表示オブジェクトは表示リストに無いので、判定の間だけボタンの子として扱う。
         const area = child.states.hit;

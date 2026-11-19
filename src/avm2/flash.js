@@ -5,6 +5,7 @@
 import { gradientStyle, lineOptions } from '../player/drawing.js';
 import { installBitmap } from './bitmap.js';
 import { installBytes } from './bytes.js';
+import { installDisplayExtras } from './displayext.js';
 import { installFilters } from './filters.js';
 import { installGeom } from './geom.js';
 import { installMedia } from './media.js';
@@ -797,6 +798,8 @@ export function installFlash(vm, movie, types) {
     setters: { scaleMode: (self, v) => { self.scaleMode = str(v); }, align: (self, v) => { self.align = str(v); }, frameRate: () => {}, focus: () => {} },
   });
   display.stage = new ASObject(c.Stage); // 表示オブジェクト（movie.stage）は、ルートができた後でプレイヤーが結び付ける
+
+  installDisplayExtras(vm, { movie, display, D });
 
   // --- 表示リストとの結び付け ---
   // キャラクタに結び付けられたクラス（SymbolClass）。無ければ種類ごとの既定のクラス。

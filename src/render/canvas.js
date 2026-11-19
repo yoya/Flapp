@@ -187,12 +187,12 @@ export class CanvasRenderer {
     // setMask で他のクリップのマスクになっているクリップは、それ自体は描かれない。
     if (!mask && child.maskFor && !child.maskFor.removed && child.maskFor.maskedBy === child) return;
     // setMask でマスクを付けられたクリップは、マスクのクリップの形で切り抜く。
-    const masker = mask ? null : child.maskedBy;
+    const masker = mask || child.maskDrawing ? null : child.maskedBy;
     if (masker && !masker.removed) {
       const content = this.#acquireLayer();
-      child.maskedBy = null; // 中身を描く間だけ外す（再帰でここへ戻らないように）
+      child.maskDrawing = true; // 中身を描く間は、マスクをかけない（再帰でここへ戻らないように。maskedBy は保つので、自分の子のマスクは描かれない）
       this.#drawObject(content.ctx, child, parentMatrix, parentCx, false);
-      child.maskedBy = masker;
+      child.maskDrawing = false;
       const shape = this.#acquireLayer();
       const parent = masker.parent ? concat(this.base, masker.parent.worldMatrix()) : this.base;
       this.#drawContent(shape.ctx, masker, concat(parent, masker.matrix), OPAQUE_CX, true); // マスクは _visible が偽でも効く
@@ -216,15 +216,28 @@ export class CanvasRenderer {
     // マスクの形を描くときは、ブレンドとフィルタは意味を持たない。
     const blend = mask ? 'normal' : child.blendMode;
     const filters = mask ? null : child.filters;
+    // scrollRect: 矩形（自分の座標系、px）の範囲だけを見せ、その左上を原点に置く。
+    const body = (target) => {
+      const sr = mask ? null : child.scrollRect;
+      if (!sr) { this.#drawContent(target, child, m, cx, mask); return; }
+      target.save();
+      target.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
+      target.beginPath();
+      target.rect(0, 0, sr.width * 20, sr.height * 20);
+      target.clip();
+      resetTransform(target);
+      this.#drawContent(target, child, concat(m, { a: 1, b: 0, c: 0, d: 1, tx: -sr.x * 20, ty: -sr.y * 20 }), cx, mask);
+      target.restore();
+    };
     if (blend === 'normal' && !filters?.length) {
-      this.#drawContent(ctx, child, m, cx, mask);
+      body(ctx);
       return;
     }
     // alpha と erase は下のアルファを削る合成で、layer の中でだけ意味を持つ。
     // 最終出力に直接かかる場合は何も描かない（実機での挙動は未確認）。
     if ((blend === 'alpha' || blend === 'erase') && ctx === this.ctx) return;
     const layer = this.#acquireLayer();
-    this.#drawContent(layer.ctx, child, m, cx, mask);
+    body(layer.ctx);
     if (filters?.length) {
       const { width, height } = layer.canvas;
       const image = layer.ctx.getImageData(0, 0, width, height);
@@ -267,7 +280,9 @@ export class CanvasRenderer {
   #drawContent(ctx, child, m, cx, mask) {
     if (child instanceof MovieClip) {
       const outer = this.slice;
-      const grid = child.character?.scalingGrid;
+      // スクリプトの scale9Grid（px）は、タグの拡大の枠（twips）より優先する。
+      const g9 = child.scale9Grid;
+      const grid = g9 ? { xmin: g9.x * 20, xmax: (g9.x + g9.width) * 20, ymin: g9.y * 20, ymax: (g9.y + g9.height) * 20 } : child.character?.scalingGrid;
       const box = grid && child.bounds(IDENTITY);
       const unit = Math.hypot(this.base.a, this.base.b);
       const sx = Math.hypot(m.a, m.b) / unit;
