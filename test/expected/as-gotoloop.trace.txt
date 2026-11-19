@@ -1,0 +1,13 @@
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'ticks'
+f1 n=0 ticks=0
+f2 n=1 ticks=0
+f1 n=1 ticks=0
+f2 n=2 ticks=0
+f1 n=2 ticks=0
+f2 n=3 ticks=0
+f1 n=3 ticks=0
+f2 n=4 ticks=0
+f1 n=4 ticks=0
+f2 n=5 ticks=0
+f1 n=5 ticks=0
+f2 n=6 ticks=0

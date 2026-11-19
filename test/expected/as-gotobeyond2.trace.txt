@@ -1,0 +1,11 @@
+Œx : éŒ¾‚³‚ê‚Ä‚¢‚È‚¢•Ï”‚ğQÆ‚µ‚Ä‚¢‚Ü‚· 'n'
+n2 before cur=1
+n2 after gotoAndStop(99) cur=4
+n4 cur=4
+n4 after gotoAndPlay(99) cur=4
+n5 cur=1
+n6 cur=1
+n6 after gotoAndStop(0) cur=4
+n8 cur=4
+n8 after nextFrame cur=4
+n10 cur=4

@@ -555,6 +555,17 @@ export const fixtures = {
     version: 8,
     tags: [SetBackgroundColor(0x33, 0x66, 0x99), traceTag('hello Flapp'), ShowFrame(), End()],
   }),
+  // 存在しないフレームへの GotoFrame（バージョン 4 のアクション）。実機が、無視するのか、最後のフレームへ移るのかを見る。
+  'goto-beyond': swf({
+    version: 4, frames: 4,
+    tags: [
+      DoAction([PushString('f1'), [0x26], [0x81, ...u16(2), ...u16(9)]]), ShowFrame(), // フレーム 10 へ（4 フレームしか無い）
+      traceTag('f2'), ShowFrame(),
+      traceTag('f3'), ShowFrame(),
+      DoAction([PushString('f4'), [0x26], [0x07]]), ShowFrame(),
+      End(),
+    ],
+  }),
   // zlib 圧縮 (CWS)。
   'cws-hello': swf({
     version: 8, zlib: true,

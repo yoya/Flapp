@@ -243,7 +243,7 @@ export class MovieClipObject extends AVMObject {
 
   /** frame はフレーム番号（1 始まり）かラベル。数字だけの文字列は番号として扱う。 */
   gotoFrame(frame, play) {
-    const n = this.clip.frameNumber(typeof frame === 'number' ? frame : toStr(this.vm, frame));
+    const n = this.clip.frameNumber(typeof frame === 'number' ? frame : toStr(this.vm, frame), false); // 存在しないフレームかどうかを gotoFrame が見分ける
     if (n === undefined) return;
     this.clip.gotoFrame(n, play);
   }

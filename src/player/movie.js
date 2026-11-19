@@ -1666,7 +1666,7 @@ export class MovieClip extends DisplayObject {
   }
 
   /** フレーム番号（1 始まり）またはラベルを、有効なフレーム番号にする。該当するラベルが無ければ undefined。 */
-  frameNumber(spec) {
+  frameNumber(spec, clamp = true) {
     let n;
     if (typeof spec === 'number') n = Math.trunc(spec);
     else if (/^\d+$/.test(spec)) n = Number(spec);
@@ -1678,7 +1678,7 @@ export class MovieClip extends DisplayObject {
       if (n === undefined) return undefined;
     }
     if (Number.isNaN(n)) return undefined;
-    return Math.max(1, Math.min(n, this.frames.length));
+    return clamp ? Math.max(1, Math.min(n, this.frames.length)) : n; // clamp が偽なら、丸めずに返す（gotoFrame が丸める）
   }
 
   actionsOfFrame(n) {
@@ -1689,10 +1689,13 @@ export class MovieClip extends DisplayObject {
   gotoFrame(n, play) {
     if (this.frames.length === 0) return;
     const target = Math.max(1, Math.min(Math.trunc(n), this.frames.length));
+    // AS1 / AS2 で、存在しないフレーム（フレーム数より後）へ移ると、最後のフレームへ移るが、そのフレームのスクリプトは実行しない
+    // （実機で確認。実行すると、最後のフレームから前のフレームへ戻るスクリプトが、1 回の処理の中で際限なく続いてしまう）。
+    const beyond = Math.trunc(n) > this.frames.length && !this.movie.avm2;
     this.playing = play;
     if (target === this.currentFrame) return;
     if (target > this.currentFrame) {
-      for (let f = this.currentFrame + 1; f <= target; f++) this.#runFrame(f, f === target);
+      for (let f = this.currentFrame + 1; f <= target; f++) this.#runFrame(f, f === target && !beyond);
     } else {
       this.#rewind(target);
     }
