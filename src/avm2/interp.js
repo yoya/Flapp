@@ -165,6 +165,7 @@ export function execute(vm, fn, thisValue, args) {
           case 0x59: { // getdescendants: x..name
             const rn = name(a[0]);
             const obj = pop();
+            if (vm.isProxy(obj)) { stack.push(vm.proxyDescendants(obj, rn)); break; }
             if (!vm.xml.is(obj)) vm.throwError('TypeError', 1016, `Descendants operator (..) not supported on type ${vm.className(obj)}.`);
             stack.push(vm.xml.descendants(obj, rn));
             break;
@@ -326,7 +327,7 @@ export function execute(vm, fn, thisValue, args) {
             const i = vm.toInt32(pop());
             const obj = pop();
             const key = enumerate(obj, i)[i - 1];
-            stack.push(key === undefined ? undefined : vm.getProperty(obj, vm.keyName(key)));
+            stack.push(key === undefined ? undefined : vm.isProxy(obj) ? vm.proxyNextValue(obj, i - 1) : vm.getProperty(obj, vm.keyName(key)));
             break;
           }
 

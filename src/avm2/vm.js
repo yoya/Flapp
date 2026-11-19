@@ -536,12 +536,67 @@ export class AVM2 {
         if (p.values.has(key)) return p.values.get(key);
       }
     }
+    if (this.isProxy(obj)) return this.#proxy(obj, 'getProperty', rn);
     const klass = this.classOf(obj);
     if (klass && !klass.dynamic && !(obj instanceof ASClass)) {
       this.throwError('ReferenceError', 1069, `Property ${rn.name} not found on ${this.className(obj)} and there is no default value.`);
     }
     return undefined;
   }
+
+  // --- flash.utils.Proxy ---
+  // Proxy の派生のクラスのオブジェクトは、宣言されていない名前の読み書き・呼び出し・in・delete・列挙を、flash_proxy 名前空間の関数
+  // （getProperty、setProperty、callProperty、hasProperty、deleteProperty、nextNameIndex、nextName、nextValue）へ回す（実機で確認）。
+  isProxy(obj) {
+    return obj instanceof ASObject && !!this.classes.Proxy && !!obj.klass && obj.klass !== this.classes.Proxy && obj.klass.isSubclassOf(this.classes.Proxy);
+  }
+
+  // 宣言されている（特性、自分の値、prototype にある）名前か。
+  #declared(obj, rn) {
+    if (this.#findTrait(obj, rn)) return true;
+    const key = this.#publicName(rn);
+    if (key === null) return false;
+    if (obj.values.has(key)) return true;
+    for (let p = obj.proto !== undefined ? obj.proto : this.classOf(obj)?.prototype; p; p = p.proto) if (p.values.has(key)) return true;
+    return false;
+  }
+
+  #proxy(obj, method, rn, args = []) {
+    const trait = obj.klass.instanceTraits.get(`p:http://www.adobe.com/2006/actionscript/flash/proxy|${method}`);
+    if (!trait?.fn) return undefined;
+    // 名前空間つきの名前（ns::name）は、その URI を持つ QName にする。
+    const key = rn.keys?.[0] ?? '';
+    const bar = key.startsWith('p:') ? key.indexOf('|', 2) : -1;
+    const uri = bar > 2 ? key.slice(2, bar) : '';
+    return this.call(trait.fn, obj, [this.construct(this.classes.QName, uri ? [uri, rn.name] : [rn.name]), ...args]);
+  }
+
+  #proxyMethod(obj, method, args) {
+    const trait = obj.klass.instanceTraits.get(`p:http://www.adobe.com/2006/actionscript/flash/proxy|${method}`);
+    return trait?.fn ? this.call(trait.fn, obj, args) : undefined;
+  }
+
+  // for..in: nextNameIndex(0) が返す位置から、0 が返るまで。位置は nextValue のために覚えておく。
+  #proxyNames(obj) {
+    const names = [], positions = [];
+    let at = 0;
+    for (let n = 0; n < 100000; n++) {
+      at = this.toInt32(this.#proxyMethod(obj, 'nextNameIndex', [at]));
+      if (at === 0) break;
+      positions.push(at);
+      names.push(this.toStr(this.#proxyMethod(obj, 'nextName', [at])));
+    }
+    (this.proxyPositions ??= new WeakMap()).set(obj, positions);
+    return names;
+  }
+
+  /** for each: i 番目（0 から）の値。nextValue に、nextNameIndex が返した位置を渡す。 */
+  proxyNextValue(obj, i) {
+    return this.#proxyMethod(obj, 'nextValue', [this.proxyPositions?.get(obj)?.[i] ?? 0]);
+  }
+
+  /** x..name（Proxy では flash_proxy::getDescendants）。 */
+  proxyDescendants(obj, rn) { return this.#proxy(obj, 'getDescendants', rn); }
 
   // メソッドを値として取り出す（this を覚えたクロージャ）。同じオブジェクトの同じメソッドは同じ値になる。
   #closure(obj, trait) {
@@ -611,6 +666,7 @@ export class AVM2 {
       return;
     }
     const key = this.#publicName(rn);
+    if (this.isProxy(obj) && !(key !== null && obj.values.has(key))) { this.#proxy(obj, 'setProperty', rn, [value]); return; }
     const klass = this.classOf(obj);
     if (key === null || !(obj instanceof ASObject) || (!klass?.dynamic && !(obj instanceof ASClass) && obj.proto === undefined)) {
       this.throwError('ReferenceError', 1056, `Cannot create property ${rn.name} on ${this.className(obj)}.`);
@@ -631,10 +687,10 @@ export class AVM2 {
     if (this.#findTrait(obj, rn)) return true;
     if (obj === this.nativeGlobal) return rn.keys.some((k) => obj.values.has(k));
     const key = this.#publicName(rn);
-    if (key === null) return false;
+    if (key === null) return this.isProxy(obj) ? this.toBoolean(this.#proxy(obj, 'hasProperty', rn)) : false;
     if (obj instanceof ASObject && obj.values.has(key)) return true;
     for (let p = obj instanceof ASObject && obj.proto !== undefined ? obj.proto : this.classOf(obj)?.prototype; p; p = p.proto) if (p.values.has(key)) return true;
-    return false;
+    return this.isProxy(obj) ? this.toBoolean(this.#proxy(obj, 'hasProperty', rn)) : false;
   }
 
   deleteProperty(obj, rn) {
@@ -653,6 +709,7 @@ export class AVM2 {
     }
     if (this.#findTrait(obj, rn)) return false;
     const key = this.#publicName(rn);
+    if (this.isProxy(obj) && !(key !== null && obj.values.has(key))) return this.toBoolean(this.#proxy(obj, 'deleteProperty', rn));
     if (key === null) return false;
     // 動的なプロパティの削除は、そのプロパティが無くても true になる（実機で確認）。
     return obj.values.delete(key) || !!obj.klass?.dynamic;
@@ -666,6 +723,8 @@ export class AVM2 {
     if (trait?.kind === 'method') return this.call(trait.fn, obj, args);
     // XML / XMLList に無いメソッドは、文字列にしたものに対して呼ぶ（x.name.toUpperCase() など）。
     if (obj.xml || obj.list) return this.callProperty(this.xml.string(obj), rn, args);
+    // Proxy の派生のオブジェクトで、宣言されていない名前の呼び出しは、flash_proxy::callProperty へ。
+    if (this.isProxy(obj) && !this.#declared(obj, rn)) return this.#proxy(obj, 'callProperty', rn, args);
     // 数値や文字列などの基本型では、無いメソッドの呼び出しは「関数ではない」になる（オブジェクトでは「プロパティが無い」。実機で確認）。
     if (!(obj instanceof ASObject) && !this.hasProperty(obj, rn)) this.throwError('TypeError', 1006, `${rn.name} is not a function.`);
     const fn = this.getProperty(obj, rn);
@@ -677,6 +736,7 @@ export class AVM2 {
   /** 列挙できる名前（動的なプロパティと配列の添字）。for..in 用。 */
   enumerate(obj) {
     if (!(obj instanceof ASObject)) return [];
+    if (this.isProxy(obj)) return this.#proxyNames(obj);
     if (obj.xml || obj.list) return this.xml.enumerate(obj);
     const names = [];
     if (obj instanceof ASArray) for (let i = 0; i < obj.items.length; i++) if (i in obj.items) names.push(i);

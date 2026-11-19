@@ -1,0 +1,17 @@
+get Gfoo
+set get:foo|set:bar=5
+get2 Gbar
+call Chello
+in false,true,false
+delete true,del:bar
+forin n1,n2,n3
+foreach v1,v2,v3
+real prop 7,del:bar
+method 6
+index G0,Gk k
+typeof true,true,object
+descendants Dname
+attr Gattr
+qname Gurn:x::q
+get:foo|set:bar=5|get:bar|call:hello(1,2)|has:x|has:bar|has:zzz|del:bar|get:0|get:k k|get:attr|get:urn:x::q
+done

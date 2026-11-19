@@ -220,6 +220,15 @@ export function installStdlib(vm) {
     c.Vector3D.staticTraits.set(publicKey(key), { kind: 'const', key: publicKey(key), name: key, type: 0, value: v });
   }
 
+  // flash.utils.Proxy: 派生のクラスが flash_proxy の関数を上書きして使う（動きは vm.js の isProxy）。上書きしないで呼ぶと、実機と同じく誤りになる。
+  const PROXY = 'p:http://www.adobe.com/2006/actionscript/flash/proxy';
+  c.Proxy = vm.defineClass({ name: 'flash.utils::Proxy', construct: () => {} });
+  const unsupported = (name, id) => () => vm.throwError('Error', id, `The ${name} method is not supported on this Proxy.`);
+  for (const [name, id] of [['getProperty', 2088], ['setProperty', 2089], ['callProperty', 2090], ['hasProperty', 2091], ['deleteProperty', 2092], ['getDescendants', 2093], ['nextNameIndex', 2094], ['nextName', 2095], ['nextValue', 2096]]) {
+    c.Proxy.instanceTraits.set(`${PROXY}|${name}`, { kind: 'method', key: `${PROXY}|${name}`, name, fn: vm.native(unsupported(name, id), name) });
+  }
+  c.Proxy.instanceTraits.set(`${PROXY}|isAttribute`, { kind: 'method', key: `${PROXY}|isAttribute`, name: 'isAttribute', fn: vm.native(() => false, 'isAttribute') });
+
   // IME と SecurityDomain は、値を持つだけ。
   vm.defineClass({
     name: 'flash.system::IME', final: true, base: c.EventDispatcher,

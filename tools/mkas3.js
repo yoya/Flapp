@@ -179,6 +179,7 @@ function build(name) {
    import flash.printing.*;
    import flash.ui.*;
    import flash.utils.*;
+   import flash.utils.flash_proxy;
    import flash.xml.*;
 
 ${declaration}
