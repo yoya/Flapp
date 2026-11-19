@@ -26,7 +26,9 @@ SWF は信用できない入力として扱います。
 未対応のもの:
 
 - Screen Video v2 の、ストリームの中のパレット（実機も再生できません）
-- AS3 の `Loader` による、ほかの SWF や画像の読み込み
+- 読み込んだ画像の画素を、スクリプトから読むこと（`Loader` の画像の `bitmapData` は、同じ大きさの透明な画像になります）
+- `Loader` で読み込んだ ActionScript 1 / 2 の SWF のスクリプト（表示だけします）、AS3 の `ApplicationDomain` の分離（読み込んだ SWF の
+  クラスは、いつも読み込んだ側の子のドメインとして扱います）、AS1 / 2 で版の違う SWF を読み込んだときの、版ごとのスクリプトの規則
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
@@ -50,7 +52,7 @@ npm run serve
 - `trace()` の出力、スクリプトが要求した URL、警告は、ステージの下に表示されます。
 - 「この SWF を信用する」をオンにする（または URL に `?trust` を付ける）と、スクリプトによるページの移動（`getURL`、`navigateToURL`）と、
   読み込み（`fetch`）を行います。読み込めるのは、`LoadVars`・`XML`・`loadVariables`・`URLLoader` のデータ、`loadMovie`・`MovieClipLoader`・
-  `loadMovieNum` の画像（JPEG・PNG・GIF）と SWF、`loadSound`・`Sound.load` の MP3 です。http / https 以外の URL（`javascript:` など）は開きません。
+  `loadMovieNum`・`Loader` の画像（JPEG・PNG・GIF）と SWF、`loadSound`・`Sound.load` の MP3 です。http / https 以外の URL（`javascript:` など）は開きません。
   別のサーバからの読み込みは、相手が CORS で許しているときだけできます。既定はオフです（信用できない SWF では、オンにしないでください）。
 
 ## コードから使う

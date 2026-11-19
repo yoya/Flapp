@@ -13,6 +13,7 @@ async function run(name, frames, options = {}) {
   for (let i = 0; i < frames; i++) {
     time += 1000 / movie.frameRate;
     movie.advance();
+    await new Promise((resolve) => setImmediate(resolve)); // 読み込んだ SWF の解析（非同期）を進める
   }
   return movie;
 }
@@ -62,7 +63,7 @@ test('読み込みは行わず、要求を記録して失敗を伝える。Share
     'null',
     'URLLoader open 1',
     'URLLoader ioError true 2032 Error #2032: Stream Error. URL: missing-file.txt true true false false undefined 0 1',
-    'Loader ioError true 2032 null 3',
+    'Loader ioError true 2035 null 3', // Loader は 2035（URL Not Found）、URLLoader は 2032（Stream Error）
     'Sound ioError true 2032 null 0 3', // url は、読めたときに入る（実機でも、load の直後は null）
   ]);
   assert.deepEqual(movie.requests.map((r) => `${r.kind} ${r.url} ${r.target}`), [
@@ -132,6 +133,39 @@ test('URLLoader と navigateToURL は、ホストの network に任せる', asyn
   // as3x-netfail: navigateToURL は移動として、sendToURL は応答を受け取らない読み込みとして渡る。fscommand は渡らない。
   const calls = [];
   const failing = await run('as3x-netfail', 8, { network: { navigate: (r) => calls.push(`navigate ${r.method} ${r.url} ${r.target}`), load: (r) => { calls.push(`load ${r.method} ${r.url}`); return null; } } });
-  assert.deepEqual(calls, ['load GET missing-file.txt', 'navigate GET http://example.com/page _blank', 'load GET http://example.com/log', 'load GET unheard.txt', 'load GET http://example.com/missing-file.mp3']);
+  assert.deepEqual(calls, ['load GET missing-file.txt', 'navigate GET http://example.com/page _blank', 'load GET http://example.com/log', 'load GET unheard.txt', 'load GET missing-file.swf', 'load GET http://example.com/missing-file.mp3']);
   assert.equal(failing.traces[4], 'URLLoader ioError true 2032 Error #2032: Stream Error. URL: missing-file.txt true true false false undefined 0 1');
+});
+
+test('Loader: 画像と AS3 の SWF を読み込んで子にする。unload と loadBytes', async () => {
+  // as3x-loader（実機のデバッガ版は、読み込んだ子のムービーの addedToStage の直後に落ちる。そこまでの出力と、子のコンストラクタの中で
+  // root と loaderInfo が見えて stage が見えないことは、実機と同じ）。読み込まれる側は as3-loadchild（単独では実機と照合している）。
+  const fixtures = new URL('fixtures/', import.meta.url);
+  const network = { load: (r) => { try { return readFileSync(new URL(r.url, fixtures)); } catch { return null; } } };
+  const movie = await run('as3x-loader', 12, { network });
+  assert.deepEqual(movie.traces, [
+    'after load null 0 0 null',
+    'image open true ',
+    'image progress true ',
+    'image init true  content=flash.display::Bitmap children=1 same=true size=32x24 type=image/png bytes=true loader=true content size=32x24 parent=true swfVersion error 2098',
+    'image complete true  content=flash.display::Bitmap children=1 same=true size=32x24 type=image/png bytes=true loader=true content size=32x24 parent=true swfVersion error 2098',
+    'movie open true ',
+    'movie progress true ',
+    'child constructor [object ChildMain] true false true 2',
+    'child addedToStage true true',
+    'movie init true  content=ChildMain children=1 same=true size=240x160 type=application/x-shockwave-flash bytes=true loader=true content size=40x20 parent=true swf=15 as=3 rate=12 frames=1/2 root=true childVar=hello',
+    'movie complete true  content=ChildMain children=1 same=true size=240x160 type=application/x-shockwave-flash bytes=true loader=true content size=40x20 parent=true swf=15 as=3 rate=12 frames=1/2 root=true childVar=hello',
+    'child frame 2 2 false',
+    'image unload null 0',
+    'after unload null 0 null',
+    'loadBytes called null',
+    'image open true ',
+    'image progress true ',
+    'image init true  content=flash.display::Bitmap children=1 same=true size=32x24 type=image/gif bytes=true loader=true content size=32x24 parent=true swfVersion error 2098',
+    'image complete true  content=flash.display::Bitmap children=1 same=true size=32x24 type=image/gif bytes=true loader=true content size=32x24 parent=true swfVersion error 2098',
+  ]);
+  assert.deepEqual(movie.warnings, []);
+  // 読み込んだ SWF の中身は、Loader の子として表示リストに入っている（子のムービーの図形が、ステージの上に描かれる）。
+  const loader = movie.root.sortedChildren().find((d) => d.as3 && d.loadedInfo === undefined && d.sortedChildren?.().some((c) => c.loadedInfo));
+  assert.ok(loader);
 });

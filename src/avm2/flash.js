@@ -289,16 +289,26 @@ export function installFlash(vm, movie, types) {
   // いちばん上の親。ルート（キャラクタ ID 0 のタイムライン）なら、ステージに載っている。作っている最中のルートも含む。
   const topOf = (d) => { let top = d; while (top.parent) top = top.parent; return top; };
   const onStage = (d) => { const top = topOf(d); return movie.root ? top === movie.root || top === movie.stage : top.character?.id === 0; };
+  // Loader で読み込んだ SWF のルート（loadedInfo を持つ）のうち、d を含むいちばん近いもの。無ければ null。
+  const loadedRootOf = (d) => {
+    for (let at = d, n = 0; at && n < 1000; at = at.parent, n++) if (at.loadedInfo) return at;
+    return null;
+  };
   // new で作られたオブジェクトの入れ物。クラス（か、その継承元）に結び付いたスプライトがあれば、その中身を持つクリップになる。
   // 子はここで作られ、そのコンストラクタが先に動く。表示リストに載るまで、タイムラインは進まない。
-  let linked = null; // クラス名 → キャラクタ ID
+  // display.nextCharacter があれば、次に作るオブジェクトの中身をそのキャラクタにする（Loader が、読み込んだ SWF のルートを作るときに使う）。
+  // display.nextLoadedInfo は、そのオブジェクトの loaderInfo（読み込んだ SWF のルートは、コンストラクタの中から root や loaderInfo が見える）。
+  display.nextCharacter = null;
+  display.nextLoadedInfo = null;
   const allocate = (klass) => {
-    linked ??= new Map([...movie.symbolClasses].map(([id, name]) => [name.replace(/\.(?=[^.]*$)/, '::'), id]));
     vm.charge(16);
     const obj = new ASObject(klass);
-    let character;
-    for (let k = klass; k && !character; k = k.superClass) character = movie.dictionary.get(linked.get(k.name));
-    const d = new types.MovieClip(movie, character?.type === 'sprite' ? character : movie.emptySprite, undefined, undefined, 0, null, obj);
+    let character = display.nextCharacter;
+    const loadedInfo = display.nextLoadedInfo;
+    display.nextCharacter = null;
+    display.nextLoadedInfo = null;
+    for (let k = klass; k && !character; k = k.superClass) character = movie.linkedCharacter(k.name);
+    const d = new types.MovieClip(movie, character?.type === 'sprite' ? character : movie.emptySprite, undefined, undefined, 0, null, obj, loadedInfo);
     d.leaf = klass.isSubclassOf(c.Shape); // 図形は、子を持たず、マウスにも反応しない
     if (d.character === movie.emptySprite) d.currentFrame = 0; // 中身の無いクリップの currentFrame は 0（totalFrames は 1）
     movie.constructPending(d);
@@ -340,10 +350,17 @@ export function installFlash(vm, movie, types) {
       name: (self) => D(self).name,
       // ボタンの状態として使われているものには、親が無い。
       parent: (self) => (D(self).parent?.states ? null : D(self).parent ? display.wrap(D(self).parent) : onStage(D(self)) ? display.stage : null),
-      // ステージに直接入れたものの root は、ステージになる。
-      root: (self) => (onStage(D(self)) ? display.wrap(topOf(D(self))) : null),
+      // ステージに直接入れたものの root は、ステージになる。Loader で読み込んだ SWF の中のものの root は、その SWF のルート
+      // （ステージに載る前でも）。
+      root: (self) => {
+        const loaded = loadedRootOf(D(self));
+        return loaded ? display.wrap(loaded) : onStage(D(self)) ? display.wrap(topOf(D(self))) : null;
+      },
       stage: (self) => (onStage(D(self)) ? display.stage : null),
-      loaderInfo: (self) => (onStage(D(self)) ? display.loaderInfo() : null),
+      loaderInfo: (self) => {
+        const loaded = loadedRootOf(D(self));
+        return loaded ? loaded.loadedInfo : onStage(D(self)) ? display.loaderInfo() : null;
+      },
       width: (self) => size(D(self), 'x'), height: (self) => size(D(self), 'y'),
       mouseX: (self) => D(self).globalToLocal(movie.mouse.x, movie.mouse.y).x / 20, mouseY: (self) => D(self).globalToLocal(movie.mouse.x, movie.mouse.y).y / 20,
     },
@@ -624,7 +641,7 @@ export function installFlash(vm, movie, types) {
   // --- 表示リストとの結び付け ---
   // キャラクタに結び付けられたクラス（SymbolClass）。無ければ種類ごとの既定のクラス。
   const classFor = (d) => {
-    const linked = movie.symbolClasses.get(d.character.id);
+    const linked = (d.character.library?.symbolClasses ?? movie.symbolClasses).get(d.character.id);
     const klass = linked ? vm.classByName(linked) : undefined;
     if (klass) return klass;
     if (d.character.button) return c.SimpleButton;

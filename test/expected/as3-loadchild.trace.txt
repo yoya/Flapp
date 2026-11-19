@@ -1,0 +1,3 @@
+child constructor [object ChildMain] true true true 2
+child addedToStage true true
+child frame 2 2 false

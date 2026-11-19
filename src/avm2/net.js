@@ -3,7 +3,9 @@
 //
 // プレイヤーは自分では通信しない。要求は movie.request で記録する。URLLoader と sendToURL は、ホストが Movie.load の
 // network オプションで読み込みの関数を渡していれば、それに任せる。渡していなければ、スクリプトには失敗（ioError）を伝える。
-// Loader（ほかの SWF や画像の読み込み）は、いつも失敗を伝える。
+// Loader も同じく、ホストに読み込みを任せて、画像（JPEG / PNG / GIF）と SWF を表示する。AS3 の SWF は、そのクラスをこのムービーの
+// 仮想機械に足して動かす（子のアプリケーションドメインと同じく、同じ名前のクラスは読み込んだ側のものが使われる）。
+// AS1 / AS2 の SWF は、表示はするが、スクリプトは動かない。
 // SharedObject は、このムービーを再生している間だけ値を持つ（保存はしない）。
 // Capabilities は固定の値を返す（再生している端末の情報は渡さない）。
 import { ASArray, ASClass, ASObject, publicKey } from './object.js';
@@ -151,24 +153,35 @@ export function installNet(vm, movie) {
 
   // --- LoaderInfo と Loader ---
   const stageSize = (axis) => (axis === 'x' ? movie.frameSize.xmax - movie.frameSize.xmin : movie.frameSize.ymax - movie.frameSize.ymin) / 20;
-  const info = (self) => self.info; // { root: メインのムービーの情報か, loader: Loader のオブジェクト }
+  // { root: メインのムービーの情報か, loader: Loader のオブジェクト, done: 読み込んだ中身の情報がそろったか,
+  //   url, size, contentType, content, width, height, swf: { version, frameRate, actionScriptVersion }（SWF のとき） }
+  const info = (self) => self.info;
   // メインのムービーの読み込みは、最初のフレームの処理が終わったところで「済んだ」ことになる。それまで（文書クラスの
   // コンストラクタの中など）は、大きさやフレームレートなどを読むと誤りになる（実機で確認）。
   let loaded = false;
   const ready = (self, value) => {
-    if (!info(self).root || !loaded) vm.throwError('Error', 2099, 'The loading object is not sufficiently loaded to provide this information.');
+    if (info(self).root ? !loaded : !info(self).done) vm.throwError('Error', 2099, 'The loading object is not sufficiently loaded to provide this information.');
     return value;
+  };
+  // SWF でなければ読めない情報（画像を読み込んだときの swfVersion など）。
+  const swfOnly = (self, pick) => {
+    ready(self, null);
+    if (info(self).root) return pick({ version: movie.version, frameRate: movie.frameRate, actionScriptVersion: 3 });
+    if (!info(self).swf) vm.throwError('Error', 2098, 'The loading object is not a .swf file, you cannot request SWF properties from it.');
+    return pick(info(self).swf);
   };
   c.LoaderInfo = vm.defineClass({
     name: 'flash.display::LoaderInfo', base: c.EventDispatcher,
     getters: {
-      url: (self) => (info(self).root ? movie.url ?? '' : null), loaderURL: () => movie.url ?? '',
-      bytesLoaded: (self) => (info(self).root ? movie.fileLength : 0), bytesTotal: (self) => (info(self).root ? movie.fileLength : 0),
-      width: (self) => ready(self, stageSize('x')), height: (self) => ready(self, stageSize('y')),
-      frameRate: (self) => ready(self, movie.frameRate), swfVersion: (self) => ready(self, movie.version), actionScriptVersion: (self) => ready(self, 3),
+      url: (self) => (info(self).root ? movie.url ?? '' : info(self).url ?? null), loaderURL: () => movie.url ?? '',
+      bytesLoaded: (self) => (info(self).root ? movie.fileLength : info(self).size ?? 0), bytesTotal: (self) => (info(self).root ? movie.fileLength : info(self).size ?? 0),
+      width: (self) => ready(self, info(self).root ? stageSize('x') : info(self).width), height: (self) => ready(self, info(self).root ? stageSize('y') : info(self).height),
+      frameRate: (self) => swfOnly(self, (swf) => swf.frameRate), swfVersion: (self) => swfOnly(self, (swf) => swf.version),
+      actionScriptVersion: (self) => swfOnly(self, (swf) => swf.actionScriptVersion),
       // parameters（SWF に渡された引数）は空で、読むたびに別のオブジェクトになる。
-      content: (self) => (info(self).root && movie.root ? display.wrap(movie.root) : null), loader: (self) => info(self).loader ?? null,
-      parameters: () => new ASObject(c.Object), contentType: (self) => (info(self).root && loaded ? 'application/x-shockwave-flash' : null),
+      content: (self) => (info(self).root ? (movie.root ? display.wrap(movie.root) : null) : info(self).content ?? null), loader: (self) => info(self).loader ?? null,
+      parameters: () => new ASObject(c.Object),
+      contentType: (self) => (info(self).root ? (loaded ? 'application/x-shockwave-flash' : null) : info(self).contentType ?? null),
       sameDomain: (self) => ready(self, true), childAllowsParent: (self) => ready(self, true), parentAllowsChild: (self) => ready(self, true),
       applicationDomain: () => new ASObject(c.ApplicationDomain), sharedEvents: (self) => (info(self).shared ??= new ASObject(c.EventDispatcher)),
     },
@@ -186,21 +199,93 @@ export function installNet(vm, movie) {
     display.send(rootInfo, c.ProgressEvent, ['progress', false, false, movie.fileLength, movie.fileLength]);
     display.send(rootInfo, c.Event, ['complete']);
   };
+  const contentInfo = (self) => (self.contentInfo ??= loaderInfo({ root: false, loader: self }));
+  const ioError = (target, url, id, text) => {
+    if (!target.listeners?.get('ioError')?.length) movie.warn(`unhandled ioError: ${url}`);
+    display.dispatch(target, vm.construct(c.IOErrorEvent, ['ioError', false, false, `Error #${id}: ${text}`, id]));
+  };
+  // 読み込んだ中身を取り除く。
+  const unloadContent = (self, notify) => {
+    const content = self.content;
+    if (!content) return;
+    self.content = null;
+    if (content.display?.parent === self.display) vm.callProperty(self, vm.keyName('removeChild'), [content]);
+    const inf = info(contentInfo(self));
+    Object.assign(inf, { done: false, content: null, url: null, size: 0, contentType: null, swf: null, width: 0, height: 0 });
+    if (notify) display.dispatch(contentInfo(self), vm.construct(c.Event, ['unload']));
+  };
+  let warnedAVM1 = false;
+  // 読み込んだバイト列（読めなければ null）を、中身にして Loader の子にする。
+  const receive = (self, id, url, bytes) => {
+    if (self.loadId !== id) return; // 待っている間に、別の読み込みや close があった
+    const target = contentInfo(self);
+    if (!bytes) return ioError(target, url, 2035, `URL Not Found. URL: ${url}`);
+    movie.loadContent(bytes, display.later, (content) => {
+      if (self.loadId !== id) return;
+      if (!content) return ioError(target, url, 2124, `Loaded file is an unknown type. URL: ${url}`);
+      const inf = info(target);
+      Object.assign(inf, { url, size: content.size });
+      display.dispatch(target, vm.construct(c.Event, ['open']));
+      display.dispatch(target, vm.construct(c.ProgressEvent, ['progress', false, false, content.size, content.size]));
+      let obj;
+      if (content.bitmap) {
+        const { width, height, encoded } = content.bitmap;
+        Object.assign(inf, { width, height, contentType: encoded.type, swf: null });
+        obj = display.loadedBitmap(content.bitmap);
+      } else {
+        const lib = content.library;
+        const { frameSize } = lib;
+        Object.assign(inf, {
+          width: (frameSize.xmax - frameSize.xmin) / 20, height: (frameSize.ymax - frameSize.ymin) / 20, contentType: 'application/x-shockwave-flash',
+          swf: { version: lib.version, frameRate: lib.frameRate, actionScriptVersion: lib.isAS3 ? 3 : 2 },
+        });
+        // ルートは、文書クラス（無ければ MovieClip）のオブジェクトとして作る。AS1 / AS2 の SWF は、スクリプトを動かさずに表示だけする。
+        let klass = c.MovieClip;
+        if (lib.isAS3) {
+          movie.addLinked(lib, content.character);
+          const name = lib.symbolClasses.get(0);
+          klass = (name && vm.classByName(name)) || c.MovieClip;
+        } else if (!warnedAVM1) {
+          warnedAVM1 = true;
+          movie.warn(`${url}: the scripts of an ActionScript 1/2 movie loaded by Loader do not run`);
+        }
+        display.nextCharacter = content.character;
+        display.nextLoadedInfo = target;
+        obj = vm.construct(klass, []);
+        display.nextCharacter = null;
+        display.nextLoadedInfo = null;
+      }
+      obj.display.loadedInfo = target;
+      self.content = obj;
+      Object.assign(inf, { content: obj, done: true });
+      vm.callProperty(self, vm.keyName('addChild'), [obj]);
+      display.dispatch(target, vm.construct(c.Event, ['init']));
+      display.dispatch(target, vm.construct(c.Event, ['complete']));
+    });
+  };
   c.Loader = vm.defineClass({
     name: 'flash.display::Loader', base: c.DisplayObjectContainer,
-    getters: { content: () => null, contentLoaderInfo: (self) => (self.contentInfo ??= loaderInfo({ root: false, loader: self })) },
+    getters: { content: (self) => self.content ?? null, contentLoaderInfo: (self) => contentInfo(self) },
     methods: {
+      // load(URLRequest): 画像か SWF を読み込む。読み込みはホストに任せる（Movie.load の network）。
       load: (self, [request]) => {
         const url = requestOf(request, 'request').url ?? '';
         movie.request({ kind: 'load', url, target: '', method: request.method ?? 'GET' });
-        fail(vm.getProperty(self, vm.keyName('contentLoaderInfo')), url);
+        unloadContent(self, false);
+        const id = (self.loadId = (self.loadId ?? 0) + 1);
+        movie.load(hostRequest(request), display.later, (bytes) => receive(self, id, url, bytes));
       },
-      // 入れ子のムービーの再生には対応していない。
-      loadBytes: (self) => {
-        movie.warn('Loader.loadBytes is not supported');
-        fail(vm.getProperty(self, vm.keyName('contentLoaderInfo')), '');
+      // loadBytes(ByteArray): バイト列の画像か SWF を、次のフレームで読み込む。
+      loadBytes: (self, [bytes]) => {
+        if (!(bytes instanceof ASObject) || !bytes.bytes) vm.throwError('TypeError', 2007, 'Parameter bytes must be non-null.');
+        const data = bytes.bytes.data.slice(0, bytes.bytes.length);
+        unloadContent(self, false);
+        const id = (self.loadId = (self.loadId ?? 0) + 1);
+        display.later(() => receive(self, id, '', data));
       },
-      unload: () => {}, unloadAndStop: () => {}, close: () => {},
+      unload: (self) => unloadContent(self, true),
+      unloadAndStop: (self) => unloadContent(self, true),
+      close: (self) => { self.loadId = (self.loadId ?? 0) + 1; },
     },
   });
 

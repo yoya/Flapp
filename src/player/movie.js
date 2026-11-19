@@ -153,7 +153,8 @@ export class Movie {
    *             失敗として伝える）。プレイヤーは自分では通信しない。SWF を信用するか、どの URL を許すかは、ホストが決める。
    *             navigate: ({ url, target, method, data }) => void   getURL / navigateToURL などによる移動
    *             load: ({ url, method, data, contentType }) => Uint8Array | ArrayBuffer | null（または、その Promise）
-   *                   LoadVars / XML / loadVariables / URLLoader の読み込み。data は送る本文（Uint8Array か null）。
+   *                   LoadVars / XML / loadVariables / URLLoader のデータ、loadMovie / MovieClipLoader / Loader の画像と SWF、
+   *                   loadSound / Sound.load の MP3 の読み込み。data は送る本文（Uint8Array か null）。
    *                   読めなければ null を返す（スクリプトには、読み込みの失敗として伝わる）
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
@@ -232,6 +233,8 @@ export class Movie {
       onRequest?.(shown);
     };
     this.symbolClasses = new Map(); // キャラクタ ID → 結び付けられた AS3 のクラス名 (SymbolClass)
+    this.library.symbolClasses = this.symbolClasses;
+    this.library.isAS3 = this.isAS3;
     this.unconstructed = new Set(); // AS3: 表示リストには入ったが、まだコンストラクタを呼んでいないクリップ
     // ActionScript 3 のムービーは AVM2 で、それ以外は AVM1 で動かす。
     this.avm2 = this.isAS3 ? new AVM2({ trace: traceOut, now: this.now, random, ...avm }) : null;
@@ -343,7 +346,7 @@ export class Movie {
     const attributes = swf.tags.find((t) => t.code === 69);
     const legacy = swf.version < 6 ? new LegacyText(this.encoding) : null;
     const library = {
-      dictionary: new Map(), exports: new Map(), version: swf.version, legacy, jpegTables: undefined, pending: [], main: false,
+      dictionary: new Map(), exports: new Map(), symbolClasses: new Map(), version: swf.version, legacy, jpegTables: undefined, pending: [], main: false, frameRate: swf.frameRate,
       isAS3: !!attributes && attributes.length >= 1 && (attributes.body[0] & 0x08) !== 0, frameSize: swf.frameSize, fileLength: swf.fileLength,
     };
     for (const w of swf.warnings) this.warn(`loaded movie: ${w}`);
@@ -390,6 +393,29 @@ export class Movie {
   /** レベルのルートを、番号の大きい順（手前から）に返す。 */
   levelsFromTop() {
     return [...this.levels].sort((a, b) => b[0] - a[0]).map(([, clip]) => clip);
+  }
+
+  #linked = null; // AS3: クラス名（"pkg::Name"）→ 結び付けられたキャラクタ
+
+  /** AS3: クラス名（"pkg::Name"）に SymbolClass で結び付けられたキャラクタ。無ければ undefined。 */
+  linkedCharacter(name) {
+    if (!this.#linked) {
+      this.#linked = new Map();
+      for (const [id, cls] of this.symbolClasses) if (id !== 0) this.#linked.set(cls.replace(/\.(?=[^.]*$)/, '::'), this.dictionary.get(id));
+    }
+    return this.#linked.get(name);
+  }
+
+  /**
+   * AS3: 読み込んだ SWF の SymbolClass を、クラス名の表に足す。同じ名前がすでにあれば、先にあった方を残す
+   * （読み込んだ SWF は、読み込んだ側の子のアプリケーションドメインに入り、親の定義が優先される）。root はルートのキャラクタ（ID 0）。
+   */
+  addLinked(library, root) {
+    this.linkedCharacter('');
+    for (const [id, cls] of library.symbolClasses) {
+      const key = cls.replace(/\.(?=[^.]*$)/, '::');
+      if (!this.#linked.has(key)) this.#linked.set(key, id === 0 ? root : library.dictionary.get(id));
+    }
   }
 
   /** このフレームのアクションが全部済んだ後に、run を実行する（loadMovie の onLoadInit 用。積んだ順に実行する）。 */
@@ -883,7 +909,8 @@ export class Movie {
           if (!fn || !clip.as3) continue;
           clip.inFrameScript = true;
           try {
-            avm2.run(() => avm2.call(fn, clip.as3, []), (text) => this.warn(`uncaught error: ${text}`));
+            // this は渡さない。メソッド（FLA が作るフレームスクリプト）はクリップに結び付いていて、無名関数の this はクリップにならない（実機で確認）。
+            avm2.run(() => avm2.call(fn, null, []), (text) => this.warn(`uncaught error: ${text}`));
           } finally {
             clip.inFrameScript = false;
           }
@@ -991,7 +1018,7 @@ export class Movie {
             const id = r.u16();
             lib.exports.set(r.string(), id);
           }
-        } else if ((tag.code === 82 || tag.code === 72) && this.avm2 && lib.main) {
+        } else if ((tag.code === 82 || tag.code === 72) && this.avm2 && lib.isAS3) {
           // DoABC: フラグ（u32）と名前の後に ABC が続く。古い形 (72) は ABC だけ。
           let at = 0;
           if (tag.code === 82) {
@@ -1000,11 +1027,11 @@ export class Movie {
           }
           const lazy = tag.code === 82 && (tag.body[0] & 1) !== 0;
           this.#loadABC(tag.body.subarray(at), lazy);
-        } else if (tag.code === 76 && this.avm2 && lib.main) {
+        } else if (tag.code === 76 && this.avm2 && lib.isAS3) {
           const r = new Reader(tag.body);
           for (let n = r.u16(); n > 0; n--) {
             const id = r.u16();
-            this.symbolClasses.set(id, r.string());
+            lib.symbolClasses.set(id, r.string());
           }
         } else if (tag.code === 14) {
           const sound = parseDefineSound(tag);
@@ -1414,9 +1441,10 @@ export class MovieClip extends DisplayObject {
   #drawing = null;
 
   /** as3: スクリプトが new で作った AS3 のオブジェクト（その表示オブジェクトとして、表示リストの外に作る）。 */
-  constructor(movie, character, depth = 0, desc = PLACE_DEFAULTS, level = 0, parent = null, as3 = null) {
+  constructor(movie, character, depth = 0, desc = PLACE_DEFAULTS, level = 0, parent = null, as3 = null, loadedInfo = null) {
     super(character, depth, desc, parent);
     this.movie = movie;
+    if (loadedInfo) this.loadedInfo = loadedInfo; // AS3: Loader で読み込んだ SWF のルートなら、その contentLoaderInfo
     this.level = level; // 入れ子の深さ（ルートが 0）
     // キャラクタを引くライブラリ。読み込んだ SWF のクリップは、その SWF のライブラリ。中身の無いクリップは、親のもの。
     this.library = character.library ?? parent?.library ?? movie.library;

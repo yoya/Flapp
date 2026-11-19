@@ -88,11 +88,9 @@ export function installBitmap(vm, movie) {
   };
   const CHANNEL = { 1: 0, 2: 1, 4: 2, 8: 3 }; // BitmapDataChannel の値 → RGBA の中の位置
 
-  let linked = null; // クラス名 → キャラクタ ID
   const symbolOf = (klass) => {
-    linked ??= new Map([...movie.symbolClasses].map(([id, name]) => [name.replace(/\.(?=[^.]*$)/, '::'), id]));
     for (let k = klass; k; k = k.superClass) {
-      const def = movie.dictionary.get(linked.get(k.name));
+      const def = movie.linkedCharacter(k.name);
       if (def?.type === 'bitmap') return def;
     }
     return null;
@@ -359,7 +357,22 @@ export function installBitmap(vm, movie) {
   vm.defineClass({ name: 'flash.display::PixelSnapping', final: true, staticValues: { NEVER: 'never', ALWAYS: 'always', AUTO: 'auto' } });
 
   // --- Bitmap: BitmapData を表示する ---
-  const show = (self) => { self.display.setPicture(self.bitmapData?.bitmap ?? null, self.smoothing ?? false); };
+  // 読み込んだ画像（Loader）の Bitmap は、その bitmapData を替えられるまで、読み込んだ画像を表示する。
+  const show = (self) => {
+    const loaded = self.loadedImage && self.bitmapData === self.loadedImage.data;
+    self.display.setPicture(loaded ? self.loadedImage.def : self.bitmapData?.bitmap ?? null, self.smoothing ?? false);
+  };
+  /**
+   * Loader で読み込んだ画像（JPEG / PNG / GIF）を表示する Bitmap を作る。画像の復号は描画側が行うので、スクリプトから画素は読めない
+   * （bitmapData は、同じ大きさの透明な BitmapData）。
+   */
+  vm.display.loadedBitmap = (def) => {
+    const data = wrap(create(def.width, def.height, true));
+    const bitmap = vm.construct(c.Bitmap, [data]);
+    bitmap.loadedImage = { def, data };
+    show(bitmap);
+    return bitmap;
+  };
   c.Bitmap = vm.defineClass({
     name: 'flash.display::Bitmap', base: c.DisplayObject,
     construct: (self, [bitmapData = null, pixelSnapping = 'auto', smoothing = false]) => {

@@ -85,14 +85,12 @@ export function installMedia(vm, movie) {
   };
 
   // --- Sound ---
-  let linked = null; // クラス名 → キャラクタ ID
   c.Sound = vm.defineClass({
     name: 'flash.media::Sound', base: c.EventDispatcher,
     // クラス（か、その継承元）に結び付けられたサウンドがあれば、それを鳴らせる。
     allocate: (klass) => {
-      linked ??= new Map([...movie.symbolClasses].map(([id, name]) => [name.replace(/\.(?=[^.]*$)/, '::'), id]));
       let sound;
-      for (let k = klass; k && !sound; k = k.superClass) sound = movie.dictionary.get(linked.get(k.name));
+      for (let k = klass; k && !sound; k = k.superClass) sound = movie.linkedCharacter(k.name);
       return Object.assign(new ASObject(klass), { sound: sound?.type === 'sound' ? sound : null, url: null, loading: false, waiting: [] });
     },
     construct: (self, [stream]) => { if (stream !== undefined && stream !== null) vm.callProperty(self, { name: 'load', keys: ['p:|load'] }, [stream]); },

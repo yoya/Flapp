@@ -13,6 +13,7 @@
 //    それぞれ公開のクラスになる。継承元や型として使うクラスは、使う側より前に書く）。
 //   「//// members」で始まる行より後ろ（「//// class」まで）は、Main のメンバー（メソッドやフィールド）の宣言。
 //   「// frames: N」という行があれば、メインタイムラインを N フレームにする（省略すると 1）。
+//   「// document: 名前」は、文書クラスの名前（省略すると Main）。ほかのムービーに読み込まれるムービーで、名前を分けるのに使う。
 //   「// sprite: クラス名 frames=N」は、そのクラスに結び付いたスプライト（40×40 px の四角形を持つ、N フレームのクリップ）を作る。
 //   「// place: クラス名 in=置き先のクラス名 frame=F name=名前 x=X y=Y until=G」は、そのスプライトを置き先（省略すると
 //    メインタイムライン）の F フレーム目に置き、G フレーム目で取り除く（どれも省略可）。置き先は、置くものより後に書く。
@@ -48,12 +49,12 @@ const u30 = (v) => {
 
 // 文書クラス Main と、空の補助クラス・インターフェース（extras: { name, isInterface }。クラスはどれも Object の派生）を持つ ABC。
 // FFDec は既にあるクラスしか置き換えられないので、テストが使うクラスは空のものを先に用意しておく。
-function baseABC(extras) {
-  const strings = ['Main', '', 'flash.display', 'MovieClip', 'Object', 'flash.events', 'EventDispatcher', 'DisplayObject', 'InteractiveObject', 'DisplayObjectContainer', 'Sprite', ...extras.map((e) => e.name)];
+function baseABC(extras, doc = 'Main') {
+  const strings = [doc, '', 'flash.display', 'MovieClip', 'Object', 'flash.events', 'EventDispatcher', 'DisplayObject', 'InteractiveObject', 'DisplayObjectContainer', 'Sprite', ...extras.map((e) => e.name)];
   const S = (s) => strings.indexOf(s) + 1;
-  const namespaces = [[0x16, S('')], [0x16, S('flash.display')], [0x18, S('Main')], [0x16, S('flash.events')]]; // 1: 公開、2: flash.display、3: Main の protected、4: flash.events
+  const namespaces = [[0x16, S('')], [0x16, S('flash.display')], [0x18, S(doc)], [0x16, S('flash.events')]]; // 1: 公開、2: flash.display、3: Main の protected、4: flash.events
   const qnames = [
-    [1, 'Main'], [2, 'MovieClip'], [1, 'Object'], [4, 'EventDispatcher'], [2, 'DisplayObject'], [2, 'InteractiveObject'], [2, 'DisplayObjectContainer'], [2, 'Sprite'],
+    [1, doc], [2, 'MovieClip'], [1, 'Object'], [4, 'EventDispatcher'], [2, 'DisplayObject'], [2, 'InteractiveObject'], [2, 'DisplayObjectContainer'], [2, 'Sprite'],
     ...extras.map((e) => [1, e.name]),
   ];
   const Q = (name) => qnames.findIndex((q) => q[1] === name) + 1;
@@ -72,7 +73,7 @@ function baseABC(extras) {
   ];
   // クラスの並び: 補助クラス、最後に Main。クラス i のメソッドは 3i（コンストラクタ）、3i+1（クラスの初期化）、3i+2（スクリプトの初期化）。
   const classes = [...extras.map((e) => ({ name: e.name, chain: e.isInterface ? [] : ['Object'], flags: [e.isInterface ? 0x05 : 0x01] })), {
-    name: 'Main', chain: ['Object', 'EventDispatcher', 'DisplayObject', 'InteractiveObject', 'DisplayObjectContainer', 'Sprite', 'MovieClip'], flags: [0x09, 3], // sealed + protected 名前空間
+    name: doc, chain: ['Object', 'EventDispatcher', 'DisplayObject', 'InteractiveObject', 'DisplayObjectContainer', 'Sprite', 'MovieClip'], flags: [0x09, 3], // sealed + protected 名前空間
   }];
   return [
     16, 0, 46, 0, // minor 16, major 46
@@ -113,6 +114,7 @@ function build(name) {
     outer[outer.length - 1].lines.push(line);
   }
   const frames = Number(/^\/\/ frames: (\d+)/m.exec(source)?.[1] ?? 1); // メインタイムラインのフレーム数
+  const doc = /^\/\/ document: (\w+)/m.exec(source)?.[1] ?? 'Main'; // 文書クラスの名前（読み込まれる側のムービーで、読み込む側の Main と分けるため）
   // スプライトと、その配置。キャラクタ ID は 1 が四角形、2 以降がスプライト。深度は 1 が四角形、2 以降が置いた順。
   const sprites = [...source.matchAll(/^\/\/ sprite: (\w+)(?: frames=(\d+))?/gm)].map((m, i) => ({ cls: m[1], frames: Number(m[2] ?? 1), id: i + 2 }));
   const places = [...source.matchAll(/^\/\/ place: (\w+)(.*)$/gm)].map((m) => ({ cls: m[1], ...Object.fromEntries(m[2].trim().split(/\s+/).filter(Boolean).map((kv) => kv.split('='))) }));
@@ -127,11 +129,11 @@ function build(name) {
   // サウンド（22050 Hz、16 ビットの PCM）。キャラクタ ID は 200 以降。
   const sounds = [...source.matchAll(/^\/\/ sound: (\w+)(?: seconds=([\d.]+))?/gm)].map((m, i) => ({ cls: m[1], seconds: Number(m[2] ?? 0.3), id: 200 + i }));
   const timeline = (owner, count, shape) => {
-    const mine = places.filter((p) => (p.in ?? 'Main') === owner);
+    const mine = places.filter((p) => (p.in ?? doc) === owner);
     const tags = [];
     for (let f = 1; f <= count; f++) {
       if (f === 1 && shape) tags.push(PlaceObject2({ depth: 1, id: 1 }));
-      if (f === 1 && owner === 'Main') for (const field of fields) tags.push(PlaceObject2({ depth: field.depth, id: field.id, name: field.name, matrix: { tx: Number(field.x ?? 0) * 20, ty: Number(field.y ?? 0) * 20 } }));
+      if (f === 1 && owner === doc) for (const field of fields) tags.push(PlaceObject2({ depth: field.depth, id: field.id, name: field.name, matrix: { tx: Number(field.x ?? 0) * 20, ty: Number(field.y ?? 0) * 20 } }));
       mine.forEach((p, i) => {
         const sprite = p.cls === 'Square' ? { id: 1 } : sprites.find((sp) => sp.cls === p.cls); // Square は四角形そのもの
         if (!sprite) throw new Error(`${name}: place の ${p.cls} に sprite の宣言が無い`);
@@ -163,10 +165,10 @@ ${declaration}
   const dir = join(workDir, name);
   rmSync(dir, { recursive: true, force: true });
   const units = [...outer.map((unit) => ({ name: unit.name, text: pack(`public ${unit.lines.join('\n')}`) })), {
-    name: 'Main',
-    text: pack(`   public class Main extends MovieClip
+    name: doc,
+    text: pack(`   public class ${doc} extends MovieClip
    {
-      public function Main()
+      public function ${doc}()
       {
          super();
 ${lines.slice(0, bodyEnd).join('\n')}
@@ -174,7 +176,7 @@ ${lines.slice(0, bodyEnd).join('\n')}
 ${members}
    }`),
   }];
-  const abc = baseABC(outer);
+  const abc = baseABC(outer, doc);
   mkdirSync(dir, { recursive: true });
   const base = join(dir, 'base.swf');
   writeFileSync(base, swf({
@@ -188,8 +190,8 @@ ${members}
       ...fields.map(editText),
       ...sounds.map((sound) => DefineSound(sound.id, 3, 22050, Math.round(22050 * sound.seconds), pcmBytes(tone(22050, sound.seconds)))),
       tag(82, [...u32(1), ...utf8('frame1'), 0, ...abc], true), // DoABC（遅延初期化）
-      tag(76, [...u16(sprites.length + sounds.length + 1), ...[...sprites, ...sounds].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8('Main'), 0]), // SymbolClass: スプライト、サウンド、メインタイムライン
-      ...timeline('Main', frames, false), End(),
+      tag(76, [...u16(sprites.length + sounds.length + 1), ...[...sprites, ...sounds].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8(doc), 0]), // SymbolClass: スプライト、サウンド、メインタイムライン
+      ...timeline(doc, frames, false), End(),
     ],
   }));
   // 実機と照合できないテスト（「// unverified:」の行がある）は as3x- にして、実機の出力と比べるテストの対象から外す。
