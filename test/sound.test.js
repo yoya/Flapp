@@ -7,7 +7,7 @@ import { decodeADPCM, decodeSound, scanMP3 } from '../src/audio/decode.js';
 import { Movie } from '../src/player/movie.js';
 import { parseSWF } from '../src/swf/parse.js';
 import { parseDefineSound, parseStartSound } from '../src/swf/sound.js';
-import { adpcmBytes, fixtures, tone } from '../tools/mkfixtures.js';
+import { DefineSound, End, ShowFrame, adpcmBytes, fixtures, pcmBytes, swf, tag, tone, u16 } from '../tools/mkfixtures.js';
 
 const sounds = async () => (await parseSWF(fixtures['sound-event'])).tags.filter((t) => t.code === 14).map(parseDefineSound);
 
@@ -106,6 +106,24 @@ test('イベント音: フレームの StartSound で鳴り、繰り返し・重
   frame(40);
   assert.deepEqual(movie.sounds.playing, []); // 鳴り終わった音は片付く
   assert.equal(audio.calls.length, 6);
+});
+
+test('StartSound2: AS3 のクラス名に結び付いた音を鳴らす', async () => {
+  const name = (text) => [...new TextEncoder().encode(text), 0];
+  const audio = recorder();
+  const movie = await Movie.load(swf({
+    version: 10, frames: 2,
+    tags: [
+      tag(69, [0x08, 0, 0, 0]), // FileAttributes: ActionScript 3
+      DefineSound(1, 3, 22050, 2205, pcmBytes(tone(22050, 0.1))),
+      tag(76, [...u16(1), ...u16(1), ...name('snd.Beep')]), // SymbolClass
+      tag(89, [...name('snd.Beep'), 0]), ShowFrame(),
+      tag(89, [...name('snd.Missing'), 0]), ShowFrame(), // 結び付いていない名前は鳴らない
+      End(),
+    ],
+  }), { audio });
+  movie.advance();
+  assert.deepEqual(audio.calls.map((c) => c.slice(0, 2)), [['play', 1]]);
 });
 
 test('ストリーム音: フレームが進む間だけ鳴り、飛んだらその位置から鳴らし直す', async () => {

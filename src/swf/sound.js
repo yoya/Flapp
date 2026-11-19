@@ -45,9 +45,11 @@ export function parseSoundInfo(r) {
 }
 
 /** StartSound (15)。 */
+/** StartSound (15) / StartSound2 (89)。StartSound2 は、音を ID ではなく AS3 のクラス名で指す。 */
 export function parseStartSound(tag) {
-  if (tag.code !== 15) throw new SWFError(`tag ${tag.code} is not a StartSound`);
+  if (tag.code !== 15 && tag.code !== 89) throw new SWFError(`tag ${tag.code} is not a StartSound`);
   const r = new Reader(tag.body);
+  if (tag.code === 89) return { className: r.string(), info: parseSoundInfo(r) };
   return { soundId: r.u16(), info: parseSoundInfo(r) };
 }
 

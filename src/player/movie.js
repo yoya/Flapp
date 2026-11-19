@@ -999,7 +999,7 @@ export class Movie {
           ops.push({ op: 'remove', ...parseRemoveObject(tag) });
         } else if (tag.code === 12) {
           ops.push({ op: 'action', code: tag.body });
-        } else if (tag.code === 15) {
+        } else if (tag.code === 15 || tag.code === 89) {
           ops.push({ op: 'sound', ...parseStartSound(tag) });
         } else if (tag.code === 18 || tag.code === 45) {
           streamHead ??= parseSoundStreamHead(tag);
@@ -1802,6 +1802,12 @@ export class MovieClip extends DisplayObject {
     }
   }
 
+  // StartSound の音。StartSound2 は、AS3 のクラス名（pkg.Name）に結び付いた音を鳴らす。
+  #soundOf(op) {
+    if (op.className === undefined) return this.library.dictionary.get(op.soundId);
+    return this.movie.linkedCharacter(op.className.replace(/\.(?=[^.]*$)/, '::'));
+  }
+
   #runFrame(n, withActions) {
     this.currentFrame = n;
     if (withActions) this.scriptPending = true; // AS3: このフレームのスクリプト (addFrameScript) を実行する
@@ -1816,7 +1822,7 @@ export class MovieClip extends DisplayObject {
       }
       if (op.op === 'sound') {
         // 途中のフレームを飛ばして移動するときは鳴らさない。
-        const sound = this.library.dictionary.get(op.soundId);
+        const sound = this.#soundOf(op);
         if (withActions && sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
         continue;
       }
@@ -1885,7 +1891,7 @@ export class MovieClip extends DisplayObject {
     this.scriptPending = true;
     for (const op of this.frames[target - 1]) {
       if (op.op === 'action') this.movie.queueAction(this, op.code);
-      const sound = op.op === 'sound' ? this.library.dictionary.get(op.soundId) : undefined;
+      const sound = op.op === 'sound' ? this.#soundOf(op) : undefined;
       if (sound?.type === 'sound') this.movie.sounds.start(sound, op.info, this);
     }
   }
