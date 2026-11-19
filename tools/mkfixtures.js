@@ -1149,7 +1149,7 @@ const clipProperties = (version) => swf({
       ...['0.15', '2.999', '1.975', '-1.975', '0.049', '-0.049', '100.126'].flatMap((v) => [setProperty('num', X, v), tr(`x ${v} -> `, property('num', X))]),
       setProperty('num', X, [PushString('-16.85'), PushString('17'), [0x0a]]), tr('x -16.85+17 -> ', property('num', X)),
       ...['77', '33.3', '0.01', '150.5', '-50', '100'].flatMap((v) => [setProperty('num', 2, v), tr(`xscale ${v} -> `, property('num', 2), ' width=', property('num', WIDTH))]),
-      // （回転は、実機の固定小数の三角関数による端数まで再現していないので、ここでは確かめない。）
+      // （回転の代入は、実機の固定小数の計算の端数が下の桁まで同じにはならないので、ここでは確かめない。test/avm1.test.js で、許容誤差つきで確かめる。）
       ...['33', '50', '99', '100.4', '0.3', '-10', '300', '100'].flatMap((v) => [setProperty('num', 6, v), tr(`alpha ${v} -> `, property('num', 6))]),
       Stop,
     ]),

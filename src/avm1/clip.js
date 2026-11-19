@@ -26,15 +26,74 @@ function xform(c) {
   return c.xform;
 }
 function setXform(c, values, vm) {
+  if (vm.version < 5) {
+    setFixedXform(c, values);
+    return;
+  }
   const t = Object.assign(xform(c), values);
   const rx = t.rotation / DEG;
-  const m = compose({ sx: t.xscale / 100, sy: t.yscale / 100, rx, ry: rx + t.skew }, c.matrix.tx, c.matrix.ty);
-  if (vm.version < 5) {
-    // SWF 4 には控えが無く、16.16 固定小数の行列だけが残る。読み出しは毎回その行列から求め直すので、
-    // _xscale = 77 は 76.9989...、_xscale = -50 は 50（と回転 180）として読める。
-    for (const k of ['a', 'b', 'c', 'd']) m[k] = Math.trunc(m[k] * 65536) / 65536;
-    c.xform = null;
+  c.setMatrix(compose({ sx: t.xscale / 100, sy: t.yscale / 100, rx, ry: rx + t.skew }, c.matrix.tx, c.matrix.ty));
+}
+
+// --- SWF 4 の拡大率と回転の代入 ---
+// SWF 4 には控えが無く、16.16 固定小数の行列だけが残る。読み出しは毎回その行列から求め直すので、
+// _xscale = 77 は 76.9989...、_xscale = -50 は 50（と回転 180）として読める。
+//
+// 行列を作り直すときの sin / cos は、実機の固定小数の計算をなぞる。実機は 0.25 度きざみの sin の表を引き、表の間は
+// 直線で補うが、その重みが本来の 1/4 しかない（16.16 の角度の下位 14 ビットを、そのまま 16 ビットの小数として使っている
+// ように見える）。そのため、0.25 度の倍数でない角度では、ベクトルの長さが 1 より少し短くなり（最大で 0.3% ほど）、
+// 向きも、手前の 0.25 度の倍数から端数の 1/4 ほどしか進まない。回転を読んで足して書き戻すスクリプトでは、この端数が
+// 読み戻しの値に表れる。実機に角度を 0.01 度きざみで入れて読み戻した値から求めた規則で、回転は 0.002 度以内で合う。
+// （拡大率の読み戻しには、ここで再現していない 0.002 ほどの端数が残る。）
+const SIN_TABLE = Float64Array.from({ length: 362 }, (_, i) => Math.sin((i * 0.25) / DEG)); // 0〜90.25 度
+const QUARTER = 90 * 65536;
+// 0〜90 度（16.16）の sin
+const tableSin = (x) => SIN_TABLE[x >> 14] + ((SIN_TABLE[(x >> 14) + 1] - SIN_TABLE[x >> 14]) * (x & 0x3fff)) / 65536;
+// 角度（度）を 16.16 にして、-180〜180 度に収める。
+function foldAngle(deg) {
+  let v = Math.round(deg * 65536) % (4 * QUARTER);
+  if (v > 2 * QUARTER) v -= 4 * QUARTER;
+  if (v <= -2 * QUARTER) v += 4 * QUARTER;
+  return v;
+}
+function fixedSin(deg) {
+  const v = foldAngle(deg), x = Math.abs(v);
+  return Math.sign(v) * tableSin(x > QUARTER ? 2 * QUARTER - x : x);
+}
+function fixedCos(deg) {
+  const x = Math.abs(foldAngle(deg));
+  return x > QUARTER ? -tableSin(x - QUARTER) : tableSin(QUARTER - x);
+}
+// 代入された項目に応じて、行列の列を作り直す。拡大率の代入は、その軸の列だけを作り直す（もう一方の列は変わらない）。
+function setFixedXform(c, values) {
+  const t = decompose(c.matrix);
+  const m = { ...c.matrix };
+  const fixed = (v) => Math.round(v * 65536) / 65536;
+  let rx = t.rx * DEG, ry = t.ry * DEG;
+  let { sx, sy } = t;
+  const columns = { x: 'rotation' in values || 'xscale' in values, y: 'rotation' in values || 'yscale' in values };
+  if ('rotation' in values) {
+    ry += values.rotation - rx; // 2 つの列の向きの差は保つ
+    rx = values.rotation;
   }
+  // 代入された拡大率は、16.16 に切り捨ててから掛ける。今の値との差が 16/65536（約 0.024%）以下なら、実機は何もしない
+  // （_xscale が 99.98 のときに 100 を入れても、99.98 のまま。行列も作り直されない）。
+  const scale = (value, now) => {
+    const next = Math.trunc((value / 100) * 65536);
+    return Math.abs(next - Math.round(now * 65536)) <= 16 ? null : next / 65536;
+  };
+  if ('xscale' in values) {
+    sx = scale(values.xscale, t.sx);
+    columns.x = sx !== null;
+  }
+  if ('yscale' in values) {
+    sy = scale(values.yscale, t.sy);
+    columns.y = sy !== null;
+  }
+  if (!columns.x && !columns.y) return;
+  if (columns.x) Object.assign(m, { a: fixed(sx * fixedCos(rx)), b: fixed(sx * fixedSin(rx)) });
+  if (columns.y) Object.assign(m, { c: fixed(-sy * fixedSin(ry)), d: fixed(sy * fixedCos(ry)) });
+  c.xform = null;
   c.setMatrix(m);
 }
 // 回転は -180〜180 度に収める。

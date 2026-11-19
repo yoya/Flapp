@@ -5,7 +5,7 @@ import { numberToString } from '../src/avm1/convert.js';
 import { AVM1 } from '../src/avm1/interp.js';
 import { AVMArray, AVMObject } from '../src/avm1/object.js';
 import { Movie } from '../src/player/movie.js';
-import { End, ShowFrame, callOtherClip, swf, tag, u16 } from '../tools/mkfixtures.js';
+import { DefineSprite, End, PlaceObject2, ShowFrame, callOtherClip, square, swf, tag, u16 } from '../tools/mkfixtures.js';
 
 // 手書きのアクション列
 const cstr = (s) => [...new TextEncoder().encode(s), 0];
@@ -103,4 +103,52 @@ test('getURL は移動せず、要求された URL だけを記録する', async
     { kind: 'loadMovie', url: 'next.swf', target: '/clip', method: 'POST' },
   ]);
   assert.deepEqual(seen, ['http://example.com/a', 'next.swf']);
+});
+
+test('SWF 4: 回転と拡大率の代入は、実機の固定小数の計算の端数まで（ほぼ）同じになる', async () => {
+  // 実機は、0.25 度きざみの表と、重みが 1/4 しかない補間で sin / cos を求める。0.25 度の倍数でない角度を入れると、
+  // 読み戻した回転は手前の 0.25 度の倍数に寄り、拡大率は少し縮む。拡大率の代入は、今の値との差が 16/65536 以下なら何もしない。
+  // 期待値は、同じ手順を実機（SWF 4）で動かして読み戻した値。拡大率には、再現していない 0.01 ほどの端数が残る。
+  const get = (index) => [push('mc'), push(String(index)), 0x22];
+  const set = (index, value) => [push('mc'), push(String(index)), value, 0x23];
+  const show = [get(10), push(' '), 0x21, get(2), 0x21, push(' '), 0x21, get(3), 0x21, Trace];
+  const steps = { t: show, rd: (v) => set(10, [get(10), push(v), 0x0a]), r: (v) => set(10, push(v)), x: (v) => set(2, push(v)), y: (v) => set(3, push(v)) };
+  const run = async (matrix, script) => {
+    const actions = script.split(',').map((s) => { const [op, v] = s.split('='); return v === undefined ? steps[op] : steps[op](v); });
+    const movie = await Movie.load(swf({ version: 4, tags: [
+      square(1, 800, [255, 0, 0]),
+      DefineSprite(2, 1, [PlaceObject2({ depth: 1, id: 1 }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 1, id: 2, name: 'mc', matrix: { ...matrix, tx: 2400, ty: 1600 } }),
+      tag(12, [...actions.flat(Infinity), 0], true),
+      ShowFrame(), End(),
+    ] }));
+    assert.deepEqual(movie.warnings, []);
+    return movie.traces.map((line) => line.split(' ').map(Number));
+  };
+  const close = (actual, expected) => {
+    assert.equal(actual.length, expected.length);
+    actual.forEach((values, i) => values.forEach((v, k) => assert.ok(Math.abs(v - expected[i][k]) <= (k === 0 ? 0.003 : 0.012), `step ${i}: ${values} / ${expected[i]}`)));
+  };
+  // 縦横の拡大率が違う行列（実物のムービーにあったもの）に、「回転を 2 度戻して、拡大率を 100 に」を 2 回。
+  close(await run({ a: -0.1584320068359375, b: -0.982391357421875, c: 1.5407562255859375, d: -0.24847412109375 }, 't,rd=-2,t,x=100,t,y=100,t,rd=-2,t,x=100,t,y=100,t'), [
+    [-99.1612243652344, 99.5101928710938, 156.069946289063],
+    [-101.047241210938, 99.45068359375, 155.978393554688],
+    [-101.018615722656, 99.9404907226563, 155.978393554688],
+    [-101.018615722656, 99.9404907226563, 99.9404907226563],
+    [-103.014785766602, 99.8687744140625, 99.8687744140625],
+    [-103.013961791992, 99.9282836914063, 99.8687744140625],
+    [-103.013961791992, 99.9282836914063, 99.9282836914063],
+  ]);
+  // 0.25 度の倍数は正確。そうでない角度は、同じ値を入れ直すたびに行列が作り直されて、少しずつ寄っていく。
+  close(await run({}, 'r=10.25,t,r=10.1,t,rd=0,t,rd=0,t,rd=0,t'), [
+    [10.2501373291016, 100.001525878906, 100.001525878906],
+    [10.0298767089844, 99.9465942382813, 99.9465942382813],
+    [10.0137634277344, 99.8916625976563, 99.8916625976563],
+    [10.009521484375, 99.8367309570313, 99.8367309570313],
+    [10.0078277587891, 99.7817993164063, 99.7817993164063],
+  ]);
+  // 拡大率は、差が 16/65536 以下の代入を無視する（99.976 は 16、99.975 は 17 の差）。
+  close(await run({}, 'x=99.98,t,x=99.976,t,x=99.975,t,x=50,x=50.02,t,x=50.03,t'), [
+    [0, 100, 100], [0, 100, 100], [0, 99.9740600585938, 100], [0, 50, 100], [0, 50.0289916992188, 100],
+  ]);
 });
