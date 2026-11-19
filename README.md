@@ -44,6 +44,27 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 
 Node.js（22 で動作を確認）とブラウザが要ります。
 
+## ページに SWF を埋め込む
+
+`<flapp-player>` 要素で、ページの中に SWF を直接置けます（Flash の `<embed>` の代わりです）。
+ES モジュールを読むので、ファイルではなく http で配信してください（`npm run serve` でも動きます）。
+
+```html
+<script type="module" src="web/flapp.js"></script>
+<flapp-player src="movie.swf"></flapp-player>
+```
+
+- 属性: `src`（SWF の URL）、`trust`（付けると、信用する SWF として動かします。付けなければ、通信もページの移動もしません。下の「ブラウザで再生する」を参照）、
+  `encoding`（SWF 5 以前の文字コード。省略するとブラウザの言語から決めます）、`match-player`（実機が映さないものを映さない）。
+  `src` や `trust` を変えると、読み直します。
+- 大きさは SWF のステージの大きさです（CSS で変えられます）。マウスの動きとボタンを伝え、キーは要素をクリックして選んでいる間だけ伝えます。
+  音は、ページを最初にクリックするかキーを押した後から鳴ります。
+- イベント: `trace`（`event.detail` に `trace()` の文字列、信用しないときは、スクリプトが要求した URL も）、`warning`、`error`、`loaded`。
+  `element.movie` が再生中の `Movie` です。`element.load(bytes, { label })` でバイト列から読めます。`element.stop()` で止めます。
+- スクリプトからは、`import { embed } from './web/flapp.js'; embed(document.body, 'movie.swf', { trust: false })` でも置けます。
+
+動く例は [web/embed-demo.html](web/embed-demo.html) です（`?swf=` で別の SWF、`&trust` で信用する SWF として動かします）。
+
 ## ブラウザで再生する
 
 ```bash

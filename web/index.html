@@ -37,6 +37,7 @@
   import { FlvPlayback } from '../src/player/video.js';
   import { parseFLV } from '../src/video/flv.js';
   import { WebCodecsVideo } from '../src/video/webcodecs.js';
+  import { trustedHttp, trustedStorage } from './flapp.js'; // 信用する SWF の通信と保存（埋め込み用の <flapp-player> と共通）
 
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
@@ -200,87 +201,6 @@
         draw();
       }, 1000 / movie.frameRate);
     }
-  }
-
-  /**
-   * SWF を信用するときの、SharedObject の保存先（Movie.load の storage オプション）。localStorage に、SWF ごと（?swf= で読んだときは
-   * その URL、ファイルを選んだときはそのファイル名）に分けて書く。書けなければ（容量など）false。
-   */
-  function trustedStorage(id) {
-    const key = (name) => `flapp:so:${id}:${name}`;
-    return {
-      load(name) { try { return localStorage.getItem(key(name)); } catch { return null; } },
-      save(name, text) {
-        try {
-          if (text === null) localStorage.removeItem(key(name));
-          else localStorage.setItem(key(name), text);
-          return true;
-        } catch { return false; }
-      },
-    };
-  }
-
-  /**
-   * SWF を信用するときの、移動と読み込み（Movie.load の network オプション）と、NetStream.play のファイル（media オプション）。
-   * 相対 URL は、?swf= で読んだときはその SWF の URL から、ファイルを選んだときはこのページの URL から解決する。
-   * http / https 以外（javascript: や file: など）は、開きも読みもしない。
-   */
-  function trustedHttp(base, trace) {
-    const resolve = (url) => {
-      try {
-        const target = new URL(url, new URL(base ?? location.href, location.href));
-        if (target.protocol === 'http:' || target.protocol === 'https:') return target;
-      } catch { /* 解釈できない URL */ }
-      trace(`[blocked] ${url}（http / https 以外は、開きも読みもしません）`);
-      return null;
-    };
-    const network = {
-      // 移動: target が空か _self / _parent / _top ならこのページを、それ以外の名前なら新しいタブ（そのウィンドウ名）を開く。
-      // POST で送る中身があれば、フォームを作って送る。GET なら、中身を URL の後ろに付ける。
-      navigate({ url, target, method, data }) {
-        const to = resolve(url);
-        if (!to) return;
-        const where = !target || /^_(self|parent|top)$/i.test(target) ? '_self' : target;
-        if (method === 'POST') {
-          const form = Object.assign(document.createElement('form'), { method: 'post', action: to.href, target: where });
-          for (const [name, value] of new URLSearchParams(data ?? '')) form.append(Object.assign(document.createElement('input'), { type: 'hidden', name, value }));
-          document.body.append(form);
-          form.submit();
-          form.remove();
-          return;
-        }
-        if (data) for (const [name, value] of new URLSearchParams(data)) to.searchParams.append(name, value);
-        if (where === '_self') location.assign(to.href);
-        else window.open(to.href, where, 'noopener');
-      },
-      // 読み込み: 結果のバイト列を返す。読めなければ null（スクリプトには失敗として伝わる）。
-      async load({ url, method, data, contentType, headers }) {
-        const from = resolve(url);
-        if (!from) return null;
-        try {
-          const res = await fetch(from, { method, body: data ?? undefined, headers: { ...(data && contentType ? { 'Content-Type': contentType } : {}), ...(headers ?? {}) } });
-          if (!res.ok) trace(`[load] ${from.href}: HTTP ${res.status}`);
-          return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
-        } catch (e) {
-          trace(`[load] ${from.href}: ${e.message}`);
-          return null;
-        }
-      },
-    };
-    // NetStream.play(url): FLV のバイト列を返す。読めなければ null（見つからない扱い）。
-    const media = async (url) => {
-      const from = resolve(url);
-      if (!from) return null;
-      try {
-        const res = await fetch(from);
-        if (!res.ok) trace(`[play] ${from.href}: HTTP ${res.status}`);
-        return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
-      } catch (e) {
-        trace(`[play] ${from.href}: ${e.message}`);
-        return null;
-      }
-    };
-    return { network, media };
   }
 
   addEventListener('pagehide', () => current?.saveSharedObjects()); // 実機も、閉じるときに保存する

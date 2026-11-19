@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flapp: SWF を埋め込む</title>
+<style>body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; } flapp-player { border: 1px solid #888; }</style>
+<h1>SWF を埋め込む</h1>
+<p>この文章の中に、SWF を直接置いています（<code>?swf=</code> で別の SWF、<code>&amp;trust</code> で信用する SWF として動かします）。</p>
+<flapp-player id="player"></flapp-player>
+<pre id="log"></pre>
+<script type="module">
+  import './flapp.js';
+  const q = new URLSearchParams(location.search);
+  const el = document.getElementById('player');
+  const log = document.getElementById('log');
+  for (const type of ['trace', 'warning', 'error']) el.addEventListener(type, (e) => { log.textContent += `[${type}] ${e.detail}\n`; });
+  if (q.has('trust') && q.get('trust') !== '0') el.setAttribute('trust', '');
+  el.setAttribute('src', q.get('swf') ?? '../test/fixtures/text.swf');
+</script>
