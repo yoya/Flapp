@@ -705,10 +705,12 @@ export function installFlash(vm, movie, types) {
     getters: { url: (self) => self.url ?? null, method: (self) => self.method ?? 'GET', data: (self) => self.data ?? null },
     setters: { url: (self, v) => { self.url = v === null || v === undefined ? null : str(v); }, method: (self, v) => { self.method = str(v); }, data: (self, v) => { self.data = v; } },
   });
-  // 外部への移動は行わず、要求があったことだけを伝える（AVM1 の getURL と同じ扱い）。
+  // 要求を記録して、移動はホストに任せる（AVM1 の getURL と同じ扱い）。
   vm.defineGlobal('flash.net::navigateToURL', vm.native((_, [request, window]) => {
     if (!(request instanceof ASObject) || request.klass !== c.URLRequest) vm.throwError('TypeError', 2007, 'Parameter request must be non-null.');
-    movie.request({ kind: 'navigateToURL', url: request.url ?? '', target: window === undefined || window === null ? '' : str(window), method: request.method ?? 'GET' });
+    const req = { kind: 'navigateToURL', url: request.url ?? '', target: window === undefined || window === null ? '' : str(window), method: request.method ?? 'GET' };
+    movie.request(req);
+    movie.navigate({ ...req, data: request.data === undefined || request.data === null ? '' : str(request.data) });
   }, 'navigateToURL'));
   vm.defineGlobal('flash.utils::getTimer', vm.native(() => Math.floor(vm.now()), 'getTimer'));
   vm.defineGlobal('flash.utils::getQualifiedClassName', vm.native((_, [v]) => (v instanceof ASClass ? v.name : vm.classOf(v)?.name ?? (v === null ? 'null' : 'void')), 'getQualifiedClassName'));

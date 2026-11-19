@@ -5,11 +5,11 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Movie } from '../src/player/movie.js';
 
-async function run(name, frames) {
+async function run(name, frames, options = {}) {
   let time = 0;
   // NetStream が再生するファイルは、SWF からの相対パスで探して渡す。
   const media = (url) => { try { return readFileSync(new URL(url, new URL('fixtures/', import.meta.url))); } catch { return null; } };
-  const movie = await Movie.load(readFileSync(new URL(`fixtures/${name}.swf`, import.meta.url)), { now: () => time, media });
+  const movie = await Movie.load(readFileSync(new URL(`fixtures/${name}.swf`, import.meta.url)), { now: () => time, media, ...options });
   for (let i = 0; i < frames; i++) {
     time += 1000 / movie.frameRate;
     movie.advance();
@@ -106,4 +106,32 @@ test('NetStream: 一時停止と位置の変更、見つからないファイル
     'play ../../tools/assets/video-h263.flv', 'play no-such-file.flv', 'connect rtmp://example.com/app', 'play unheard.flv',
   ]);
   assert.deepEqual(movie.warnings, ['unhandled netStatus: NetStream.Play.StreamNotFound']); // 誰も聞いていない失敗は、警告として残る
+});
+
+test('URLLoader と navigateToURL は、ホストの network に任せる', async () => {
+  // as3x-urlloader: 同じファイルを、文字・変数・バイト列として読む（実機のデバッガ版は、読み込みが成功しても open の直後に落ちる。
+  // 落ちる前の出力 "text open true false" までは、実機と同じ）。
+  const loads = [];
+  const network = { load: (r) => { loads.push(`${r.method} ${r.url}`); try { return readFileSync(new URL(r.url, new URL('fixtures/', import.meta.url))); } catch { return null; } } };
+  const movie = await run('as3x-urlloader', 4, { network });
+  assert.deepEqual(movie.traces, [
+    'text undefined 0 0',
+    'after load undefined 0 0',
+    'text open true false',
+    'text progress true false 34/34',
+    'text complete true false 34/34 string String [name=Flapp&n=42&msg=hello+world%21]',
+    'variables open true false',
+    'variables progress true false 34/34',
+    'variables complete true false 34/34 object flash.net::URLVariables name=Flapp n=42 string msg=[hello world!]',
+    'binary open true false',
+    'binary progress true false 34/34',
+    'binary complete true false 34/34 object flash.utils::ByteArray length=34 position=0 [name]',
+  ]);
+  assert.deepEqual(loads, Array(3).fill('GET ../../tools/assets/net-vars.txt'));
+  assert.deepEqual(movie.warnings, []);
+  // as3x-netfail: navigateToURL は移動として、sendToURL は応答を受け取らない読み込みとして渡る。fscommand は渡らない。
+  const calls = [];
+  const failing = await run('as3x-netfail', 8, { network: { navigate: (r) => calls.push(`navigate ${r.method} ${r.url} ${r.target}`), load: (r) => { calls.push(`load ${r.method} ${r.url}`); return null; } } });
+  assert.deepEqual(calls, ['load GET missing-file.txt', 'navigate GET http://example.com/page _blank', 'load GET http://example.com/log', 'load GET unheard.txt']);
+  assert.equal(failing.traces[4], 'URLLoader ioError true 2032 Error #2032: Stream Error. URL: missing-file.txt true true false false undefined 0 1');
 });

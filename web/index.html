@@ -23,6 +23,7 @@
       <option value="big5">中国語・繁体字 (Big5)</option>
     </select>
   </label>
+  <label><input type="checkbox" id="trust"> この SWF を信用する（スクリプトによるページの移動と、http / https の読み込みを許す）</label>
 </p>
 <canvas id="stage" width="0" height="0"></canvas>
 <div id="info"></div>
@@ -61,6 +62,12 @@
       : /^zh-(tw|hk|hant)/.test(language) ? 'big5' : language.startsWith('zh') ? 'gbk' : 'windows-1252');
   if (!encoding.value) encoding.value = 'windows-1252'; // 一覧に無い指定
   encoding.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label, loaded.base); });
+  // SWF を信用するか。信用すると、getURL / navigateToURL でページを移動し（別のウィンドウの指定なら新しいタブを開く）、
+  // LoadVars / XML / loadVariables / URLLoader の読み込みを fetch で行う（相手のサーバが CORS で許していれば、別のサーバからも読める）。
+  // 既定は信用しない（要求は trace の欄に出すだけ）。?trust でも指定できる。切り替えると、ムービーを最初から読み直す。
+  const trust = document.getElementById('trust');
+  trust.checked = new URLSearchParams(location.search).has('trust');
+  trust.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label, loaded.base); });
 
   let redraw = () => {}; // 再生中のムービーを描き直す
   // URL に ?matchPlayer を付けると、実機が映さないもの（インターレースの VP6）を、実機と同じに映さない。
@@ -155,12 +162,15 @@
       traces.textContent = lines.join('\n');
       traces.scrollTop = traces.scrollHeight;
     };
-    // スクリプトが要求した URL は、開かずに trace の欄へ表示する（NetStream.play のファイルだけは、?swf= で読んだときに同じサーバから渡す）。
-    const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''} ${kind === 'play' && base ? '（同じサーバから読みます）' : '（開きません）'}`);
+    // スクリプトが要求した URL は、trace の欄へ表示する。信用していなければ、開きも読みもしない
+    // （NetStream.play のファイルだけは、?swf= で読んだときに同じサーバから渡す）。
+    const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''}`
+      + (kind === 'play' ? (base ? '（同じサーバから読みます）' : '（読みません）') : trust.checked ? '' : '（信用していないので、開きも読みもしません）'));
+    const network = trust.checked ? trustedNetwork(base, trace) : undefined;
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
-      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, matchPlayer, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, network, matchPlayer, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;
@@ -186,6 +196,54 @@
         draw();
       }, 1000 / movie.frameRate);
     }
+  }
+
+  /**
+   * SWF を信用するときの、移動と読み込み（Movie.load の network オプション）。相対 URL は、?swf= で読んだときはその SWF の URL から、
+   * ファイルを選んだときはこのページの URL から解決する。http / https 以外（javascript: や file: など）は、開きも読みもしない。
+   */
+  function trustedNetwork(base, trace) {
+    const resolve = (url) => {
+      try {
+        const target = new URL(url, new URL(base ?? location.href, location.href));
+        if (target.protocol === 'http:' || target.protocol === 'https:') return target;
+      } catch { /* 解釈できない URL */ }
+      trace(`[blocked] ${url}（http / https 以外は、開きも読みもしません）`);
+      return null;
+    };
+    return {
+      // 移動: target が空か _self / _parent / _top ならこのページを、それ以外の名前なら新しいタブ（そのウィンドウ名）を開く。
+      // POST で送る中身があれば、フォームを作って送る。GET なら、中身を URL の後ろに付ける。
+      navigate({ url, target, method, data }) {
+        const to = resolve(url);
+        if (!to) return;
+        const where = !target || /^_(self|parent|top)$/i.test(target) ? '_self' : target;
+        if (method === 'POST') {
+          const form = Object.assign(document.createElement('form'), { method: 'post', action: to.href, target: where });
+          for (const [name, value] of new URLSearchParams(data ?? '')) form.append(Object.assign(document.createElement('input'), { type: 'hidden', name, value }));
+          document.body.append(form);
+          form.submit();
+          form.remove();
+          return;
+        }
+        if (data) for (const [name, value] of new URLSearchParams(data)) to.searchParams.append(name, value);
+        if (where === '_self') location.assign(to.href);
+        else window.open(to.href, where, 'noopener');
+      },
+      // 読み込み: 結果のバイト列を返す。読めなければ null（スクリプトには失敗として伝わる）。
+      async load({ url, method, data, contentType }) {
+        const from = resolve(url);
+        if (!from) return null;
+        try {
+          const res = await fetch(from, { method, body: data ?? undefined, headers: data && contentType ? { 'Content-Type': contentType } : undefined });
+          if (!res.ok) trace(`[load] ${from.href}: HTTP ${res.status}`);
+          return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+        } catch (e) {
+          trace(`[load] ${from.href}: ${e.message}`);
+          return null;
+        }
+      },
+    };
   }
 
   document.getElementById('file').addEventListener('change', async (e) => {

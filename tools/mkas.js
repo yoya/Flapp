@@ -24,6 +24,7 @@
 //     //// sprite 1 on load        スプライト 1 を置くときに付ける onClipEvent(load) の中身（ルートに置くスプライトだけ）。
 //                                  load / enterFrame / unload / mouseDown / mouseUp / mouseMove / keyDown / keyUp と、
 //                                  on(press) の形になる press / release / releaseOutside / rollOver / rollOut / dragOver / dragOut
+//   「// unverified: 理由」という行があれば、実機と照合できないテストとして asx-<名前>.swf を作る（期待値は test/avm1.test.js に手で書く）。
 // 入力を与えるテストは、手順を test/fixtures/as-<名前>.input.json に置く（tools/oracle-input.js を参照）。
 // スクリプトは有限回の trace で終わるように書く（実機の出力は再生開始から数秒後に取るため）。
 //
@@ -164,7 +165,8 @@ function build(name) {
   }
   const base = join(dir, 'base.swf');
   writeFileSync(base, swf({ version, frames: rootFrames, tags }));
-  const out = join(outDir, `as-${name}.swf`);
+  const prefix = /^\/\/ unverified:/m.test(source) ? 'asx' : 'as';
+  const out = join(outDir, `${prefix}-${name}.swf`);
   // FFDec は構文エラーでも終了コード 0 のことがあるので、出力の SEVERE も見る。
   let log;
   try {
@@ -175,7 +177,7 @@ function build(name) {
   const lines = log.split('\n');
   const error = lines.find((line) => /on line \d+/.test(line)) ?? lines.find((line) => /SEVERE|Exception/.test(line));
   if (error) throw new Error(`${name}: ${error.replace(/, file: .*/, '')}`);
-  console.log(`as-${name}.swf (SWF ${version}, ${rootFrames} frames, ${sprites.size} sprites)`);
+  console.log(`${prefix}-${name}.swf (SWF ${version}, ${rootFrames} frames, ${sprites.size} sprites)`);
 }
 
 const names = process.argv.length > 2 ? process.argv.slice(2) : readdirSync(srcDir).filter((f) => f.endsWith('.as')).map((f) => f.slice(0, -3)).sort();

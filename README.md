@@ -20,11 +20,13 @@ SWF は信用できない入力として扱います。
 
 - スクリプトは命令を 1 つずつ解釈して実行し、`eval` やコード生成は使いません。
 - 命令数、割り当て数、呼び出しの深さ、表示オブジェクトの数、ビットマップの画素数などに上限があります。
-- 通信やファイルの読み込みは行いません。`getURL` や `URLLoader` などの要求は記録するだけです（読み込みは、スクリプトには失敗として伝わります）。
+- プレイヤーは自分では通信もページの移動もしません。`getURL` や `URLLoader` などの要求は記録され、移動と読み込みは、
+  ホストが `Movie.load` の `network` オプションで渡した関数に任されます。渡さなければ何も起きません（読み込みは、スクリプトには失敗として伝わります）。
 
 未対応のもの:
 
 - Screen Video v2 の、ストリームの中のパレット（実機も再生できません）
+- ほかの SWF や画像の読み込み（`loadMovie`、`Loader`）、外部の音の読み込み（`loadSound`）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
@@ -46,6 +48,9 @@ npm run serve
 - 音は、ページを最初にクリックするかキーを押した後から鳴ります（ブラウザの制限）。
 - SWF 5 以前のファイルは、文字コードをページ上の一覧から選べます（ファイルからは判別できないため）。
 - `trace()` の出力、スクリプトが要求した URL、警告は、ステージの下に表示されます。
+- 「この SWF を信用する」をオンにする（または URL に `?trust` を付ける）と、スクリプトによるページの移動（`getURL`、`navigateToURL`）と、
+  `LoadVars`・`XML`・`loadVariables`・`URLLoader` の読み込み（`fetch`）を行います。http / https 以外の URL（`javascript:` など）は開きません。
+  別のサーバからの読み込みは、相手が CORS で許しているときだけできます。既定はオフです（信用できない SWF では、オンにしないでください）。
 
 ## コードから使う
 
@@ -58,6 +63,10 @@ const movie = await Movie.load(bytes, {
   trace: console.log,
   rasterize: renderer.rasterizer(),
   media: (url) => (url === 'movie.flv' ? flvBytes : null), // NetStream.play(url) が再生する FLV（プレイヤーは自分では取りに行かない）
+  network: { // 移動と読み込みを許すときだけ渡す（どの URL を許すかは、ここで決める）
+    navigate: ({ url, target, method, data }) => window.open(url, target || '_self'),
+    load: async ({ url, method, data, contentType }) => new Uint8Array(await (await fetch(url, { method, body: data })).arrayBuffer()),
+  },
 });
 await renderer.prepare(movie); // JPEG などのビットマップを復号する
 setInterval(() => {

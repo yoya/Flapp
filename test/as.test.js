@@ -18,7 +18,9 @@ for (const file of readdirSync(dir).filter((f) => /^as-.*\.swf$/.test(f)).sort()
     const encoding = name.endsWith('-sjis') ? 'shift_jis' : undefined; // SWF 5 以前の文字コード
     // NetStream.play(url) が再生するファイルは、テスト用 SWF のフォルダからの相対パスで読む。
     const media = (url) => { try { return readFileSync(new URL(url, dir)); } catch { return null; } };
-    const movie = await Movie.load(readFileSync(new URL(file, dir)), { now: () => time, random: () => 0.5, encoding, media });
+    // LoadVars などの読み込みも、同じフォルダからの相対パスのファイルを返す（実機にも、同じローカルのファイルを読ませてある）。
+    const network = { load: ({ url }) => media(url) };
+    const movie = await Movie.load(readFileSync(new URL(file, dir)), { now: () => time, random: () => 0.5, encoding, media, network });
     // 入力の手順 (<名前>.input.json) があれば、それを与えたときの出力を、同じ入力を実機へ送って取った trace と比べる。
     const input = new URL(`${name}.input.json`, dir);
     const withInput = existsSync(input);

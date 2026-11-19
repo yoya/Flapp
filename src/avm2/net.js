@@ -1,7 +1,9 @@
 // 読み込みと通信、実行環境にかかわるクラス: URLLoader、Loader、LoaderInfo、SharedObject、ApplicationDomain、
 // Capabilities、ExternalInterface、Mouse、Keyboard など。
 //
-// 外部への通信や読み込みは一切しない。要求は movie.request で記録し、スクリプトには失敗（ioError）を伝える。
+// プレイヤーは自分では通信しない。要求は movie.request で記録する。URLLoader と sendToURL は、ホストが Movie.load の
+// network オプションで読み込みの関数を渡していれば、それに任せる。渡していなければ、スクリプトには失敗（ioError）を伝える。
+// Loader（ほかの SWF や画像の読み込み）は、いつも失敗を伝える。
 // SharedObject は、このムービーを再生している間だけ値を持つ（保存はしない）。
 // Capabilities は固定の値を返す（再生している端末の情報は渡さない）。
 import { ASArray, ASClass, ASObject, publicKey } from './object.js';
@@ -23,6 +25,19 @@ export function installNet(vm, movie) {
   const requestOf = (v, name) => {
     if (!(v instanceof ASObject) || v.klass !== c.URLRequest) vm.throwError('TypeError', 2007, `Parameter ${name} must be non-null.`);
     return v;
+  };
+  // URLRequest を、ホストの読み込みの関数に渡す形にする。data は、ByteArray ならその中身、ほかは文字列にして送る。
+  // GET のときは、data を URL の後ろに付ける。
+  const hostRequest = (request) => {
+    const method = String(request.method ?? 'GET').toUpperCase();
+    const data = request.data;
+    let url = request.url ?? '';
+    let body = null;
+    if (data !== undefined && data !== null) {
+      if (method === 'GET') url += `${url.includes('?') ? '&' : '?'}${str(data)}`;
+      else body = data instanceof ASObject && data.bytes ? data.bytes.data.slice(0, data.bytes.length) : new TextEncoder().encode(str(data));
+    }
+    return { url, method, data: body, contentType: body ? (request.contentType ?? 'application/x-www-form-urlencoded') : null };
   };
   // 読み込みの失敗を、次のフレームの後で target に伝える。誰も聞いていなければ警告を残す（実機は、エラーの窓を出す）。
   // opened が真なら、先に open を伝える（実機の URLLoader は、ファイルが無くても open を出す）。
@@ -70,16 +85,44 @@ export function installNet(vm, movie) {
     slots: { data: undefined, dataFormat: 'text', bytesLoaded: 0, bytesTotal: 0 },
     construct: (self, [request]) => { if (request !== undefined && request !== null) vm.callProperty(self, vm.keyName('load'), [request]); },
     methods: {
+      // 読み込みはホストに任せる。読めたら open、progress、complete を、読めなければ open と ioError を伝える。
       load: (self, [request]) => {
         const url = requestOf(request, 'request').url ?? '';
         movie.request({ kind: 'load', url, target: '', method: request.method ?? 'GET' });
-        fail(self, url, true);
+        self.loading = (self.loading ?? 0) + 1;
+        const id = self.loading;
+        movie.load(hostRequest(request), display.later, (bytes) => {
+          if (self.loading !== id) return; // 待っている間に、別の読み込みや close があった
+          display.dispatch(self, vm.construct(c.Event, ['open']));
+          if (!bytes) {
+            if (!self.listeners?.get('ioError')?.length) movie.warn(`unhandled ioError: ${url}`);
+            display.dispatch(self, vm.construct(c.IOErrorEvent, ['ioError', false, false, `Error #2032: Stream Error. URL: ${url}`, 2032]));
+            return;
+          }
+          const format = str(vm.getProperty(self, vm.keyName('dataFormat')));
+          let value;
+          if (format === 'binary') {
+            value = vm.construct(c.ByteArray, []);
+            Object.assign(value.bytes, { data: bytes.slice(), length: bytes.length, position: 0, view: null });
+          } else {
+            vm.charge(bytes.length);
+            const text = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '');
+            value = format === 'variables' ? vm.construct(c.URLVariables, [text]) : text;
+          }
+          vm.setProperty(self, vm.keyName('data'), value);
+          vm.setProperty(self, vm.keyName('bytesLoaded'), bytes.length);
+          vm.setProperty(self, vm.keyName('bytesTotal'), bytes.length);
+          display.dispatch(self, vm.construct(c.ProgressEvent, ['progress', false, false, bytes.length, bytes.length]));
+          display.dispatch(self, vm.construct(c.Event, ['complete']));
+        });
       },
-      close: () => {},
+      close: (self) => { self.loading = (self.loading ?? 0) + 1; },
     },
   });
+  // 送るだけで、応答は受け取らない。
   vm.defineGlobal('flash.net::sendToURL', vm.native((_, [request]) => {
     movie.request({ kind: 'sendToURL', url: requestOf(request, 'request').url ?? '', target: '', method: request.method ?? 'GET' });
+    movie.load(hostRequest(request), display.later, () => {});
   }, 'sendToURL'));
   // SharedObject: 名前ごとに 1 つ。data に入れた値は、再生している間だけ残る。
   const shared = new Map();

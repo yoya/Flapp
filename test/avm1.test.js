@@ -1,5 +1,6 @@
 // AVM1 の安全面（上限と、JS 側への影響が無いこと）のテスト。実機では試せない（止まってしまう）ものをここで確かめる。
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { numberToString } from '../src/avm1/convert.js';
 import { AVM1 } from '../src/avm1/interp.js';
@@ -92,17 +93,40 @@ test('別のクリップのフレームを call すると、呼ばれた側の�
   assert.deepEqual([movie.root.matrix.tx, movie.root.matrix.ty], [0, 0]);
 });
 
-test('getURL は移動せず、要求された URL だけを記録する', async () => {
-  // getURL("http://example.com/a", "_blank")（GetURL）と、スタックから取る形（GetURL2、POST）
+test('getURL は要求を記録し、移動はホストの network.navigate に任せる', async () => {
+  // getURL("http://example.com/a", "_blank")（GetURL）と、スタックから取る形（GetURL2）。GetURL2 のフラグは、最上位が
+  // 変数の読み込み、次が対象がクリップ、下位 2 ビットがメソッド（仕様書の表と逆の並び。実機で確認）。
   const strings = [...cstr('http://example.com/a'), ...cstr('_blank')];
   const getURL = [0x83, ...u16(strings.length), ...strings];
+  const getURL2 = (url, target, flags) => [push(url), push(target), [0x9a, 1, 0, flags]];
   const seen = [];
-  const movie = await movieWith([[getURL, push('next.swf'), push('/clip'), [0x9a, 1, 0, 0x82]]], { onRequest: (r) => seen.push(r.url) });
+  const navigated = [];
+  const SetVariable = 0x1d;
+  const movie = await movieWith([[
+    push('greeting'), push('hi there'), SetVariable,
+    getURL,
+    ...getURL2('next.swf', '/clip', 0x42), // ムービーの読み込み（POST）: 移動ではない
+    ...getURL2('http://example.com/b', '_self', 0x01), // 移動（GET）: ルートの変数を付ける
+    ...getURL2('FSCommand:quit', '', 0x00), // fscommand は移動ではない
+    ...getURL2('other.swf', '_level1', 0x00), // レベルへの読み込みも移動ではない
+  ]], { onRequest: (r) => seen.push(r.url), network: { navigate: (r) => navigated.push(r) } });
   assert.deepEqual(movie.requests, [
     { kind: 'getURL', url: 'http://example.com/a', target: '_blank', method: '' },
     { kind: 'loadMovie', url: 'next.swf', target: '/clip', method: 'POST' },
+    { kind: 'getURL', url: 'http://example.com/b', target: '_self', method: 'GET' },
+    { kind: 'getURL', url: 'FSCommand:quit', target: '', method: '' },
+    { kind: 'getURL', url: 'other.swf', target: '_level1', method: '' },
   ]);
-  assert.deepEqual(seen, ['http://example.com/a', 'next.swf']);
+  assert.deepEqual(seen, ['http://example.com/a', 'next.swf', 'http://example.com/b', 'FSCommand:quit', 'other.swf']);
+  assert.deepEqual(navigated, [
+    { kind: 'getURL', url: 'http://example.com/a', target: '_blank', method: '', data: '' },
+    // 変数は for..in と同じもの（実機の for..in でも、ルートには $version が出る）。
+    { kind: 'getURL', url: 'http://example.com/b', target: '_self', method: 'GET', data: 'greeting=hi%20there&%24version=MAC%2035%2C0%2C0%2C61' },
+  ]);
+  // ホストが network を渡していなければ、何も起きない（要求の記録だけ）。
+  const quiet = await movieWith([[getURL]]);
+  assert.equal(quiet.requests.length, 1);
+  assert.deepEqual(quiet.warnings, []);
 });
 
 test('SWF 4: 回転と拡大率の代入は、実機の固定小数の計算の端数まで（ほぼ）同じになる', async () => {
@@ -151,4 +175,39 @@ test('SWF 4: 回転と拡大率の代入は、実機の固定小数の計算の�
   close(await run({}, 'x=99.98,t,x=99.976,t,x=99.975,t,x=50,x=50.02,t,x=50.03,t'), [
     [0, 100, 100], [0, 100, 100], [0, 99.9740600585938, 100], [0, 50, 100], [0, 50.0289916992188, 100],
   ]);
+});
+
+test('LoadVars / XML の送信と、変数を付けた getURL / loadVariables は、ホストの network に任せる', async () => {
+  // test/as/netsend.as（実機では確かめられないので、期待値は手で書いたもの）。
+  const answers = { 'echo.txt': 'echo=got+it', 'xml-echo.txt': '<ok/>', 'vars.txt': 'answer=42' };
+  const calls = [];
+  const network = {
+    load: (r) => {
+      calls.push(`load ${r.method} ${r.url} [${r.data ? new TextDecoder().decode(r.data) : ''}] ${r.contentType}`);
+      return answers[r.url] ? new TextEncoder().encode(answers[r.url]) : null;
+    },
+    navigate: (r) => calls.push(`navigate ${r.method} ${r.url} ${r.target} [${r.data.slice(0, 30)}]`),
+  };
+  const run = async (options) => {
+    let time = 0;
+    const movie = await Movie.load(readFileSync(new URL('fixtures/asx-netsend.swf', import.meta.url)), { now: () => time, ...options });
+    for (let i = 0; i < 4; i++) {
+      time += 1000 / movie.frameRate;
+      movie.advance();
+    }
+    return movie;
+  };
+  const movie = await run({ network });
+  assert.deepEqual(movie.traces, ['sendAndLoad true', 'send true', 'reply true status=undefined echo=got it', 'xml reply true ok', 'box onData answer=42']);
+  assert.deepEqual(calls, [
+    'load POST echo.txt [score=12&user=yo%20ya] application/x-www-form-urlencoded', // sendAndLoad: 中身を本文にして送る
+    'navigate POST http://example.com/form _blank [score=12&user=yo%20ya]', // send: 中身を付けて移動する
+    'load POST xml-echo.txt [<a b="1">x</a>] application/x-www-form-urlencoded',
+    'navigate GET http://example.com/page _self [count=3&greeting=hi%20there&an]', // getURL(…, "GET"): ルートの変数を付ける
+    'load POST vars.txt [color=red] application/x-www-form-urlencoded', // box.loadVariables(…, "POST"): box の変数を送る
+  ]);
+  assert.deepEqual(movie.warnings, []);
+  // network が無ければ、読み込みは失敗として伝わり、移動は起きない。
+  const offline = await run({});
+  assert.deepEqual(offline.traces, ['sendAndLoad true', 'send true', 'reply false status=undefined echo=undefined', 'xml reply false undefined']);
 });

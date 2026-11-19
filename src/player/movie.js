@@ -33,6 +33,7 @@ const BITMAP_TAGS = new Set([6, 20, 21, 35, 36, 90]);
 const MAX_NESTING = 255;
 const DYNAMIC_DEPTH = 16384; // これ以上の深度はスクリプトが作ったクリップ用
 const MAX_TRACES = 10000;
+const MAX_LOADED_BYTES = 1 << 26; // ホストから受け取る読み込みデータの上限（64 MB）
 // クリップイベントのフラグ（PlaceObject2 の CLIPEVENTFLAGS を下位バイトから並べた値）。
 const EVENT = {
   load: 0x01, enterFrame: 0x02, unload: 0x04, mouseMove: 0x08, mouseDown: 0x10, mouseUp: 0x20, keyDown: 0x40, keyUp: 0x80,
@@ -143,11 +144,17 @@ export class Movie {
    *   random: () => number    乱数。省略すると Math.random
    *   avm: AVM1 の上限（maxSteps, maxAllocations, maxDepth）
    *   onRequest: ({ kind, url, target, method }) => void   スクリプトが getURL / loadMovie / loadVariables を呼んだときの通知。
-   *             kind はそのどれか。プレイヤーは移動も読み込みもしない（要求は movie.requests にも残る）
+   *             kind はそのどれか。プレイヤー自身は移動も読み込みもしない（要求は movie.requests にも残る。実行は network に任せる）
    *   audio: 音の出力（player/sound.js の冒頭を参照。ブラウザでは audio/webaudio.js）。省略すると音は出ない
    *   media: (url) => Uint8Array | Promise<Uint8Array> | null   NetStream.play(url) が再生する FLV ファイルを返す関数。
    *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
    *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
+   *   network: 移動と通信を、ホストに任せるための関数（省略すると、どちらも行わない。要求は記録だけして、読み込みは
+   *             失敗として伝える）。プレイヤーは自分では通信しない。SWF を信用するか、どの URL を許すかは、ホストが決める。
+   *             navigate: ({ url, target, method, data }) => void   getURL / navigateToURL などによる移動
+   *             load: ({ url, method, data, contentType }) => Uint8Array | ArrayBuffer | null（または、その Promise）
+   *                   LoadVars / XML / loadVariables / URLLoader の読み込み。data は送る本文（Uint8Array か null）。
+   *                   読めなければ null を返す（スクリプトには、読み込みの失敗として伝わる）
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
    *             - 埋め込みの H.263 / VP6 を整数倍で置いたとき、実機と同じに、横方向だけ右隣の画素と混ぜて描く
@@ -180,8 +187,9 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network } = {}) {
     this.media = media ?? null;
+    this.network = network ?? null;
     this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
@@ -214,7 +222,7 @@ export class Movie {
       if (trace) trace(shown);
       else if (this.traces.length < MAX_TRACES) this.traces.push(shown);
     };
-    /** スクリプトが要求した URL を記録する（実行はしない）。 */
+    /** スクリプトが要求した URL を記録する（実行はしない。移動と読み込みは navigate / load がホストに任せる）。 */
     this.request = (req) => {
       const shown = this.legacy ? { ...req, url: this.legacy.decode(req.url), target: this.legacy.decode(req.target) } : req;
       if (this.requests.length < MAX_TRACES) this.requests.push(shown);
@@ -232,6 +240,8 @@ export class Movie {
       stage: { width: (swf.frameSize.xmax - swf.frameSize.xmin) / 20, height: (swf.frameSize.ymax - swf.frameSize.ymin) / 20 },
       language,
       request: this.request,
+      navigate: (req) => this.navigate(req),
+      load: (req, done) => this.load(req, (fn) => this.avm.later(fn), done),
       now: this.now,
       random,
       ...avm,
@@ -248,6 +258,40 @@ export class Movie {
       this.stage.removed = false;
       this.stage.children.set(0, this.root);
     }
+  }
+
+  /**
+   * 移動の要求を、ホストに渡す（ホストが network.navigate を渡していなければ、何もしない）。
+   * fscommand の呼び出し（"FSCommand:..."）と、レベルへの読み込み（target が "_level1" など）は、移動ではないので渡さない。
+   */
+  navigate(req) {
+    if (!this.network?.navigate || /^fscommand:/i.test(req.url) || /^_level\d+$/i.test(req.target ?? '')) return;
+    try {
+      this.network.navigate(req);
+    } catch (e) {
+      this.warn(`navigation failed: ${e.message}`);
+    }
+  }
+
+  /**
+   * 読み込みを、ホストに頼む（ホストが network.load を渡していなければ、読めなかったことにする）。
+   * 結果は、later で予約した処理（フレームの処理の中で動く）から done(バイト列 | null) に渡す。
+   * ホストがその場で値を返せば次のフレームで、Promise を返せば解決した後のフレームで届く。
+   */
+  load(req, later, done) {
+    const finish = (value) => later(() => {
+      const bytes = value instanceof Uint8Array ? value : value instanceof ArrayBuffer ? new Uint8Array(value) : null;
+      if (bytes && bytes.length > MAX_LOADED_BYTES) this.warn(`loaded data is too large (${bytes.length} bytes): ${req.url}`);
+      done(bytes && bytes.length <= MAX_LOADED_BYTES ? bytes : null);
+    });
+    let found = null;
+    try {
+      if (this.network?.load) found = this.network.load(req);
+    } catch (e) {
+      this.warn(`loading failed: ${e.message}`);
+    }
+    if (found && typeof found.then === 'function') found.then(finish, () => finish(null));
+    else finish(found);
   }
 
   /**

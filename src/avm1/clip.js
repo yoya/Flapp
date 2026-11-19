@@ -158,6 +158,12 @@ export const MAGIC = {
   _level0: { get: (c) => rootOf(c).scriptObject() },
 };
 
+// getURL / loadVariables のメソッドの指定。"GET" と "POST" だけが意味を持つ（大文字小文字は問わない）。ほかは送らない（''）。
+const sendMethod = (method) => {
+  const m = typeof method === 'string' ? method.toUpperCase() : '';
+  return m === 'GET' || m === 'POST' ? m : '';
+};
+
 export class MovieClipObject extends AVMObject {
   /** @param {import('../player/movie.js').MovieClip} clip */
   constructor(vm, clip) {
@@ -327,16 +333,27 @@ export function installMovieClip(vm) {
     moveTo: (self, [x, y]) => { self.clip.drawing().moveTo(num(x) * 20, num(y) * 20); },
     lineTo: (self, [x, y]) => { self.clip.drawing().lineTo(num(x) * 20, num(y) * 20); },
     curveTo: (self, [cx, cy, x, y]) => { self.clip.drawing().curveTo(num(cx) * 20, num(cy) * 20, num(x) * 20, num(y) * 20); },
-    // --- 外部の読み込みや移動は行わない ---
-    // 外部への移動・読み込みは行わず、要求があったことだけを伝える。
+    // --- 外部への移動と読み込み ---
+    // 要求を記録して、移動と変数の読み込みはホストに任せる（ホストが何もしなければ、何も起きない）。ムービーの読み込みは行わない。
     // 読み込みは行わない。実機で読み込みに失敗したときと同じく、次のフレームの後でクリップが空になる。
     unloadMovie: (self) => { self.clip.unload(); },
-    getURL: (self, [url, target, method]) => { vm.request({ kind: 'getURL', url: toStr(vm, url), target: target === undefined ? '' : toStr(vm, target), method: method === undefined ? '' : toStr(vm, method) }); },
+    // メソッド（GET / POST）を指定すると、このクリップの変数を一緒に送る。
+    getURL: (self, [url, target, method]) => {
+      const req = { kind: 'getURL', url: toStr(vm, url), target: target === undefined ? '' : toStr(vm, target), method: sendMethod(method) };
+      vm.request(req);
+      vm.navigate({ ...req, data: req.method ? vm.clipVariables(self) : '' });
+    },
     loadMovie: (self, [url, method]) => {
       vm.request({ kind: 'loadMovie', url: toStr(vm, url), target: self.targetPath(), method: method === undefined ? '' : toStr(vm, method) });
       vm.later(() => self.clip.unload());
     },
-    loadVariables: (self, [url, method]) => { vm.request({ kind: 'loadVariables', url: toStr(vm, url), target: self.targetPath(), method: method === undefined ? '' : toStr(vm, method) }); },
+    // 読み込んだ "a=1&b=2" を、このクリップの変数に入れる。
+    loadVariables: (self, [url, method]) => {
+      const how = sendMethod(method);
+      vm.loadText({ url: toStr(vm, url), target: self.targetPath(), method: how, body: how ? vm.clipVariables(self) : '' }, (text) => {
+        if (text !== undefined && !self.clip.removed) vm.loadedVariables(self, text);
+      });
+    },
     startDrag: (self, [lock, left, top, right, bottom]) => {
       const bounds = bottom === undefined ? undefined : { left: num(left) * 20, top: num(top) * 20, right: num(right) * 20, bottom: num(bottom) * 20 };
       self.clip.movie.startDrag(self.clip, toBool(vm, lock), bounds);

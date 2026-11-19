@@ -67,9 +67,14 @@ export class AVM1 {
    *   language: System.capabilities.language の値（'ja' など）
    *   request: ({ kind, url, target, method }) => void   getURL / loadMovie / loadVariables の要求の通知先。
    *            通知するだけで、移動も読み込みもしない
+   *   navigate: ({ url, target, method, data }) => void   移動を、ホストに任せるための関数（既定は何もしない）
+   *   load: (要求, done) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で呼ぶ
+   *            （既定は、次のフレームで null を渡す = 読めなかった扱い）
    */
-  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
+  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
     this.request = request;
+    this.navigate = navigate;
+    this.load = load ?? ((req, done) => this.later(() => done(null)));
     this.listeners = { Mouse: [], Key: [], Stage: [] }; // addListener で登録されたオブジェクト
     this.currentTarget = null;
     this.pending = []; // later() で予約した処理（読み込み失敗の通知など）。プレイヤーが次のフレームの後で実行する
@@ -185,6 +190,21 @@ export class AVM1 {
       this.key.code = code;
       this.key.down.delete(code);
     }
+  }
+
+  /**
+   * 文字のデータを読み込む（LoadVars、XML、loadVariables 用）。要求を記録して、ホストに読み込みを頼む。
+   * done(文字列 | undefined, バイト数) を、後のフレームの処理の中で呼ぶ（読めなければ undefined）。
+   * body は送る本文（文字列）。GET で送るときは、URL の後ろに付ける。
+   */
+  loadText({ kind = 'loadVariables', url, target = '', method = '', body = '', contentType = 'application/x-www-form-urlencoded' }, done) {
+    this.request({ kind, url, target, method });
+    const post = method.toUpperCase() === 'POST';
+    const address = !post && body ? `${url}${url.includes('?') ? '&' : '?'}${body}` : url;
+    // SWF 5 以前の文字列は、バイト列をそのまま 1 文字ずつにしたもの。SWF 6 以降は UTF-8。
+    const encode = (text) => (this.legacy ? Uint8Array.from(text, (ch) => ch.charCodeAt(0) & 0xff) : new TextEncoder().encode(text));
+    const decode = (bytes) => (this.legacy ? Array.from(bytes, (b) => String.fromCharCode(b)).join('') : decoder.decode(bytes).replace(/^\uFEFF/, ''));
+    this.load({ url: address, method: post ? 'POST' : 'GET', data: post ? encode(body) : null, contentType: post ? contentType : null }, (bytes) => done(bytes ? decode(bytes) : undefined, bytes?.length ?? 0));
   }
 
   /** 処理を予約する。次のフレームのスクリプトが済んだ後に実行される（実機で読み込みの失敗が届く時機）。 */
@@ -446,9 +466,11 @@ export class AVM1 {
         case 0x08: break; // ToggleQuality
         case 0x09: clip()?.clip.movie.sounds.stop(); break; // StopSounds: 鳴っている音をすべて止める
         case 0x81: clip()?.gotoFrame(view.getUint16(data, true) + 1, false); break; // GotoFrame
-        case 0x83: { // GetURL: 外部への移動・読み込みは行わず、要求があったことだけを伝える
+        case 0x83: { // GetURL: 要求を記録して、移動はホストに任せる
           const [url, next] = string(data);
-          this.request({ kind: 'getURL', url, target: string(next)[0], method: '' });
+          const req = { kind: 'getURL', url, target: string(next)[0], method: '' };
+          this.request(req);
+          this.navigate({ ...req, data: '' });
           break;
         }
         case 0x8a: break; // WaitForFrame: 全フレーム読み込み済みなので飛ばさない
@@ -625,12 +647,28 @@ export class AVM1 {
         }
         case 0x28: clip()?.clip.movie.stopDrag(); break; // EndDrag
         case 0x8d: pop(); break; // WaitForFrame2
-        case 0x9a: { // GetURL2: 外部への移動・読み込みは行わず、要求があったことだけを伝える
+        case 0x9a: { // GetURL2: 要求を記録して、移動や変数の読み込みはホストに任せる（ムービーの読み込みは行わない）
+          // フラグのビットの並びは、仕様書の表とは逆になっている（実機で確認）: 最上位が「変数を読み込む」、次が「対象がクリップ」、
+          // 下位 2 ビットが送るときのメソッド（1: GET、2: POST）。
           const flags = code[data];
           const target = toStr(this, pop());
           const url = toStr(this, pop());
-          const kind = flags & 0x01 ? 'loadVariables' : flags & 0x02 ? 'loadMovie' : 'getURL';
-          this.request({ kind, url, target, method: ['', 'GET', 'POST'][flags >> 6] ?? '' });
+          const toClip = (flags & 0x40) !== 0;
+          const kind = flags & 0x80 ? 'loadVariables' : toClip ? 'loadMovie' : 'getURL';
+          const req = { kind, url, target, method: ['', 'GET', 'POST'][flags & 3] ?? '' };
+          // メソッドの指定があれば、今のクリップの変数を一緒に送る。
+          const sent = req.method && clip() ? this.clipVariables(clip()) : '';
+          // 対象: クリップのパス。対象がウィンドウの指定（変数の読み込みでは loadVariablesNum の _level<n>）なら、レベルだけを受け付ける。
+          const into = toClip || /^_level\d+$/i.test(target) ? (target === '' ? clip() : this.resolvePath(frame, target)) : null;
+          if (kind === 'loadVariables') {
+            // 読み込んだ "a=1&b=2" を、対象のクリップの変数に入れる。
+            this.loadText({ ...req, body: sent }, (text) => { if (text !== undefined && into?.isMovieClip && !into.clip.removed) this.loadedVariables(into, text); });
+            break;
+          }
+          this.request(req);
+          if (kind === 'getURL') this.navigate({ ...req, data: sent });
+          // ムービーの読み込みは行わない。実機で読み込めなかったときと同じく、次のフレームの後で対象のクリップが空になる（ルートは残す）。
+          else if (into?.isMovieClip && into.clip.parent) this.later(() => into.clip.unload());
           break;
         }
         case 0x9f: { // GotoFrame2

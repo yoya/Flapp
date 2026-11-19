@@ -20,36 +20,57 @@ export function installNet(vm) {
   // --- LoadVars ---
   const loadVarsProto = new AVMObject(vm, vm.objectProto);
   loadVarsProto.define('contentType', 'application/x-www-form-urlencoded', HIDDEN);
-  // 読み込みを始める（実際には読まず、次のフレームで失敗を伝える）。
-  const startLoad = (self, url, method) => {
+  // "a=1&b=2" の形の文字列を、obj の変数（プロパティ）に入れる。loadVariables で読んだデータにも使う。
+  vm.decodeVariables = (obj, text) => {
+    for (const pair of text.split('&')) {
+      if (pair === '') continue;
+      const at = pair.indexOf('=');
+      obj.set(unescape(at < 0 ? pair : pair.slice(0, at)), at < 0 ? '' : unescape(pair.slice(at + 1)));
+    }
+  };
+  // loadVariables で読んだデータを、クリップの変数に入れて、onData を呼ぶ。
+  vm.loadedVariables = (clip, text) => {
+    vm.decodeVariables(clip, text);
+    callMethod(clip, 'onData', []);
+  };
+  // getURL / loadVariables にメソッド（GET / POST）を指定したときに送る、クリップの変数（"a=1&b=2" の形）。
+  // 関数と、子のクリップなどの表示オブジェクトは送らない。
+  vm.clipVariables = (clip) => clip.ownKeys().filter((key) => {
+    const v = clip.get(key);
+    return !(v instanceof AVMFunction) && !(v instanceof AVMObject && (v.isMovieClip || v.isTextField || v.isVideo));
+  }).map((key) => `${escape(key)}=${escape(clip.get(key))}`).join('&');
+  // "a=1&b=2" の形にする。新しいプロパティが先（for..in と同じ順）。
+  const encodeVariables = (obj) => obj.ownKeys().map((key) => `${escape(key)}=${escape(obj.get(key))}`).join('&');
+  // 読み込みを始める。読み込みはホストに任せる（ホストが読まなければ、次のフレームで失敗を伝える）。
+  // sender があれば、その中身を本文として送る（sendAndLoad）。結果は self の onData に渡る。
+  const startLoad = (self, url, method, sender = null) => {
     if (!(self instanceof AVMObject) || url === undefined) return false;
     self.define('loaded', false, HIDDEN);
     self.bytesLoaded = 0;
-    vm.request({ kind: 'loadVariables', url: toStr(vm, url), target: '', method });
-    vm.later(() => callMethod(self, 'onData', [undefined]));
+    const body = sender instanceof AVMObject ? encodeVariables(sender) : '';
+    const contentType = sender instanceof AVMObject ? toStr(vm, sender.get('contentType')) : undefined;
+    self.bytesTotal = undefined;
+    vm.loadText({ url: toStr(vm, url), method, body, contentType }, (text, size) => {
+      if (text !== undefined) self.bytesLoaded = self.bytesTotal = size;
+      callMethod(self, 'onData', [text]);
+    });
     return true;
   };
   defineMethods(vm, loadVarsProto, {
     load: (_, self, [url]) => startLoad(self, url, ''),
-    // 送信もしない。応答を受け取る側（target）には、読み込みの失敗を伝える。
-    send: (_, self, [url, , method]) => {
+    // send: 中身を付けて、その URL へ移動する（移動はホストに任せる）。
+    send: (_, self, [url, target, method]) => {
       if (url === undefined) return false;
-      vm.request({ kind: 'getURL', url: toStr(vm, url), target: '', method: method === undefined ? 'POST' : toStr(vm, method) });
+      const req = { kind: 'getURL', url: toStr(vm, url), target: '', method: method === undefined ? 'POST' : toStr(vm, method) };
+      vm.request(req);
+      vm.navigate({ ...req, target: target === undefined ? '' : toStr(vm, target), data: self instanceof AVMObject ? encodeVariables(self) : '' });
       return true;
     },
-    sendAndLoad: (_, self, [url, target, method]) => startLoad(target, url, method === undefined ? 'POST' : toStr(vm, method)),
+    sendAndLoad: (_, self, [url, target, method]) => startLoad(target, url, method === undefined ? 'POST' : toStr(vm, method), self),
     getBytesLoaded: (_, self) => self?.bytesLoaded,
-    getBytesTotal: () => undefined,
-    // "a=1&b=2" の形にする。新しいプロパティが先（for..in と同じ順）。
-    toString: (_, self) => (self instanceof AVMObject ? self.ownKeys().map((key) => `${escape(key)}=${escape(self.get(key))}`).join('&') : ''),
-    decode: (_, self, [text]) => {
-      if (!(self instanceof AVMObject)) return;
-      for (const pair of toStr(vm, text).split('&')) {
-        if (pair === '') continue;
-        const at = pair.indexOf('=');
-        self.set(unescape(at < 0 ? pair : pair.slice(0, at)), at < 0 ? '' : unescape(pair.slice(at + 1)));
-      }
-    },
+    getBytesTotal: (_, self) => self?.bytesTotal,
+    toString: (_, self) => (self instanceof AVMObject ? encodeVariables(self) : ''),
+    decode: (_, self, [text]) => { if (self instanceof AVMObject) vm.decodeVariables(self, toStr(vm, text)); },
     // 既定の onData: 中身があれば解釈して onLoad(true)、無ければ onLoad(false)。
     onData: (_, self, [text]) => {
       if (!(self instanceof AVMObject)) return;

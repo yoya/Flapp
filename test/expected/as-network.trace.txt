@@ -1,0 +1,8 @@
+load true loaded=false bytes=0/undefined
+xml load true loaded=false
+box before name=undefined
+lv onLoad true loaded=true name=Flapp n=42 string msg=[hello world!] bytes=34/34 later=true
+raw onData [name=Flapp&n=42&msg=hello+world%21] string loaded=false
+xml onLoad true loaded=true status=0 root=list items=2 first=a [two]
+警告 : 既知のプレーヤーのダウンロードタイプではありません file:///Users/yoya/git/yoya/Flapp/tools/assets/net-vars.txt
+box onData name=Flapp n=42 msg=hello world!

@@ -185,12 +185,14 @@ export function installXML(vm) {
     const fn = obj.get(name);
     if (fn instanceof AVMFunction) vm.invoke(fn, obj, args);
   };
-  // 読み込みは行わない。要求を記録し、次のフレームの後で失敗を伝える（net.js の LoadVars と同じ）。
-  const startLoad = (self, url, method) => {
+  // 読み込みはホストに任せる（ホストが読まなければ、次のフレームの後で失敗を伝える。net.js の LoadVars と同じ）。
+  // sender があれば、その XML を本文として送る（sendAndLoad）。
+  const startLoad = (self, url, method, sender = null) => {
     if (!data(self) || url === undefined) return false;
     self.define('loaded', false, HIDDEN);
-    vm.request({ kind: 'loadVariables', url: toStr(vm, url), target: '', method });
-    vm.later(() => callMethod(self, 'onData', [undefined]));
+    const body = sender && data(sender) ? toStr(vm, sender) : '';
+    const contentType = sender && data(sender) ? toStr(vm, sender.get('contentType')) : undefined;
+    vm.loadText({ url: toStr(vm, url), method, body, contentType }, (text) => callMethod(self, 'onData', [text]));
     return true;
   };
   defineMethods(vm, xmlProto, {
@@ -198,12 +200,14 @@ export function installXML(vm) {
     createElement: (_, __, [name]) => newNode(1, toStr(vm, name)),
     createTextNode: (_, __, [text]) => newNode(3, toStr(vm, text)),
     load: (_, self, [url]) => startLoad(self, url, ''),
-    send: (_, self, [url]) => {
+    send: (_, self, [url, target]) => {
       if (url === undefined) return false;
-      vm.request({ kind: 'getURL', url: toStr(vm, url), target: '', method: 'POST' });
+      const req = { kind: 'getURL', url: toStr(vm, url), target: '', method: 'POST' };
+      vm.request(req);
+      vm.navigate({ ...req, target: target === undefined ? '' : toStr(vm, target), data: data(self) ? toStr(vm, self) : '' });
       return true;
     },
-    sendAndLoad: (_, self, [url, target]) => startLoad(target, url, 'POST'),
+    sendAndLoad: (_, self, [url, target]) => startLoad(target, url, 'POST', self),
     getBytesLoaded: () => undefined,
     getBytesTotal: () => undefined,
     onData: (_, self, [text]) => {
