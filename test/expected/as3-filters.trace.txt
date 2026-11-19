@@ -1,0 +1,27 @@
+done
+drop 4 45 0 1 4 4 1 1 false false false
+glow 16711680 1 6 6 2 1 false false
+bevel 4 45 16777215 1 0 1 4 4 1 1 inner false
+blur 255 0 15
+gg 4 45    4 1 1 inner
+conv 0 0  1 0 true true 0 0
+cm 1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,0,1,0
+len 2 true true false false
+after 4 99
+null 0
+clone 255 true true
+set 40 0 255 0 16777215
+type full
+angles 40/40/40 -40/-40/-40 181/181/181 225/225/225 -190/-190/-190 0/0/0 0/0/0 -180/-180/-180 180/180/180 179.5/179.5/179.5 0.5/0.5/0.5 -0.5/-0.5/-0.5 280/280/280 NaN/NaN/NaN
+dist 40000/40000 -40000/-40000 100/100 -100/-100 0.5/0.5 NaN/NaN Infinity/Infinity
+blur 0.5/0/0.5 255/15/255 255/15/255 0/0/0 NaN/0/0 1.7/1/1.69921875
+types outer full skipped full inner
+arrays 16711680,65280 1,0.4980392156862745 0,255 2
+alpha 0.4980392156862745 0.2980392156862745 0.6980392156862745
+cm3 1,2,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 20
+cm22 20
+cv 1,2,3,0,0,0,0,0,0 9 3
+many 6
+nullitem 2005
+strfilter 2005
+mut 1 2

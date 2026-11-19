@@ -5,6 +5,7 @@
 import { gradientStyle, lineOptions } from '../player/drawing.js';
 import { installBitmap } from './bitmap.js';
 import { installBytes } from './bytes.js';
+import { installFilters } from './filters.js';
 import { installGeom } from './geom.js';
 import { installMedia } from './media.js';
 import { installNet } from './net.js';
@@ -349,6 +350,7 @@ export function installFlash(vm, movie, types) {
       alpha: (self) => (D(self).cxform?.am ?? 256) / 256,
       visible: (self) => D(self).visible,
       opaqueBackground: (self) => D(self).opaqueBackground ?? null,
+      filters: (self) => filters.read(D(self).filters),
       name: (self) => D(self).name,
       // ボタンの状態として使われているものには、親が無い。
       parent: (self) => (D(self).parent?.states ? null : D(self).parent ? display.wrap(D(self).parent) : onStage(D(self)) ? display.stage : null),
@@ -376,6 +378,7 @@ export function installFlash(vm, movie, types) {
       rotation: (self, v) => { const r = num(v) % 360; setXform(D(self), { rotation: r > 180 ? r - 360 : r < -180 ? r + 360 : r }); },
       alpha: (self, v) => D(self).setCxform({ ...(D(self).cxform ?? { rm: 256, gm: 256, bm: 256, am: 256, ra: 0, ga: 0, ba: 0, aa: 0 }), am: Math.trunc(num(v) * 256) }),
       visible: (self, v) => { D(self).visible = vm.toBoolean(v); },
+      filters: (self, v) => { D(self).filters = filters.write(v); D(self).scriptedFilters = true; },
       opaqueBackground: (self, v) => { D(self).opaqueBackground = v === null || v === undefined ? null : vm.toUint32(v) & 0xffffff; },
       name: (self, v) => { D(self).name = str(v); },
       // 中身が無い（大きさが 0 の）ものに幅や高さを設定すると、拡大率が 0 になる（実機で確認）。
@@ -392,6 +395,7 @@ export function installFlash(vm, movie, types) {
 
   installText(vm, movie);
   installBitmap(vm, movie);
+  const filters = installFilters(vm);
 
   // --- 子の出し入れ ---
   const container = (self) => D(self);

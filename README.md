@@ -37,7 +37,7 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
-- スクリプトから作るフィルタ（`flash.filters` のクラス）と、描画 API のグラデーションの塗り（`beginGradientFill` など）
+- スクリプトから作る `DisplacementMapFilter` と `ShaderFilter`、描画 API のビットマップの塗り（`beginBitmapFill`、`lineBitmapStyle`）と `drawPath` / `drawGraphicsData`
 - 共有ライブラリ（`ImportAssets`）
 
 # 使い方

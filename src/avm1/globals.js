@@ -1,6 +1,7 @@
 // AVM1 の組み込みオブジェクトと大域関数。
 import { installMovieClip } from './clip.js';
 import { installDate } from './date.js';
+import { installFilters } from './filters.js';
 import { installStage } from './stage.js';
 import { installTextField } from './textfield.js';
 import { installNet } from './net.js';
@@ -381,6 +382,7 @@ export function installGlobals(vm) {
   });
 
   installMovieClip(vm);
+  installFilters(vm);
   installStage(vm);
   installTextField(vm);
   installNet(vm);

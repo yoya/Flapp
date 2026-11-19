@@ -1187,7 +1187,7 @@ export class DisplayObject {
     if (desc.name) this.name = desc.name;
     this.name ??= '';
     this.clipDepth = desc.clipDepth;
-    this.filters = desc.filters; // null はフィルタなし
+    if (!this.scriptedFilters) this.filters = desc.filters; // null はフィルタなし。スクリプトで filters を代入したら、それを保つ
     this.blendMode = desc.blendMode;
     this.visible = desc.visible;
     this.opaqueBackground = desc.opaqueBackground; // 0xRRGGBB か null
