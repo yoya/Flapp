@@ -535,7 +535,12 @@ export class CanvasRenderer {
     // 線幅が変形で歪まないよう、パスをデバイス座標へ移してから等倍で描く。
     // 線幅の倍率は、対角方向の単位ベクトル (1, 1)/√2 が変形後に何倍の長さになるか（実機の画面から求めた規則。
     // 等倍・回転では 1、3 × 1 の拡大では √5、斜めの変形では面積比の平方根より小さくなる）。
-    const objectScale = style.noHScale && style.noVScale ? this.scale / 20 : Math.hypot(m.a + m.c, m.b + m.d) / Math.SQRT2;
+    // 拡大縮小しない指定（実機の画面で確認）: 両方なら太さはデバイスピクセルのまま（ステージの拡大にも従わない）。noVScale だけなら横方向の
+    // 拡大率、noHScale だけなら縦方向の拡大率で、向きによらず同じ太さになる。
+    let objectScale = Math.hypot(m.a + m.c, m.b + m.d) / Math.SQRT2;
+    if (style.noHScale && style.noVScale) objectScale = 1 / 20;
+    else if (style.noVScale) objectScale = Math.hypot(m.a, m.b);
+    else if (style.noHScale) objectScale = Math.hypot(m.c, m.d);
     // 実機に合わせる: 線幅は最小 1 デバイスピクセル。幅がデバイスピクセルの奇数のときは、
     // 縁が画素の境界に乗るよう半ピクセルずらす（2 倍解像度の実機の画面で確認した規則）。
     const width = Math.max(style.width * objectScale, 1);

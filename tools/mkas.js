@@ -9,6 +9,7 @@
 // ソースの書き方:
 //   先頭のコメントで SWF の構成を指定する（省略可）。
 //     // swf: 6                              SWF のバージョン（既定は 8）
+//     // size: 600x400                       ステージの大きさ（px。既定は 240x160）
 //     // sprite: 1 frames 2 name mc depth 1  スプライト 1 を 2 フレームで定義し、ルートの 1 フレーム目に名前 mc・深度 1 で置く
 //     //         ... in 2                    ルートではなくスプライト 2 の中に置く
 //     //         ... export sym              attachMovie 用の書き出し名を付ける（この場合は置かない）
@@ -57,6 +58,7 @@ const EVENTS = {
 function build(name) {
   const source = readFileSync(join(srcDir, `${name}.as`), 'utf8');
   let version = 8;
+  let size = {};
   const sprites = new Map(); // ID → { frames, name, depth, parent, exportName, squareSize }
   const labels = new Map(); // ルートのフレーム番号 → ラベル
   const spriteLabels = new Map(); // "スプライト ID:フレーム番号" → ラベル
@@ -65,6 +67,7 @@ function build(name) {
   for (const line of source.split('\n')) {
     let m;
     if ((m = line.match(/^\/\/ swf: (\d+)/))) version = Number(m[1]);
+    if ((m = line.match(/^\/\/ size: (\d+)x(\d+)/))) size = { width: Number(m[1]), height: Number(m[2]) };
     if ((m = line.match(/^\/\/ sound: (\d+) export (\S+) seconds (\S+)/))) sounds.push({ id: Number(m[1]), name: m[2], seconds: Number(m[3]) });
     if ((m = line.match(/^\/\/ video: (\d+) name (\S+) depth (\d+) size (\d+)x(\d+) at (\d+),(\d+)/))) {
       videos.push({ id: Number(m[1]), name: m[2], depth: Number(m[3]), size: [Number(m[4]), Number(m[5])], at: [Number(m[6]), Number(m[7])] });
@@ -164,7 +167,7 @@ function build(name) {
     }
   }
   const base = join(dir, 'base.swf');
-  writeFileSync(base, swf({ version, frames: rootFrames, tags }));
+  writeFileSync(base, swf({ version, ...size, frames: rootFrames, tags }));
   const prefix = /^\/\/ unverified:/m.test(source) ? 'asx' : 'as';
   const out = join(outDir, `${prefix}-${name}.swf`);
   // FFDec は構文エラーでも終了コード 0 のことがあるので、出力の SEVERE も見る。

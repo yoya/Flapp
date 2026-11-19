@@ -1,6 +1,7 @@
 // スクリプトから見たムービークリップ。表示リスト上のクリップ (player/movie.js の MovieClip) を包む。
 import { toBool, toInt32, toNumber, toStr } from './convert.js';
-import { AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, NONE } from './object.js';
+import { gradientStyle, lineOptions } from '../player/drawing.js';
+import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, NONE } from './object.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
 const DEPTH_OFFSET = 16384; // スクリプトの深度 0 は、表示リストの深度 16384
@@ -329,10 +330,20 @@ export function installMovieClip(vm) {
     globalToLocal: (self, [pt]) => { convertPoint(vm, pt, invert(self.clip.worldMatrix())); },
     // --- 描画 API（座標は px） ---
     clear: (self) => { self.clip.drawing().clear(); },
-    lineStyle: (self, [width, rgb, alpha]) => {
-      self.clip.drawing().lineStyle(width === undefined ? undefined : num(width) * 20, color(vm, rgb, alpha));
+    // 第 4 引数以降（pixelHinting、noScale、capsStyle、jointStyle、miterLimit）は SWF 8 から。名前は大文字と小文字を区別する。
+    lineStyle: (self, [width, rgb, alpha, pixelHinting, noScale, capsStyle, jointStyle, miterLimit]) => {
+      const word = (v) => (v === undefined ? undefined : toStr(vm, v));
+      self.clip.drawing().lineStyle(width === undefined ? undefined : num(width) * 20, color(vm, rgb, alpha), lineOptions({
+        pixelHinting: pixelHinting === undefined ? false : toBool(vm, pixelHinting), scaleMode: word(noScale), caps: word(capsStyle), joints: word(jointStyle), miterLimit: miterLimit === undefined ? 3 : toNumber(vm, miterLimit),
+      }));
+    },
+    lineGradientStyle: (self, [type, colors, alphas, ratios, matrix, spread, interpolation, focal]) => {
+      self.clip.drawing().lineGradient(gradientFill(vm, { type, colors, alphas, ratios, matrix, spread, interpolation, focal }));
     },
     beginFill: (self, [rgb, alpha]) => { self.clip.drawing().beginFill(rgb === undefined ? undefined : color(vm, rgb, alpha)); },
+    beginGradientFill: (self, [type, colors, alphas, ratios, matrix, spread, interpolation, focal]) => {
+      self.clip.drawing().beginStyle(gradientFill(vm, { type, colors, alphas, ratios, matrix, spread, interpolation, focal }));
+    },
     endFill: (self) => { self.clip.drawing().endFill(); },
     moveTo: (self, [x, y]) => { self.clip.drawing().moveTo(num(x) * 20, num(y) * 20); },
     lineTo: (self, [x, y]) => { self.clip.drawing().lineTo(num(x) * 20, num(y) * 20); },
@@ -393,6 +404,32 @@ function color(vm, rgb, alpha) {
   const n = toInt32(vm, rgb);
   const a = alpha === undefined ? 100 : toNumber(vm, alpha);
   return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: Math.max(0, Math.min(255, Math.round((a * 255) / 100))) };
+}
+
+// beginGradientFill の引数（スクリプトの値）から、塗りのスタイルを作る。数が合わないなどで作れなければ null（塗りなし）。
+// 行列は、{ matrixType: "box", x, y, w, h, r }（createGradientBox と同じ）か、{ a, b, c, d, e, f, g, h, i }（a〜e は 1638.4 px 四方の
+// 基準の箱を何 px に移すか、g と h は中心の位置。実機で確認）。行列が無い（オブジェクトでない）ときは塗りなし（実機で確認）。
+function gradientFill(vm, { type, colors, alphas, ratios, matrix, spread, interpolation, focal }) {
+  if (![colors, alphas, ratios].every((v) => v instanceof AVMArray) || colors.items.length !== alphas.items.length || colors.items.length !== ratios.items.length) return null;
+  const word = (v) => (v === undefined ? '' : toStr(vm, v)); // 種類・spread・補間の名前は、大文字と小文字を区別する（実機で確認）
+  const n = (o, name) => toNumber(vm, o.get(name));
+  if (!(matrix instanceof AVMObject)) return null;
+  let m;
+  if (word(matrix.get('matrixType')) === 'box') {
+    const [w, h, r] = [n(matrix, 'w') / 1638.4, n(matrix, 'h') / 1638.4, n(matrix, 'r')];
+    m = { a: w * Math.cos(r), b: w * Math.sin(r), c: -h * Math.sin(r), d: h * Math.cos(r), tx: (n(matrix, 'x') + n(matrix, 'w') / 2) * 20, ty: (n(matrix, 'y') + n(matrix, 'h') / 2) * 20 };
+  } else {
+    m = { a: n(matrix, 'a') / 1638.4, b: n(matrix, 'b') / 1638.4, c: n(matrix, 'd') / 1638.4, d: n(matrix, 'e') / 1638.4, tx: n(matrix, 'g') * 20, ty: n(matrix, 'h') * 20 };
+  }
+  return gradientStyle({
+    type: word(type),
+    colors: colors.items.map((rgb, i) => color(vm, rgb, alphas.items[i])),
+    ratios: ratios.items.map((v) => toNumber(vm, v)),
+    matrix: m,
+    spread: ['pad', 'reflect', 'repeat'].find((x) => x === word(spread)),
+    linearRGB: word(interpolation) === 'linearRGB',
+    focal: focal === undefined ? 0 : toNumber(vm, focal),
+  });
 }
 
 function invert(m) {

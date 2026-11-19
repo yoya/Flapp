@@ -4,12 +4,42 @@
 const MAX_SEGMENTS = 200000; // 1 つの描き先に溜められる線分・曲線の数
 
 const ROUND = { startCap: 'round', endCap: 'round', join: 'round', noClose: false };
+/**
+ * lineStyle の、端（caps）・角（joints）・拡大縮小（scaleMode）・miterLimit の名前から、線スタイルの指定を作る。
+ * 知らない名前や省略は、丸い端・丸い角・拡大縮小あり・miterLimit 3 になる。
+ */
+export function lineOptions({ pixelHinting, scaleMode, caps, joints, miterLimit }) {
+  const cap = { none: 'butt', square: 'square' }[caps] ?? 'round';
+  const out = { startCap: cap, endCap: cap, join: ['bevel', 'miter'].includes(joints) ? joints : 'round', pixelHinting: pixelHinting === true };
+  if (out.join === 'miter') out.miterLimit = Math.min(Math.max(Number.isFinite(miterLimit) ? miterLimit : 3, 1), 255);
+  out.noHScale = scaleMode === 'none' || scaleMode === 'horizontal'; // 水平方向に拡大縮小しても、線の太さを変えない
+  out.noVScale = scaleMode === 'none' || scaleMode === 'vertical';
+  return out;
+}
+const MAX_STOPS = 15; // グラデーションの色の数の上限
+
+/**
+ * beginGradientFill の引数から、塗りのスタイル（図形と同じ形式）を作る。
+ *   type: 'linear' | 'radial'   colors: { r, g, b, a } の配列   ratios: 数の配列（0〜255）
+ *   matrix: { a, b, c, d, tx, ty }（tx, ty は twips。a〜d は、1638.4 px 四方の基準の箱を移す倍率）
+ *   spread: 'pad' | 'reflect' | 'repeat'   linearRGB: 真なら linearRGB で補間   focal: 焦点（-1〜1。放射のみ）
+ * 色と ratios の数が合わない、種類が不明、ratios が 0〜255 の外にあるときは null（塗りなしになる）。
+ * 色が 1 つも無ければ黒の単色、ratios が小さくなる向きに並んでいるときは最初の色の単色になる（どれも実機で確認）。
+ */
+export function gradientStyle({ type, colors, ratios, matrix, spread = 'pad', linearRGB = false, focal = 0 }) {
+  if ((type !== 'linear' && type !== 'radial') || colors.length !== ratios.length || ratios.some((r) => !(r >= 0 && r <= 255))) return null;
+  if (!colors.length) return { type: 'solid', color: { r: 0, g: 0, b: 0, a: 255 } };
+  const stops = colors.slice(0, MAX_STOPS).map((color, i) => ({ ratio: Math.round(ratios[i]), color }));
+  if (stops.some((stop, i) => i && stop.ratio < stops[i - 1].ratio)) return { type: 'solid', color: stops[0].color };
+  return { type, matrix, spread, linearRGB, stops, focal: type === 'radial' && Number.isFinite(focal) ? Math.min(Math.max(focal, -1), 1) : 0 };
+}
 
 export class Drawing {
   #ops = []; // 確定した描画命令
   #fill = null; // 作りかけの塗り
   #stroke = null; // 作りかけの線
   #line = null; // 現在の線スタイル（null は線なし）
+  #start = null; // 作りかけの塗りの、今の部分パスの始点 { x, y }
   #x = 0;
   #y = 0;
   #snapshot = null;
@@ -20,28 +50,62 @@ export class Drawing {
   clear() {
     this.#segments = 0;
     this.#ops = [];
-    this.#fill = this.#stroke = this.#line = null;
+    this.#fill = this.#stroke = this.#line = this.#start = null;
     this.#x = this.#y = 0;
     this.bounds = this.edgeBounds = null;
     this.#snapshot = null;
   }
 
-  /** width は twips。undefined なら線なし。 */
-  lineStyle(width, color) {
+  /**
+   * width は twips。undefined なら線なし。extra は、線の端・角などの指定（図形の線スタイルと同じ名前）:
+   * startCap / endCap（'round' | 'butt' | 'square'）、join（'round' | 'bevel' | 'miter'）、miterLimit、noHScale、noVScale、pixelHinting。
+   */
+  lineStyle(width, color, extra = {}) {
     this.#stroke = null;
-    this.#line = width === undefined || Number.isNaN(width) ? null : { ...ROUND, width: Math.max(0, width), color };
+    this.#line = width === undefined || Number.isNaN(width) ? null : { ...ROUND, ...extra, width: Math.max(0, width), color };
+  }
+
+  /** 今の線を、グラデーションで描く（lineGradientStyle。style は gradientStyle の戻り値）。線を引いていなければ何もしない。 */
+  lineGradient(style) {
+    if (!this.#line) return;
+    this.#stroke = null;
+    this.#line = { ...this.#line, fill: style };
   }
 
   /** color が undefined なら塗りなし。 */
   beginFill(color) {
+    this.beginStyle(color && { type: 'solid', color });
+  }
+
+  /** 塗りのスタイル（図形と同じ形式。gradientStyle の戻り値など）で塗り始める。null なら塗りなし。 */
+  beginStyle(style) {
     this.endFill();
-    if (color) {
-      this.#fill = { kind: 'fill', style: { type: 'solid', color }, evenOdd: true, path: [['M', this.#x, this.#y]] };
+    if (style) {
+      this.#fill = { kind: 'fill', style, evenOdd: true, path: [['M', this.#x, this.#y]] };
+      this.#start = { x: this.#x, y: this.#y };
       this.#ops.push(this.#fill);
     }
   }
 
+  /**
+   * 塗りの部分パスを閉じる辺に、線を引く（endFill、次の beginFill、moveTo のとき）。引く線は、閉じる時点の線スタイル。
+   * 線を引いていなければ引かない（実機で確認）。描き終わりで閉じていない塗りも同じで、paths() の中で扱う。
+   */
+  #closeStroke() {
+    const s = this.#start;
+    if (!this.#fill || !s || !this.#line || (this.#x === s.x && this.#y === s.y)) return;
+    if (!this.#stroke) {
+      this.#stroke = { kind: 'stroke', style: this.#line, path: [['M', this.#x, this.#y]] };
+      this.#ops.push(this.#stroke);
+    }
+    this.#stroke.path.push(['L', s.x, s.y]);
+    this.#extend(this.#x, this.#y);
+    this.#extend(s.x, s.y);
+    this.#stroke = null; // 次の線は、今の位置から新しく始める
+  }
+
   endFill() {
+    this.#closeStroke();
     if (this.#fill) this.#fill.path.push(['Z']);
     this.#fill = null;
     this.#stroke = null;
@@ -49,6 +113,8 @@ export class Drawing {
   }
 
   moveTo(x, y) {
+    this.#closeStroke();
+    if (this.#fill) this.#start = { x, y };
     this.#x = x;
     this.#y = y;
     this.#fill?.path.push(['M', x, y]);
@@ -106,7 +172,17 @@ export class Drawing {
 
   /** 描画命令の配列。内容が変わるまで同じ配列を返す（描画側のキャッシュのため）。 */
   paths() {
-    this.#snapshot ??= this.#ops.map((op) => ({ ...op, path: op.path.slice() }));
+    if (!this.#snapshot) {
+      const ops = this.#ops.map((op) => ({ ...op, path: op.path.slice() }));
+      // 描き終わりで閉じていない塗りの、閉じる辺（状態は変えない）
+      const s = this.#start;
+      if (this.#fill && this.#line && s && (this.#x !== s.x || this.#y !== s.y)) {
+        const open = this.#stroke ? ops[this.#ops.indexOf(this.#stroke)] : null;
+        if (open) open.path.push(['L', s.x, s.y]);
+        else ops.push({ kind: 'stroke', style: this.#line, path: [['M', this.#x, this.#y], ['L', s.x, s.y]] });
+      }
+      this.#snapshot = ops;
+    }
     return this.#snapshot;
   }
 }

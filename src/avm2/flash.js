@@ -2,6 +2,7 @@
 //
 // AS3 のオブジェクト obj と、プレイヤーの表示オブジェクト d は 1 対 1 で結び付く（obj.display === d、d.as3 === obj）。
 // 位置やフレームなどの状態はプレイヤー側が持ち、ここのクラスはそれを読み書きするだけ。
+import { gradientStyle, lineOptions } from '../player/drawing.js';
 import { installBitmap } from './bitmap.js';
 import { installBytes } from './bytes.js';
 import { installGeom } from './geom.js';
@@ -498,7 +499,7 @@ export function installFlash(vm, movie, types) {
     return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: Math.round(Math.min(Math.max(a, 0), 1) * 255) };
   };
   // new Graphics() で直接作ったもの（描き先が無い）への描画は、何もしない。
-  const nowhere = { clear() {}, lineStyle() {}, beginFill() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {} };
+  const nowhere = { clear() {}, lineStyle() {}, lineGradient() {}, beginFill() {}, beginStyle() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {} };
   const G = (self) => self.display?.drawing?.() ?? nowhere;
   // 楕円は、実機と同じく 8 本の 2 次ベジェ曲線で描く。
   const ellipse = (g, cx, cy, rx, ry) => {
@@ -511,15 +512,77 @@ export function installFlash(vm, movie, types) {
       g.curveTo((cx + rx * r * Math.cos(mid)) * 20, (cy + ry * r * Math.sin(mid)) * 20, (cx + rx * Math.cos(end)) * 20, (cy + ry * Math.sin(end)) * 20);
     }
   };
+  vm.defineClass({ name: 'flash.display::CapsStyle', final: true, staticValues: { ROUND: 'round', NONE: 'none', SQUARE: 'square' } });
+  vm.defineClass({ name: 'flash.display::JointStyle', final: true, staticValues: { ROUND: 'round', BEVEL: 'bevel', MITER: 'miter' } });
+  vm.defineClass({ name: 'flash.display::LineScaleMode', final: true, staticValues: { NORMAL: 'normal', NONE: 'none', VERTICAL: 'vertical', HORIZONTAL: 'horizontal' } });
+  vm.defineClass({ name: 'flash.display::GradientType', final: true, staticValues: { LINEAR: 'linear', RADIAL: 'radial' } });
+  vm.defineClass({ name: 'flash.display::SpreadMethod', final: true, staticValues: { PAD: 'pad', REFLECT: 'reflect', REPEAT: 'repeat' } });
+  vm.defineClass({ name: 'flash.display::InterpolationMethod', final: true, staticValues: { RGB: 'rgb', LINEAR_RGB: 'linearRGB' } });
+  // 角の丸い四角形。角は、楕円の 4 分の 1 を 2 本の 2 次曲線で描く。corners は、左上・右上・右下・左下の [x 方向の半径, y 方向の半径]。
+  // 幅や高さが負なら、反対側へ向けて描く。半径が 0 の角は直角（実機で確認。始点と曲線の分け方は、画面が一致する程度に合わせた）。
+  const roundRect = (g, x, y, w, h, corners) => {
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+    const [tl, tr, br, bl] = corners.map(([rx, ry]) => (rx > 0 && ry > 0 ? [Math.min(rx, w / 2), Math.min(ry, h / 2)] : [0, 0]));
+    const k = 1 / Math.cos(Math.PI / 8);
+    const corner = (cx, cy, [rx, ry], a0, px, py) => {
+      if (!rx) { g.lineTo(px * 20, py * 20); return; }
+      for (let i = 0; i < 2; i++) {
+        const mid = a0 + ((i + 0.5) * Math.PI) / 4, end = a0 + ((i + 1) * Math.PI) / 4;
+        g.curveTo((cx + rx * k * Math.cos(mid)) * 20, (cy + ry * k * Math.sin(mid)) * 20, (cx + rx * Math.cos(end)) * 20, (cy + ry * Math.sin(end)) * 20);
+      }
+    };
+    g.moveTo((x + tl[0]) * 20, y * 20);
+    g.lineTo((x + w - tr[0]) * 20, y * 20);
+    corner(x + w - tr[0], y + tr[1], tr, -Math.PI / 2, x + w, y);
+    g.lineTo((x + w) * 20, (y + h - br[1]) * 20);
+    corner(x + w - br[0], y + h - br[1], br, 0, x + w, y + h);
+    g.lineTo((x + bl[0]) * 20, (y + h) * 20);
+    corner(x + bl[0], y + h - bl[1], bl, Math.PI / 2, x, y + h);
+    g.lineTo(x * 20, (y + tl[1]) * 20);
+    corner(x + tl[0], y + tl[1], tl, Math.PI, x, y);
+  };
+  // 種類が null、色が null なら TypeError #2007、種類が "linear" と "radial" 以外なら ArgumentError #2008（名前は大文字と小文字を区別する）。
+  // alphas が null なら全部 1、ratios が null なら等間隔。色と alphas・ratios の数が合わない、ratios が 0〜255 の外なら塗りなし。
+  // spreadMethod と interpolationMethod は、知らない名前なら "pad" と "rgb" 扱い。行列が無ければ、原点を中心にした 200 px 四方の箱（実機で確認）。
+  const gradientOf = (type, colors, alphas, ratios, matrix, spread, interpolation, focal) => {
+    const nonNull = (v, name) => { if (v === undefined || v === null) vm.throwError('TypeError', 2007, `Parameter ${name} must be non-null.`); };
+    nonNull(type, 'type');
+    nonNull(colors, 'colors');
+    if (str(type) !== 'linear' && str(type) !== 'radial') vm.throwError('ArgumentError', 2008, 'Parameter type must be one of the accepted values.');
+    const list = (v) => (v instanceof ASArray ? v.items : null);
+    const cs = list(colors) ?? [];
+    const as = alphas === undefined || alphas === null ? cs.map(() => 1) : list(alphas);
+    const rs = ratios === undefined || ratios === null ? cs.map((_, i) => (cs.length > 1 ? Math.round((i * 255) / (cs.length - 1)) : 0)) : list(ratios)?.map(num);
+    let style = null;
+    if (as && rs && cs.length === as.length) {
+      const field = (name, otherwise) => (matrix instanceof ASObject ? num(matrix.values.get(publicKey(name))) : otherwise);
+      style = gradientStyle({
+        type: str(type),
+        colors: cs.map((color, i) => rgba(color, as[i])),
+        ratios: rs,
+        matrix: { a: field('a', 200 / 1638.4), b: field('b', 0), c: field('c', 0), d: field('d', 200 / 1638.4), tx: field('tx', 0) * 20, ty: field('ty', 0) * 20 },
+        spread: spread === undefined || spread === null ? undefined : ['pad', 'reflect', 'repeat'].find((x) => x === str(spread)),
+        linearRGB: interpolation !== undefined && interpolation !== null && str(interpolation) === 'linearRGB',
+        focal: focal === undefined ? 0 : num(focal),
+      });
+    }
+    return style;
+  };
   c.Graphics = vm.defineClass({
     name: 'flash.display::Graphics', final: true,
     methods: {
       clear: (self) => { G(self).clear(); },
-      lineStyle: (self, [thickness, color = 0, alpha]) => {
+      lineStyle: (self, [thickness, color = 0, alpha, pixelHinting, scaleMode, caps, joints, miterLimit]) => {
         const w = thickness === undefined ? NaN : num(thickness);
-        G(self).lineStyle(Number.isNaN(w) ? undefined : Math.min(Math.max(w, 0), 255) * 20, rgba(color, alpha));
+        const word = (v) => (v === undefined || v === null ? undefined : str(v));
+        G(self).lineStyle(Number.isNaN(w) ? undefined : Math.min(Math.max(w, 0), 255) * 20, rgba(color, alpha), lineOptions({
+          pixelHinting: pixelHinting === undefined ? false : vm.toBoolean(pixelHinting), scaleMode: word(scaleMode), caps: word(caps), joints: word(joints), miterLimit: miterLimit === undefined ? 3 : num(miterLimit),
+        }));
       },
       beginFill: (self, [color, alpha]) => { G(self).beginFill(rgba(color, alpha)); },
+      beginGradientFill: (self, args) => { G(self).beginStyle(gradientOf(...args)); },
+      lineGradientStyle: (self, args) => { G(self).lineGradient(gradientOf(...args)); },
       endFill: (self) => { G(self).endFill(); },
       moveTo: (self, [x, y]) => { G(self).moveTo(num(x) * 20, num(y) * 20); },
       lineTo: (self, [x, y]) => { G(self).lineTo(num(x) * 20, num(y) * 20); },
@@ -532,6 +595,17 @@ export function installFlash(vm, movie, types) {
         g.lineTo(r, b);
         g.lineTo(l, b);
         g.lineTo(l, t);
+      },
+      // 楕円の幅と高さ（半径の 2 倍）で丸める。高さを省く（NaN）と、幅と同じ。
+      drawRoundRect: (self, [x, y, w, h, ellipseWidth, ellipseHeight]) => {
+        const ew = num(ellipseWidth) / 2;
+        const eh = ellipseHeight === undefined || Number.isNaN(num(ellipseHeight)) ? ew : num(ellipseHeight) / 2;
+        const c4 = [ew, eh];
+        roundRect(G(self), num(x), num(y), num(w), num(h), [c4, c4, c4, c4]);
+      },
+      drawRoundRectComplex: (self, [x, y, w, h, topLeftRadius, topRightRadius, bottomLeftRadius, bottomRightRadius]) => {
+        const r = (v) => [num(v), num(v)];
+        roundRect(G(self), num(x), num(y), num(w), num(h), [r(topLeftRadius), r(topRightRadius), r(bottomRightRadius), r(bottomLeftRadius)]);
       },
       drawCircle: (self, [x, y, r]) => { ellipse(G(self), num(x), num(y), num(r), num(r)); },
       drawEllipse: (self, [x, y, w, h]) => { ellipse(G(self), num(x) + num(w) / 2, num(y) + num(h) / 2, num(w) / 2, num(h) / 2); },

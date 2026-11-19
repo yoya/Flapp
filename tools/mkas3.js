@@ -13,6 +13,7 @@
 //    それぞれ公開のクラスになる。継承元や型として使うクラスは、使う側より前に書く）。
 //   「//// members」で始まる行より後ろ（「//// class」まで）は、Main のメンバー（メソッドやフィールド）の宣言。
 //   「// frames: N」という行があれば、メインタイムラインを N フレームにする（省略すると 1）。
+//   「// size: 560x460」は、ステージの大きさ（px。省略すると 240x160）。
 //   「// document: 名前」は、文書クラスの名前（省略すると Main）。ほかのムービーに読み込まれるムービーで、名前を分けるのに使う。
 //   「// sprite: クラス名 frames=N」は、そのクラスに結び付いたスプライト（40×40 px の四角形を持つ、N フレームのクリップ）を作る。
 //   「// place: クラス名 in=置き先のクラス名 frame=F name=名前 x=X y=Y until=G」は、そのスプライトを置き先（省略すると
@@ -119,6 +120,7 @@ function build(name) {
     outer[outer.length - 1].lines.push(line);
   }
   const frames = Number(/^\/\/ frames: (\d+)/m.exec(source)?.[1] ?? 1); // メインタイムラインのフレーム数
+  const stageSize = /^\/\/ size: (\d+)x(\d+)/m.exec(source);
   const doc = /^\/\/ document: (\w+)/m.exec(source)?.[1] ?? 'Main'; // 文書クラスの名前（読み込まれる側のムービーで、読み込む側の Main と分けるため）
   // スプライトと、その配置。キャラクタ ID は 1 が四角形、2 以降がスプライト。深度は 1 が四角形、2 以降が置いた順。
   const sprites = [...source.matchAll(/^\/\/ sprite: (\w+)(?: frames=(\d+))?/gm)].map((m, i) => ({ cls: m[1], frames: Number(m[2] ?? 1), id: i + 2 }));
@@ -197,6 +199,7 @@ ${members}
   const base = join(dir, 'base.swf');
   writeFileSync(base, swf({
     version: 15,
+    ...(stageSize ? { width: Number(stageSize[1]), height: Number(stageSize[2]) } : {}),
     frames,
     tags: [
       tag(69, [/^\/\/ network\b/m.test(source) ? 0x09 : 0x08, 0, 0, 0]), // FileAttributes: ActionScript3（と UseNetwork）
