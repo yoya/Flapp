@@ -7,8 +7,7 @@
 // 縮めて四隅が入りきらないときは、四隅を入りきる比率で縮める（中央は幅 0）。対象はクリップ直下の図形と描画 API の内容で、
 // 入れ子のクリップは普通に拡大する。倍率はステージから見たクリップの倍率で、回転や傾きがあるときは 9 分割せず普通に拡大する。
 //
-// 未対応: グラデーションの reflect / repeat と linearRGB、線のグラデーション・ビットマップ塗り、
-//         始端と終端で異なるキャップ、繰り返さないビットマップ塗りで画像から 1 画素より外側
+// 未対応: グラデーションの reflect / repeat と linearRGB、繰り返さないビットマップ塗りで画像から 1 画素より外側
 //         （実機は縁の色で埋めるが、ここでは透明）、透明なレイヤー上での subtract。
 import { MovieClip } from '../player/movie.js';
 import { applyFilters } from './filters.js';
@@ -363,7 +362,8 @@ export class CanvasRenderer {
       if (op.kind === 'text') return op;
       const path = op.path.map((cmd) =>
         cmd[0] === 'M' || cmd[0] === 'L' ? [cmd[0], ...point(cmd[1], cmd[2])] : cmd[0] === 'Q' ? ['Q', ...point(cmd[1], cmd[2]), ...point(cmd[3], cmd[4])] : cmd);
-      const style = op.style.matrix ? { ...op.style, matrix: concat({ a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0 }, concat(matrix, op.style.matrix)) } : op.style;
+      const stretch = (style) => (style.matrix ? { ...style, matrix: concat({ a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0 }, concat(matrix, style.matrix)) } : style);
+      const style = op.kind === 'stroke' && op.style.fill ? { ...op.style, fill: stretch(op.style.fill) } : stretch(op.style);
       return { ...op, path, style };
     });
     this.sliced.set(paths, { key, paths: result });
@@ -389,11 +389,25 @@ export class CanvasRenderer {
       return;
     }
     const space = op.spaceMatrix;
+    if (!space && style.type !== 'bitmap') {
+      // 行列がつぶれたグラデーションは最後の色で塗りつぶす。
+      ctx.fillStyle = css(style.stops.at(-1)?.color ?? { r: 0, g: 0, b: 0, a: 0 }, cx);
+      ctx.fill(op.path2d, rule);
+      return;
+    }
+    if (!space) return;
+    ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
+    if (this.#paint(ctx, style, cx)) ctx.fill(op.spacePath, rule);
+    ctx.globalAlpha = 1;
+  }
+
+  // グラデーションかビットマップの塗りを、ctx の fillStyle にする（ctx の変換は、塗りの定義空間に合わせておく）。
+  // 描けない（未定義・未復号のビットマップ）なら偽。
+  #paint(ctx, style, cx) {
     if (style.type === 'bitmap') {
       const def = style.bitmap ?? this.movie.dictionary.get(style.bitmapId); // スクリプトが作ったビットマップは、直接持っている
-      const source = space && def?.type === 'bitmap' && this.#bitmapSource(def, cx);
-      if (!source) return; // 未定義・未復号のビットマップは描かない
-      ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
+      const source = def?.type === 'bitmap' && this.#bitmapSource(def, cx);
+      if (!source) return false;
       ctx.imageSmoothingEnabled = style.smooth;
       ctx.globalAlpha = source.alpha;
       const blended = style.blendRight && !style.smooth && this.#blendRight(ctx, source.image);
@@ -411,17 +425,8 @@ export class CanvasRenderer {
         pattern.setTransform(new DOMMatrix([1, 0, 0, 1, -1, -1]));
         ctx.fillStyle = pattern;
       }
-      ctx.fill(op.spacePath, rule);
-      ctx.globalAlpha = 1;
-      return;
+      return true;
     }
-    if (!space) {
-      // 行列がつぶれたグラデーションは最後の色で塗りつぶす。
-      ctx.fillStyle = css(style.stops.at(-1)?.color ?? { r: 0, g: 0, b: 0, a: 0 }, cx);
-      ctx.fill(op.path2d, rule);
-      return;
-    }
-    ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
     const gradient = style.type === 'linear'
       ? ctx.createLinearGradient(-GRADIENT_HALF, 0, GRADIENT_HALF, 0)
       : ctx.createRadialGradient(style.focal * GRADIENT_HALF, 0, 0, 0, 0, GRADIENT_HALF);
@@ -431,7 +436,7 @@ export class CanvasRenderer {
       gradient.addColorStop(last, css(stop.color, cx));
     }
     ctx.fillStyle = gradient;
-    ctx.fill(op.spacePath, rule);
+    return true;
   }
 
   #stroke(ctx, op, m, cx) {
@@ -445,16 +450,79 @@ export class CanvasRenderer {
     const width = Math.max(style.width * objectScale, 1);
     const rounded = Math.round(width);
     const snap = Math.abs(width - rounded) < 0.01 && rounded % 2 === 1 ? 0.5 : 0;
+    const d = { ...m, tx: m.tx + snap, ty: m.ty + snap };
     const path = new Path2D();
-    path.addPath(op.path2d, domMatrix({ ...m, tx: m.tx + snap, ty: m.ty + snap }));
-    resetTransform(ctx);
-    ctx.lineWidth = width;
-    ctx.lineCap = style.startCap;
-    ctx.lineJoin = style.join;
-    ctx.miterLimit = style.miterLimit ?? 3;
-    const color = style.color ?? (style.fill.type === 'solid' ? style.fill.color : style.fill.stops?.[0]?.color);
-    ctx.strokeStyle = css(color ?? { r: 0, g: 0, b: 0, a: 255 }, cx);
-    ctx.stroke(path);
+    path.addPath(op.path2d, domMatrix(d));
+    // グラデーションとビットマップの線は、線の形を別のレイヤーに描いてから、その形の中を塗る。
+    const fill = style.fill && style.fill.type !== 'solid' ? style.fill : null;
+    const space = fill && domMatrix(fill.matrix);
+    const singular = space && space.a * space.d - space.b * space.c === 0;
+    if (singular && fill.type === 'bitmap') return;
+    const layer = space && !singular ? this.#acquireLayer() : null;
+    const target = layer ? layer.ctx : ctx;
+    resetTransform(target);
+    target.lineWidth = width;
+    target.lineJoin = style.join;
+    target.miterLimit = style.miterLimit ?? 3;
+    const color = style.color ?? (fill ? fill.stops?.at(-1)?.color : style.fill.color); // 行列がつぶれたグラデーションは最後の色
+    target.strokeStyle = target.fillStyle = layer ? '#000' : css(color ?? { r: 0, g: 0, b: 0, a: 255 }, cx);
+    if (style.startCap === style.endCap) {
+      target.lineCap = style.startCap;
+      target.stroke(path);
+    } else {
+      // 始端と終端でキャップが違う線: キャップなしで描いてから、閉じていない部分パスの両端にキャップを足す（実機で確認）。
+      target.lineCap = 'butt';
+      target.stroke(path);
+      const subpaths = [];
+      for (const cmd of op.path) {
+        if (cmd[0] === 'Z') subpaths.at(-1).closed = true;
+        else {
+          if (cmd[0] === 'M') subpaths.push({ points: [], closed: false });
+          for (let i = 1; i < cmd.length; i += 2) subpaths.at(-1).points.push([d.a * cmd[i] + d.c * cmd[i + 1] + d.tx, d.b * cmd[i] + d.d * cmd[i + 1] + d.ty]);
+        }
+      }
+      for (const { points, closed } of subpaths) {
+        if (closed) continue;
+        for (const [cap, end, step] of [[style.startCap, 0, 1], [style.endCap, points.length - 1, -1]]) {
+          if (cap === 'butt') continue;
+          const [x, y] = points[end];
+          let i = end + step;
+          while (points[i] && points[i][0] === x && points[i][1] === y) i += step;
+          if (cap === 'round' || !points[i]) {
+            target.beginPath();
+            target.arc(x, y, width / 2, 0, Math.PI * 2);
+            if (cap === 'round') target.fill();
+            continue;
+          }
+          // 四角: 端から外向きに、線幅の半分だけ延ばす。
+          const len = Math.hypot(x - points[i][0], y - points[i][1]);
+          const ux = ((x - points[i][0]) / len) * (width / 2);
+          const uy = ((y - points[i][1]) / len) * (width / 2);
+          target.beginPath();
+          target.moveTo(x - uy, y + ux);
+          target.lineTo(x - uy + ux, y + ux + uy);
+          target.lineTo(x + uy + ux, y - ux + uy);
+          target.lineTo(x + uy, y - ux);
+          target.fill();
+        }
+      }
+    }
+    if (!layer) return;
+    // 線の形の中を、塗りの定義空間で塗る（キャンバス全体を覆う矩形を、その空間で描く）。
+    target.globalCompositeOperation = 'source-in';
+    target.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
+    target.transform(space.a, space.b, space.c, space.d, space.e, space.f);
+    if (this.#paint(target, fill, cx)) {
+      const inverse = target.getTransform().inverse();
+      const { width: w, height: h } = layer.canvas;
+      const corners = [[0, 0], [w, 0], [0, h], [w, h]].map(([px, py]) => inverse.transformPoint(new DOMPoint(px, py)));
+      const xs = corners.map((p) => p.x);
+      const ys = corners.map((p) => p.y);
+      target.fillRect(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      target.globalAlpha = 1;
+      this.#composite(ctx, layer, 'source-over');
+    }
+    this.#releaseLayer(layer);
   }
 
   // 埋め込みの字形が無いテキストを、端末のフォントで描く（実機と同じ見た目にはならない）。

@@ -154,12 +154,13 @@ const gradient = ({ type, matrix: m, stops, focal }) => [
   ...(type === 0x13 ? u16(Math.round(focal * 256)) : []),
 ];
 export const lineStyle = (width, ...color) => [...u16(width), ...color];
-// LINESTYLE2 (DefineShape4)。join: 0 丸 / 1 ベベル / 2 マイター。
-const lineStyle2 = ({ width, join = 0, miterLimit = 3, color }) => [
+// LINESTYLE2 (DefineShape4)。join: 0 丸 / 1 ベベル / 2 マイター。startCap / endCap: 0 丸 / 1 なし / 2 四角。
+// fill（塗りスタイルのバイト列）を渡すと、色の代わりに塗りで線を描く。
+const lineStyle2 = ({ width, join = 0, miterLimit = 3, color, fill, startCap = 0, endCap = 0 }) => [
   ...u16(width),
-  ...new Bits().ub(2, 0).ub(2, join).ub(4, 0).ub(8, 0).bytes(),
+  ...new Bits().ub(2, startCap).ub(2, join).ub(1, fill !== undefined).ub(3, 0).ub(6, 0).ub(2, endCap).bytes(),
   ...(join === 2 ? u16(Math.round(miterLimit * 256)) : []),
-  ...color,
+  ...(fill ?? color),
 ];
 
 /**
@@ -889,6 +890,44 @@ export const fixtures = {
       }),
       PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
       PlaceObject2({ depth: 2, id: 1, matrix: { a: 0.5, d: 0.5, tx: 400, ty: 2000 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // 線の塗り（線形・放射グラデーション、ビットマップ）と、始端と終端で異なるキャップ。
+  'line-fill': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineBitsLossless({ id: 1, format: 5, width: 13, height: 9, pixel: (x, y) => [x * 20, y * 28, (x ^ y) & 1 ? 255 : 0] }),
+      DefineShape({
+        id: 2, version: 4, bounds: [0, 4800, 0, 3200],
+        lines: [
+          lineStyle2({ width: 240, endCap: 1, fill: gradient({ type: 0x10, matrix: { a: 2000 / 32768, d: 2000 / 32768, tx: 1300, ty: 400 },
+            stops: [[0, 255, 0, 0, 255], [128, 255, 255, 0, 255], [255, 0, 0, 255, 255]] }) }),
+          lineStyle2({ width: 160, join: 2, fill: gradient({ type: 0x12, matrix: { a: 1600 / 32768, d: 1600 / 32768, tx: 3600, ty: 600 },
+            stops: [[0, 255, 255, 255, 255], [255, 0, 0, 0, 255]] }) }),
+          lineStyle2({ width: 240, join: 2, fill: bitmapFill(0x42, 1, { a: 40, d: 40 }) }),
+          lineStyle2({ width: 200, startCap: 0, endCap: 2, color: [0, 0, 160, 255] }),
+          lineStyle2({ width: 200, startCap: 1, endCap: 0, color: [0, 120, 0, 255] }),
+          lineStyle2({ width: 200, startCap: 2, endCap: 1, color: [160, 0, 0, 255] }),
+          lineStyle2({ width: 160, startCap: 1, endCap: 2, color: [0, 0, 0, 255] }),
+          lineStyle2({ width: 160, startCap: 0, endCap: 1, color: [120, 0, 120, 255] }),
+        ],
+        records: [
+          ['style', { moveTo: [300, 400], line: 1 }], ['line', 2000, 0],
+          ['style', { moveTo: [2800, 300], line: 2 }], ['line', 400, 600], ['line', 400, -600], ['line', 400, 600], ['line', 400, -600],
+          ['style', { moveTo: [300, 1100], line: 3 }], ['line', 2000, 0], ['line', 0, 500], ['line', -2000, 0], ['line', 0, -500],
+          ['style', { moveTo: [3000, 1500], line: 4 }], ['line', 1200, 0],
+          ['style', { moveTo: [3000, 1900], line: 5 }], ['line', 1200, 0],
+          ['style', { moveTo: [3000, 2300], line: 6 }], ['line', 1200, 0],
+          ['style', { moveTo: [400, 2300], line: 7 }], ['curve', 600, 600, 600, -600],
+          ['style', { moveTo: [400, 2900], line: 8 }], ['line', 600, 0], ['style', { moveTo: [1400, 2900] }], ['line', 600, 0],
+          ['style', { moveTo: [2400, 2800], line: 8 }], ['line', 300, 0], ['line', 0, 300],
+          ['style', { moveTo: [3200, 2700], line: 4 }], ['line', 800, 0], ['line', 0, 300], ['line', -800, 0], ['line', 0, -300],
+        ],
+      }),
+      PlaceObject2({ depth: 1, id: 2 }),
       ShowFrame(),
       End(),
     ],
