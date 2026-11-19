@@ -21,6 +21,9 @@
 //   「// field: name=名前 text=文字列 x=X y=Y」は、メインタイムラインの 1 フレーム目に、その名前のテキストフィールド
 //    （100×20 px、文字列は空白を含められない）を置く。
 //   「// sound: クラス名 seconds=秒」は、そのクラスに結び付いたサウンド（小さな音量の 440 Hz の音）を作る。
+//   「// scene: 名前 frame=F」「// label: 名前 frame=F」は、メインタイムラインのシーン（F フレーム目から始まる）とフレームラベルを、
+//    DefineSceneAndFrameLabelData に書く（FrameLabel タグは書かない）。シーンの指定が無ければ、全体を「Scene 1」にする。
+//   「// framelabel: 名前 frame=F」は、メインタイムラインの F フレーム目に FrameLabel タグを書く。
 //   「// binary: クラス名 text=文字列」は、そのクラスに結び付いたバイナリデータ（DefineBinaryData。中身は文字列の UTF-8、空白は含められない）を作る。
 //   「// unverified: 理由」は、実機と照合できないテスト。SWF の名前が as3x-*.swf になる（期待値は test/avm2.test.js に書く）。
 // スクリプトは有限回の trace で終わるように書く。
@@ -131,6 +134,14 @@ function build(name) {
   const sounds = [...source.matchAll(/^\/\/ sound: (\w+)(?: seconds=([\d.]+))?/gm)].map((m, i) => ({ cls: m[1], seconds: Number(m[2] ?? 0.3), id: 200 + i }));
   // バイナリデータ。キャラクタ ID は 300 以降。
   const binaries = [...source.matchAll(/^\/\/ binary: (\w+) text=(\S+)/gm)].map((m, i) => ({ cls: m[1], text: m[2], id: 300 + i }));
+  // シーンとフレームラベル（DefineSceneAndFrameLabelData。フレーム番号は 0 始まりで書く）。
+  const sceneLines = [...source.matchAll(/^\/\/ scene: (\S+) frame=(\d+)/gm)].map((m) => [Number(m[2]) - 1, m[1]]);
+  const labelLines = [...source.matchAll(/^\/\/ label: (\S+) frame=(\d+)/gm)].map((m) => [Number(m[2]) - 1, m[1]]);
+  const frameLabels = [...source.matchAll(/^\/\/ framelabel: (\S+) frame=(\d+)/gm)].map((m) => [Number(m[2]), m[1]]);
+  const sceneTag = () => {
+    const scenes = sceneLines.length ? sceneLines : [[0, 'Scene 1']];
+    return tag(86, [u30(scenes.length), ...scenes.flatMap(([at, s]) => [...u30(at), ...utf8(s), 0]), u30(labelLines.length), ...labelLines.flatMap(([at, s]) => [...u30(at), ...utf8(s), 0])].flat());
+  };
   const timeline = (owner, count, shape) => {
     const mine = places.filter((p) => (p.in ?? doc) === owner);
     const tags = [];
@@ -143,6 +154,7 @@ function build(name) {
         if (Number(p.frame ?? 1) === f) tags.push(PlaceObject2({ depth: i + 2, id: sprite.id, name: p.name, matrix: { tx: Number(p.x ?? 0) * 20, ty: Number(p.y ?? 0) * 20 } }));
         if (Number(p.until ?? 0) === f) tags.push(RemoveObject2(i + 2));
       });
+      if (owner === doc) for (const [at, label] of frameLabels) if (at === f) tags.push(tag(43, [...utf8(label), 0]));
       tags.push(ShowFrame());
     }
     return tags;
@@ -192,6 +204,7 @@ ${members}
       ...sprites.map((sprite) => DefineSprite(sprite.id, sprite.frames, [...timeline(sprite.cls, sprite.frames, true), End()])),
       ...fields.map(editText),
       ...sounds.map((sound) => DefineSound(sound.id, 3, 22050, Math.round(22050 * sound.seconds), pcmBytes(tone(22050, sound.seconds)))),
+      ...(sceneLines.length || labelLines.length ? [sceneTag()] : []),
       ...binaries.map((binary) => tag(87, [...u16(binary.id), ...u32(0), ...utf8(binary.text)])),
       tag(82, [...u32(1), ...utf8('frame1'), 0, ...abc], true), // DoABC（遅延初期化）
       tag(76, [...u16(sprites.length + sounds.length + binaries.length + 1), ...[...sprites, ...sounds, ...binaries].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8(doc), 0]), // SymbolClass: スプライト、サウンド、バイナリデータ、メインタイムライン

@@ -548,27 +548,79 @@ export function installFlash(vm, movie, types) {
     getters: { graphics, buttonMode: (self) => D(self).buttonMode ?? false, useHandCursor: (self) => D(self).useHandCursor ?? true, soundTransform: media.getSoundTransform },
     setters: { buttonMode: (self, v) => { D(self).buttonMode = vm.toBoolean(v); }, useHandCursor: (self, v) => { D(self).useHandCursor = vm.toBoolean(v); }, soundTransform: media.setSoundTransform },
   });
-  // フレームの指定（番号かラベル）をフレーム番号にする。
-  const frameOf = (d, spec) => {
-    if (typeof spec === 'number') return Math.trunc(spec);
-    const n = d.frameNumber(str(spec));
-    if (n === undefined) vm.throwError('ArgumentError', 2109, `Frame label ${str(spec)} not found in scene.`);
-    return n;
+  // シーン（DefineSceneAndFrameLabelData）。無ければ、全体が名前の無い 1 つのシーンで、ラベルは FrameLabel タグのもの。
+  // ラベルのフレーム番号は、タイムライン全体での番号。
+  const scenesOf = (d) => {
+    const total = d.frames.length;
+    const list = d.frames.scenes ?? [{ name: '', offset: 0 }];
+    const labels = d.frames.sceneLabels ?? [...d.frames.labels].map(([name, frame]) => ({ name, frame })).sort((a, b) => a.frame - b.frame);
+    return list.map((scene, i) => {
+      const end = i + 1 < list.length ? list[i + 1].offset : Math.max(total, 1);
+      return { name: scene.name, offset: scene.offset, numFrames: end - scene.offset, labels: labels.filter((l) => l.frame > scene.offset && l.frame <= end) };
+    });
   };
+  const sceneAt = (d) => {
+    const all = scenesOf(d);
+    return all.findLast((scene) => scene.offset < d.currentFrame) ?? all[0];
+  };
+  // AS3 の Scene（毎回新しく作る。ラベルのフレーム番号はシーンの中での番号）。
+  const sceneObject = (scene) => vm.construct(c.Scene, [
+    scene.name, new ASArray(vm, scene.labels.map((l) => vm.construct(c.FrameLabel, [l.name, l.frame - scene.offset]))), scene.numFrames,
+  ]);
+  // フレームの指定（番号かラベル）をフレーム番号にする。番号はシーン（省略すると今のシーン）の先頭からの番号で、
+  // ラベルはそのシーンの中で探す（実機で確認）。
+  const frameOf = (d, spec, sceneName) => {
+    let scene = sceneAt(d);
+    if (sceneName !== null && sceneName !== undefined) {
+      scene = scenesOf(d).find((s) => s.name === str(sceneName));
+      if (!scene) vm.throwError('ArgumentError', 2108, `Scene ${str(sceneName)} was not found.`);
+    }
+    if (typeof spec === 'number') return scene.offset + Math.trunc(spec);
+    if (/^\d+$/.test(str(spec))) return scene.offset + Number(str(spec));
+    const label = scene.labels.find((l) => l.name === str(spec));
+    if (!label) vm.throwError('ArgumentError', 2109, `Frame label ${str(spec)} not found in scene ${scene.name}.`);
+    return label.frame;
+  };
+  // nextScene / prevScene: 隣のシーン（無ければ今のシーン）の先頭へ移って、再生する。
+  const toScene = (self, step) => {
+    const all = scenesOf(D(self));
+    const at = Math.max(0, all.findLastIndex((scene) => scene.offset < D(self).currentFrame));
+    const scene = all[at + step] ?? all[at];
+    D(self).isPlaying = true;
+    movie.gotoFrame(D(self), scene.offset + 1, true);
+  };
+  c.FrameLabel = vm.defineClass({
+    name: 'flash.display::FrameLabel', base: c.EventDispatcher, final: true,
+    construct: (self, [name, frame]) => { self.label = { name: str(name), frame: vm.toInt32(frame) }; },
+    getters: { name: (self) => self.label.name, frame: (self) => self.label.frame },
+  });
+  c.Scene = vm.defineClass({
+    name: 'flash.display::Scene', final: true,
+    construct: (self, [name, labels, numFrames]) => { self.scene = { name: str(name), labels, numFrames: vm.toInt32(numFrames) }; },
+    getters: { name: (self) => self.scene.name, labels: (self) => self.scene.labels, numFrames: (self) => self.scene.numFrames },
+  });
   c.MovieClip = vm.defineClass({
     name: 'flash.display::MovieClip', base: c.Sprite, dynamic: true,
     getters: {
-      currentFrame: (self) => D(self).currentFrame, totalFrames: (self) => D(self).frames.length, framesLoaded: (self) => D(self).frames.length,
-      currentLabel: (self) => { let label = null, at = 0; for (const [name, frame] of D(self).frames.labels) if (frame <= D(self).currentFrame && frame >= at) { label = name; at = frame; } return label; },
+      // currentFrame は、今のシーンの中での番号。
+      currentFrame: (self) => D(self).currentFrame - sceneAt(D(self)).offset, totalFrames: (self) => D(self).frames.length, framesLoaded: (self) => D(self).frames.length,
+      // currentLabel は、シーンをまたいで、今のフレームかそれより前の最後のラベル。currentFrameLabel は、今のフレームの FrameLabel タグのラベル
+      // （DefineSceneAndFrameLabelData だけにあるラベルは見ない。実機で確認）。
+      currentLabel: (self) => { let label = null; for (const l of scenesOf(D(self)).flatMap((s) => s.labels)) if (l.frame <= D(self).currentFrame) label = l.name; return label; },
       currentFrameLabel: (self) => { for (const [name, frame] of D(self).frames.labels) if (frame === D(self).currentFrame) return name; return null; },
+      currentLabels: (self) => { const scene = sceneAt(D(self)); return new ASArray(vm, scene.labels.map((l) => vm.construct(c.FrameLabel, [l.name, l.frame - scene.offset]))); },
+      currentScene: (self) => sceneObject(sceneAt(D(self))),
+      scenes: (self) => new ASArray(vm, scenesOf(D(self)).map(sceneObject)),
       // isPlaying は、play / gotoAndPlay と再生ヘッドの自動的な進行で真になり、stop で偽になる。gotoAndStop では変わらない（実機で確認）。
       isPlaying: (self) => D(self).isPlaying ?? false,
     },
     methods: {
       play: (self) => { D(self).playing = D(self).isPlaying = true; },
       stop: (self) => { D(self).playing = D(self).isPlaying = false; },
-      gotoAndPlay: (self, [frame]) => { D(self).isPlaying = true; movie.gotoFrame(D(self), frameOf(D(self), frame), true); },
-      gotoAndStop: (self, [frame]) => { movie.gotoFrame(D(self), frameOf(D(self), frame), false); },
+      gotoAndPlay: (self, [frame, scene]) => { const n = frameOf(D(self), frame, scene); D(self).isPlaying = true; movie.gotoFrame(D(self), n, true); },
+      gotoAndStop: (self, [frame, scene]) => { movie.gotoFrame(D(self), frameOf(D(self), frame, scene), false); },
+      nextScene: (self) => toScene(self, 1),
+      prevScene: (self) => toScene(self, -1),
       nextFrame: (self) => { movie.gotoFrame(D(self), Math.min(D(self).currentFrame + 1, D(self).frames.length), false); },
       prevFrame: (self) => { movie.gotoFrame(D(self), D(self).currentFrame - 1, false); },
       // addFrameScript(フレーム番号（0 始まり）, 関数, ...)。そのフレームに入ったときに関数が呼ばれる。

@@ -1,0 +1,22 @@
+2 Alpha:3:start@1 | Beta:3:middle@2,last@3
+Alpha 1 6 6 start null 1
+Beta 2 middle middle 2
+Beta 2 middle middle 2
+Beta 3 last null 2
+Beta 1 start null 2
+ArgumentError 2109
+ArgumentError 2109
+Alpha 1 start null 1
+Alpha 3 start null 1
+Beta 2 middle middle 2
+Alpha 3 start null 1
+ArgumentError 2108
+ArgumentError 2109
+Beta 2 middle middle 2
+Beta 1 true
+Alpha 1 true
+Alpha 1 true
+Beta 1 true
+false false false flash.display::Scene flash.display::FrameLabel
+x 3 y 7 1 true
+1  1 0 0 1

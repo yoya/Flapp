@@ -1012,6 +1012,15 @@ export class Movie {
           // 定義タグはスプライトの中には置けない（仕様 13 章）。
         } else if (tag.code === 59 && tag.length >= 2) {
           ops.push({ op: 'init', spriteId: tag.body[0] | (tag.body[1] << 8), code: tag.body.subarray(2) });
+        } else if (tag.code === 86) {
+          // DefineSceneAndFrameLabelData: シーン（開始フレームは 0 始まり）とフレームラベル。AS3 のシーンの API が使う。
+          const r = new Reader(tag.body, lib.legacy !== null);
+          const scenes = [];
+          for (let n = r.encodedU32(); n > 0; n--) scenes.push({ offset: r.encodedU32(), name: r.string() });
+          const labels = [];
+          for (let n = r.encodedU32(); n > 0; n--) labels.push({ frame: r.encodedU32() + 1, name: r.string() });
+          if (scenes.length) frames.scenes = scenes.sort((a, b) => a.offset - b.offset);
+          frames.sceneLabels = labels.sort((a, b) => a.frame - b.frame);
         } else if (tag.code === 56) {
           const r = new Reader(tag.body, lib.legacy !== null);
           for (let n = r.u16(); n > 0; n--) {
