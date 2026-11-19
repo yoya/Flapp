@@ -149,8 +149,9 @@ export function PlaceObject3({ depth, id, move = false, matrix: m, cxform: cx, n
 // 色は [r, g, b]（DefineShape / 2）か [r, g, b, a]（DefineShape3 / 4）。
 export const solid = (...color) => [0x00, ...color];
 // type: 0x10 線形、0x12 放射、0x13 焦点つき放射。stops は [ratio, ...color] の列。
-const gradient = ({ type, matrix: m, stops, focal }) => [
-  type, ...matrix(m), stops.length, ...stops.flat(),
+// spread: 0 端の色で埋める / 1 折り返す / 2 繰り返す。linearRGB: 線形の色空間で補間する。
+const gradient = ({ type, matrix: m, stops, focal, spread = 0, linearRGB = false }) => [
+  type, ...matrix(m), (spread << 6) | (linearRGB ? 0x10 : 0) | stops.length, ...stops.flat(),
   ...(type === 0x13 ? u16(Math.round(focal * 256)) : []),
 ];
 export const lineStyle = (width, ...color) => [...u16(width), ...color];
@@ -890,6 +891,38 @@ export const fixtures = {
       }),
       PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
       PlaceObject2({ depth: 2, id: 1, matrix: { a: 0.5, d: 0.5, tx: 400, ty: 2000 } }),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // グラデーションの範囲の外（端の色・折り返し・繰り返し）と、線形の色空間での補間。
+  'gradient-spread': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineShape({
+        id: 1, version: 4, bounds: [200, 4600, 200, 3100],
+        fills: [
+          ...[0, 1, 2].map((spread) => gradient({
+            type: 0x10, spread, matrix: { a: (400 / 32768) * COS45, b: (400 / 32768) * COS45, c: (-400 / 32768) * COS45, d: (400 / 32768) * COS45, tx: 900 + 1500 * spread, ty: 900 },
+            stops: [[0, 255, 0, 0, 255], [128, 255, 255, 0, 255], [255, 0, 0, 255, 255]],
+          })),
+          gradient({ type: 0x12, spread: 1, matrix: { a: 600 / 32768, d: 600 / 32768, tx: 900, ty: 2400 }, stops: [[0, 255, 255, 255, 255], [255, 0, 100, 0, 255]] }),
+          gradient({ type: 0x13, spread: 2, focal: 0.5, matrix: { a: 600 / 32768, d: 400 / 32768, tx: 2400, ty: 2400 }, stops: [[0, 255, 255, 0, 255], [255, 160, 0, 160, 255]] }),
+          gradient({ type: 0x10, linearRGB: true, matrix: { a: 1400 / 32768, d: 1400 / 32768, tx: 3900, ty: 2100 }, stops: [[0, 255, 0, 0, 255], [255, 0, 255, 0, 255]] }),
+          gradient({ type: 0x10, matrix: { a: 1400 / 32768, d: 1400 / 32768, tx: 3900, ty: 2700 }, stops: [[0, 255, 0, 0, 255], [255, 0, 255, 0, 255]] }),
+        ],
+        records: [
+          ...rectRecords(200, 200, 1400, 1400, { fill1: 1 }),
+          ...rectRecords(1700, 200, 1400, 1400, { fill1: 2 }),
+          ...rectRecords(3200, 200, 1400, 1400, { fill1: 3 }),
+          ...rectRecords(200, 1700, 1400, 1400, { fill1: 4 }),
+          ...rectRecords(1700, 1700, 1400, 1400, { fill1: 5 }),
+          ...rectRecords(3200, 1700, 1400, 700, { fill1: 6 }),
+          ...rectRecords(3200, 2400, 1400, 700, { fill1: 7 }),
+        ],
+      }),
+      PlaceObject2({ depth: 1, id: 1 }),
       ShowFrame(),
       End(),
     ],

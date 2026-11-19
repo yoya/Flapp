@@ -7,7 +7,10 @@
 // 縮めて四隅が入りきらないときは、四隅を入りきる比率で縮める（中央は幅 0）。対象はクリップ直下の図形と描画 API の内容で、
 // 入れ子のクリップは普通に拡大する。倍率はステージから見たクリップの倍率で、回転や傾きがあるときは 9 分割せず普通に拡大する。
 //
-// 未対応: グラデーションの reflect / repeat と linearRGB、繰り返さないビットマップ塗りで画像から 1 画素より外側
+// グラデーションの範囲の外（reflect / repeat）は、描く範囲を覆う数だけ周期を並べた色の指定で描く。linearRGB は、
+// 色の指定の間に、線形の色空間で補間した色を足して近づける。
+//
+// 未対応: 繰り返さないビットマップ塗りで画像から 1 画素より外側
 //         （実機は縁の色で埋めるが、ここでは透明）、透明なレイヤー上での subtract。
 import { MovieClip } from '../player/movie.js';
 import { applyFilters } from './filters.js';
@@ -19,6 +22,10 @@ const IDENTITY = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
 const OPAQUE_CX = { rm: 256, gm: 256, bm: 256, am: 0, ra: 0, ga: 0, ba: 0, aa: 255 };
 const TINT_CACHE_SIZE = 8;
 const MAX_BLENDED_PIXELS = 1 << 24; // #blendRight で作る画像の画素数の上限
+const MAX_GRADIENT_PERIODS = 256; // reflect / repeat のグラデーションで並べる周期の数の上限（その外は端の色）
+const LINEAR_RGB_STEPS = 32; // linearRGB のグラデーションで、色の指定の間に足す色の数 + 1
+const toLinear = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+const fromLinear = (v) => 255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055);
 
 // Flash のブレンドモード → Canvas の合成方法（そのまま対応するもの）。
 const COMPOSITE = {
@@ -427,13 +434,48 @@ export class CanvasRenderer {
       }
       return true;
     }
+    // 1 周期の色の指定（位置 0〜1）。周期の両端にも色を置く（繰り返したときに、隣の周期と補間されないように）。
+    const stops = style.stops.map((stop) => ({ at: stop.ratio / 255, color: stop.color }));
+    if (!stops.length) return false;
+    if (stops[0].at > 0) stops.unshift({ at: 0, color: stops[0].color });
+    if (stops.at(-1).at < 1) stops.push({ at: 1, color: stops.at(-1).color });
+    if (style.linearRGB) {
+      for (let i = stops.length - 1; i > 0; i--) {
+        const [from, to] = [stops[i - 1], stops[i]];
+        for (let k = LINEAR_RGB_STEPS - 1; k > 0; k--) {
+          const t = k / LINEAR_RGB_STEPS;
+          const mix = (c) => fromLinear(toLinear(from.color[c]) * (1 - t) + toLinear(to.color[c]) * t);
+          stops.splice(i, 0, { at: from.at + (to.at - from.at) * t, color: { r: mix('r'), g: mix('g'), b: mix('b'), a: from.color.a * (1 - t) + to.color.a * t } });
+        }
+      }
+    }
+    // 範囲の外も描く場合は、描く範囲（キャンバス全体）を覆うだけの周期の数を求める。
+    const focal = Math.max(-0.98, Math.min(0.98, style.focal));
+    let periods = 1;
+    if (style.spread !== 'pad') {
+      const inverse = ctx.getTransform().inverse();
+      const { width, height } = ctx.canvas;
+      let reach = 0;
+      for (const [px, py] of [[0, 0], [width, 0], [0, height], [width, height]]) {
+        const p = inverse.transformPoint(new DOMPoint(px, py));
+        // 線形は中心からの横の距離、放射は焦点からの距離で、その位置を含む円の大きさの上限を見積もる。
+        reach = Math.max(reach, style.type === 'linear' ? Math.abs(p.x) / GRADIENT_HALF : Math.hypot(p.x - focal * GRADIENT_HALF, p.y) / (GRADIENT_HALF * (1 - Math.abs(focal))));
+      }
+      periods = style.type === 'linear' ? 2 * Math.ceil(Math.max(0, reach - 1) / 2) + 1 : Math.ceil(Math.max(1, reach));
+      periods = Math.min(periods, MAX_GRADIENT_PERIODS + 1);
+    }
+    // 線形は中心の周期の両側に、放射は外側へ周期を並べる。折り返しは、中心から数えて奇数番目の周期を逆向きにする。
     const gradient = style.type === 'linear'
-      ? ctx.createLinearGradient(-GRADIENT_HALF, 0, GRADIENT_HALF, 0)
-      : ctx.createRadialGradient(style.focal * GRADIENT_HALF, 0, 0, 0, 0, GRADIENT_HALF);
+      ? ctx.createLinearGradient(-GRADIENT_HALF * periods, 0, GRADIENT_HALF * periods, 0)
+      : ctx.createRadialGradient(focal * GRADIENT_HALF, 0, 0, (1 - periods) * focal * GRADIENT_HALF, 0, periods * GRADIENT_HALF);
+    const center = style.type === 'linear' ? (periods - 1) / 2 : 0;
     let last = 0;
-    for (const stop of style.stops) {
-      last = Math.max(last, stop.ratio / 255); // Canvas は位置が戻る指定を受け付けない
-      gradient.addColorStop(last, css(stop.color, cx));
+    for (let q = 0; q < periods; q++) {
+      const mirrored = style.spread === 'reflect' && Math.abs(q - center) % 2 === 1;
+      for (const stop of mirrored ? [...stops].reverse() : stops) {
+        last = Math.max(last, (q + (mirrored ? 1 - stop.at : stop.at)) / periods); // Canvas は位置が戻る指定を受け付けない
+        gradient.addColorStop(Math.min(1, last), css(stop.color, cx));
+      }
     }
     ctx.fillStyle = gradient;
     return true;
