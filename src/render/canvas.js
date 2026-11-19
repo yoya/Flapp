@@ -200,6 +200,15 @@ export class CanvasRenderer {
     }
     const m = concat(parentMatrix, child.matrix);
     const cx = concatCx(parentCx, child.cxform);
+    // 不透明な背景色: 中身の外接矩形（自分の座標系）を、その色で塗る。色変換はかからない（実機で確認）。
+    const background = mask ? null : child.opaqueBackground;
+    const box = background !== null && background !== undefined && child.bounds(IDENTITY);
+    if (box) {
+      ctx.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
+      ctx.fillStyle = `#${background.toString(16).padStart(6, '0')}`;
+      ctx.fillRect(box.xmin, box.ymin, box.xmax - box.xmin, box.ymax - box.ymin);
+      resetTransform(ctx);
+    }
     // マスクの形を描くときは、ブレンドとフィルタは意味を持たない。
     const blend = mask ? 'normal' : child.blendMode;
     const filters = mask ? null : child.filters;

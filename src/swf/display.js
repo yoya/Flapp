@@ -12,7 +12,7 @@ export function parseSetBackgroundColor(tag) {
  * @param {number} [version] SWF のバージョン（クリップアクションのイベントフラグの幅が変わる）
  * @returns {{ depth: number, move: boolean, characterId?: number, matrix?: object, cxform?: object,
  *             ratio?: number, name?: string, clipDepth?: number,
- *             filters?: object[], blendMode?: string, visible?: boolean,
+ *             filters?: object[], blendMode?: string, visible?: boolean, opaqueBackground?: number,
  *             clipActions?: Array<{ events: number, keyCode?: number, code: Uint8Array }> }}
  *   clipActions の events は CLIPEVENTFLAGS を下位バイトから並べた値（0x01 load, 0x02 enterFrame, 0x04 unload, ...）。
  */
@@ -40,7 +40,10 @@ export function parsePlaceObject(tag, version = 6) {
   if (flags2 & 0x02) place.blendMode = BLEND_MODES[r.u8()] ?? 'normal';
   if ((flags2 & 0x04) && r.remaining > 0) r.u8(); // BitmapCache。フラグだけ立って値が無いファイルがある
   if (flags2 & 0x20) place.visible = r.u8() !== 0;
-  if (flags2 & 0x40) r.rgba(); // 不透明な背景色（未対応）
+  if (flags2 & 0x40) {
+    const { r: red, g, b } = r.rgba(); // 不透明な背景色（アルファは使わない）
+    place.opaqueBackground = (red << 16) | (g << 8) | b;
+  }
   if (flags & 0x80) {
     const eventFlags = () => (version >= 6 ? r.u32() : r.u16());
     r.u16(); // Reserved

@@ -127,11 +127,12 @@ export function PlaceObject2({ depth, id, move = false, matrix: m, cxform: cx, r
   ]);
 }
 
-// PlaceObject3。PlaceObject2 の項目に加えて blendMode（番号）、filters（FILTER のバイト列の配列）、visible。
-export function PlaceObject3({ depth, id, move = false, matrix: m, cxform: cx, name, clipDepth, blendMode, filters, visible }) {
+// PlaceObject3。PlaceObject2 の項目に加えて blendMode（番号）、filters（FILTER のバイト列の配列）、visible、
+// background（不透明な背景色 [r, g, b, a]）。
+export function PlaceObject3({ depth, id, move = false, matrix: m, cxform: cx, name, clipDepth, blendMode, filters, visible, background }) {
   const flags = (move ? 0x01 : 0) | (id !== undefined ? 0x02 : 0) | (m ? 0x04 : 0) | (cx ? 0x08 : 0) |
     (name !== undefined ? 0x20 : 0) | (clipDepth !== undefined ? 0x40 : 0);
-  const flags2 = (filters ? 0x01 : 0) | (blendMode !== undefined ? 0x02 : 0) | (visible !== undefined ? 0x20 : 0);
+  const flags2 = (filters ? 0x01 : 0) | (blendMode !== undefined ? 0x02 : 0) | (visible !== undefined ? 0x20 : 0) | (background ? 0x40 : 0);
   return tag(70, [
     flags, flags2, ...u16(depth),
     ...(id !== undefined ? u16(id) : []),
@@ -142,6 +143,7 @@ export function PlaceObject3({ depth, id, move = false, matrix: m, cxform: cx, n
     ...(filters ? [filters.length, ...filters.flat()] : []),
     ...(blendMode !== undefined ? [blendMode] : []),
     ...(visible !== undefined ? [visible ? 1 : 0] : []),
+    ...(background ?? []),
   ]);
 }
 
@@ -701,6 +703,27 @@ export const fixtures = {
       ].map(([id, filter], i) => PlaceObject3({
         depth: 1 + i, id, filters: [filter], matrix: { tx: 300 + (i % 4) * 1150, ty: 400 + Math.floor(i / 4) * 1400 },
       })),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // DefineButtonCxform（DefineButton の中身に色変換をかける）と、PlaceObject3 の不透明な背景色（三角形・回転・アルファ付きの色・スプライト）。
+  'button-cxform': swf({
+    version: 11,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 800, [255, 0, 0]),
+      square(2, 800, [0, 0, 255]),
+      DefineButton(3, [{ states: 1 | 8, id: 1, depth: 1 }, { states: 1, id: 2, depth: 2, matrix: { a: 0.5, d: 0.5, tx: 200, ty: 200 } }]),
+      tag(23, [...u16(3), ...cxform({ mult: [128, 256, 256], add: [0, 128, 0] })]),
+      DefineShape({ id: 4, version: 3, bounds: [0, 800, 0, 800], fills: [solid(200, 0, 160, 255)],
+        records: [['style', { moveTo: [0, 800], fill1: 1 }], ['line', 800, 0], ['line', -400, -800], ['line', -400, 800]] }),
+      DefineSprite(5, 1, [PlaceObject2({ depth: 1, id: 4, matrix: { tx: 100, ty: 100 } }), ShowFrame(), End()]),
+      PlaceObject2({ depth: 1, id: 3, matrix: { tx: 400, ty: 400 } }),
+      PlaceObject3({ depth: 2, id: 4, matrix: { tx: 1800, ty: 400 }, background: [0, 200, 200, 255] }),
+      PlaceObject3({ depth: 3, id: 4, matrix: { a: COS30, b: 0.5, c: -0.5, d: COS30, tx: 3600, ty: 400 }, background: [0, 200, 200, 128] }),
+      PlaceObject3({ depth: 4, id: 5, matrix: { a: 1.5, d: 1.5, tx: 400, ty: 1700 }, background: [255, 255, 0, 255] }),
+      PlaceObject3({ depth: 5, id: 4, matrix: { tx: 2150, ty: 1950 }, cxform: { mult: [256, 256, 256, 128] }, background: [0, 0, 0, 255] }),
       ShowFrame(),
       End(),
     ],

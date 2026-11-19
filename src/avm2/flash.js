@@ -347,6 +347,7 @@ export function installFlash(vm, movie, types) {
       rotation: (self) => xform(D(self)).rotation,
       alpha: (self) => (D(self).cxform?.am ?? 256) / 256,
       visible: (self) => D(self).visible,
+      opaqueBackground: (self) => D(self).opaqueBackground ?? null,
       name: (self) => D(self).name,
       // ボタンの状態として使われているものには、親が無い。
       parent: (self) => (D(self).parent?.states ? null : D(self).parent ? display.wrap(D(self).parent) : onStage(D(self)) ? display.stage : null),
@@ -374,6 +375,7 @@ export function installFlash(vm, movie, types) {
       rotation: (self, v) => { const r = num(v) % 360; setXform(D(self), { rotation: r > 180 ? r - 360 : r < -180 ? r + 360 : r }); },
       alpha: (self, v) => D(self).setCxform({ ...(D(self).cxform ?? { rm: 256, gm: 256, bm: 256, am: 256, ra: 0, ga: 0, ba: 0, aa: 0 }), am: Math.trunc(num(v) * 256) }),
       visible: (self, v) => { D(self).visible = vm.toBoolean(v); },
+      opaqueBackground: (self, v) => { D(self).opaqueBackground = v === null || v === undefined ? null : vm.toUint32(v) & 0xffffff; },
       name: (self, v) => { D(self).name = str(v); },
       // 中身が無い（大きさが 0 の）ものに幅や高さを設定すると、拡大率が 0 になる（実機で確認）。
       width: (self, v) => { const w = size(D(self), 'x'); setXform(D(self), { xscale: w > 0 ? (xform(D(self)).xscale * num(v)) / w : 0 }); },

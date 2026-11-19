@@ -25,7 +25,7 @@ import { shapeToPaths } from '../shape/paths.js';
 
 const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
 const PLACE_DEFAULTS = Object.freeze({
-  matrix: IDENTITY, cxform: null, ratio: 0, name: '', clipDepth: 0, filters: null, blendMode: 'normal', visible: true,
+  matrix: IDENTITY, cxform: null, ratio: 0, name: '', clipDepth: 0, filters: null, blendMode: 'normal', visible: true, opaqueBackground: null,
 });
 const PASS = Symbol('pass'); // マウスの相手探しで「当たったが、受けるものが決まらない」
 const SHAPE_TAGS = new Set([2, 22, 32, 83]);
@@ -1063,6 +1063,15 @@ export class Movie {
         } else if (tag.code === 87 && tag.length >= 6) {
           // DefineBinaryData: ID、予約（u32）、中身。AS3 のクラスに結び付けて、ByteArray として使う。
           this.#define({ type: 'binary', id: tag.body[0] | (tag.body[1] << 8), data: new Uint8Array(tag.body.subarray(6)) }, lib); // 写しにする（Node の Buffer の slice は写さない）
+        } else if (tag.code === 23) {
+          // DefineButtonCxform: DefineButton の中身の色変換。実機では、最初のレコードにだけかかる。
+          const r = new Reader(tag.body);
+          const target = lib.dictionary.get(r.u16());
+          const first = target?.button?.records[0];
+          if (first && !first.cxform) {
+            first.cxform = r.cxform(false);
+            for (const op of target.timeline[0]) if (op.depth === first.depth && op.characterId === first.characterId) op.cxform = first.cxform;
+          }
         } else if (tag.code === 78) {
           // DefineScalingGrid: スプライト（ボタン）の 9 分割拡大の枠。描き方は描画側が決める。
           const r = new Reader(tag.body);
@@ -1166,6 +1175,7 @@ export class DisplayObject {
     this.filters = desc.filters; // null はフィルタなし
     this.blendMode = desc.blendMode;
     this.visible = desc.visible;
+    this.opaqueBackground = desc.opaqueBackground; // 0xRRGGBB か null
   }
 
   /** AS3: 表示リストに戻ったときに呼ばれる。 */
@@ -2024,6 +2034,7 @@ const describe = (obj) => ({
   filters: obj.filters,
   blendMode: obj.blendMode,
   visible: obj.visible,
+  opaqueBackground: obj.opaqueBackground,
 });
 
 // PlaceObject を、その深度の現在の状態 prev（無ければ undefined）に適用した結果を返す。何もしない場合は null。
@@ -2046,5 +2057,6 @@ function mergePlace(prev, op) {
     filters: op.filters ?? base.filters,
     blendMode: op.blendMode ?? base.blendMode,
     visible: op.visible ?? base.visible,
+    opaqueBackground: op.opaqueBackground ?? base.opaqueBackground,
   };
 }
