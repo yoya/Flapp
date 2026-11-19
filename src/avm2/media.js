@@ -1,8 +1,9 @@
 // flash.media: Sound、SoundChannel、SoundTransform、SoundMixer。鳴らす処理は player/sound.js の SoundMixer が受け持つ。
 //
-// 鳴らせるのは、SWF に埋め込まれてクラスに結び付けられたサウンドだけ。外部の音（Sound.load）は読み込まず、
-// 要求を記録して失敗（ioError）を伝える。
+// 鳴らせるのは、SWF に埋め込まれてクラスに結び付けられたサウンドと、Sound.load で読み込んだ MP3。
+// 読み込みはホストに任せる（Movie.load の network）。読めなければ、失敗（ioError）を伝える。
 import { ASObject } from './object.js';
+import { loadedMP3 } from '../player/sound.js';
 
 /**
  * @param {import('./vm.js').AVM2} vm
@@ -74,6 +75,15 @@ export function installMedia(vm, movie) {
     },
   });
 
+  // SoundChannel の音を鳴らし始める。鳴り終わると、その SoundChannel に soundComplete が届く。
+  const startChannel = (sound, ch) => {
+    const state = S(ch);
+    state.entry = movie.sounds.start(sound, { inPoint: (state.offset / 1000) * 44100, loops: state.loops }, null, () => {
+      state.stoppedAt = position(state);
+      display.send(ch, c.Event, ['soundComplete']);
+    }, gain(state.transform));
+  };
+
   // --- Sound ---
   let linked = null; // クラス名 → キャラクタ ID
   c.Sound = vm.defineClass({
@@ -83,34 +93,55 @@ export function installMedia(vm, movie) {
       linked ??= new Map([...movie.symbolClasses].map(([id, name]) => [name.replace(/\.(?=[^.]*$)/, '::'), id]));
       let sound;
       for (let k = klass; k && !sound; k = k.superClass) sound = movie.dictionary.get(linked.get(k.name));
-      return Object.assign(new ASObject(klass), { sound: sound?.type === 'sound' ? sound : null, url: null });
+      return Object.assign(new ASObject(klass), { sound: sound?.type === 'sound' ? sound : null, url: null, loading: false, waiting: [] });
     },
     construct: (self, [stream]) => { if (stream !== undefined && stream !== null) vm.callProperty(self, { name: 'load', keys: ['p:|load'] }, [stream]); },
     getters: {
       length: (self) => (self.sound ? (self.sound.sampleCount / self.sound.rate) * 1000 : 0),
-      bytesLoaded: (self) => self.sound?.data?.length ?? 0, bytesTotal: (self) => self.sound?.data?.length ?? 0,
+      bytesLoaded: (self) => self.bytes ?? self.sound?.data?.length ?? 0, bytesTotal: (self) => self.bytes ?? self.sound?.data?.length ?? 0,
       url: (self) => self.url, isBuffering: () => false, id3: () => new ASObject(c.Object),
     },
     methods: {
       // play(開始位置（ミリ秒）, 繰り返し回数, 音量): 鳴り終わると、返した SoundChannel に soundComplete が届く。
+      // 読み込みの途中なら、読めたところで鳴らし始める（load の直後に play を呼ぶ書き方ができる）。
       play: (self, [startTime = 0, loops = 0, sndTransform = null]) => {
-        if (!self.sound) vm.throwError('ArgumentError', 2068, 'Invalid sound.');
+        if (!self.sound && !self.loading) vm.throwError('ArgumentError', 2068, 'Invalid sound.');
         const ch = vm.construct(c.SoundChannel, []);
         const state = S(ch);
         if (sndTransform !== null && sndTransform !== undefined) state.transform = kept(need(sndTransform, 'sndTransform'));
         state.offset = Math.max(0, num(startTime));
+        state.loops = Math.max(1, vm.toInt32(loops));
+        if (!self.sound) {
+          if (self.waiting.length < 64) self.waiting.push(ch);
+          return ch;
+        }
         if (state.offset >= (self.sound.sampleCount / self.sound.rate) * 1000) return null; // 長さを超える位置からは鳴らせない
-        state.entry = movie.sounds.start(self.sound, { inPoint: (state.offset / 1000) * 44100, loops: Math.max(1, vm.toInt32(loops)) }, null, () => {
-          state.stoppedAt = position(state);
-          display.send(ch, c.Event, ['soundComplete']);
-        }, gain(state.transform));
+        startChannel(self.sound, ch);
         return ch;
       },
+      // load(URLRequest): MP3 を読み込む。読めたら open、progress、complete を、読めなければ ioError を伝える。
       load: (self, [request]) => {
         if (!(request instanceof ASObject) || request.klass !== c.URLRequest) vm.throwError('TypeError', 2007, 'Parameter stream must be non-null.');
-        self.url = request.url ?? null;
-        movie.request({ kind: 'loadSound', url: request.url ?? '', target: '', method: request.method ?? 'GET' });
-        display.later(() => display.dispatch(self, vm.construct(c.IOErrorEvent, ['ioError', false, false, 'Error #2032: Stream Error.', 2032])));
+        const url = request.url ?? '';
+        movie.request({ kind: 'loadSound', url, target: '', method: request.method ?? 'GET' });
+        self.loading = true;
+        movie.load({ url, method: 'GET', data: null, contentType: null }, display.later, (bytes) => {
+          self.loading = false;
+          const sound = bytes && loadedMP3(bytes);
+          if (!sound) {
+            self.waiting = [];
+            display.dispatch(self, vm.construct(c.IOErrorEvent, ['ioError', false, false, `Error #2032: Stream Error. URL: ${url}`, 2032]));
+            return;
+          }
+          Object.assign(self, { sound, url, bytes: bytes.length });
+          display.dispatch(self, vm.construct(c.Event, ['open']));
+          display.dispatch(self, vm.construct(c.ProgressEvent, ['progress', false, false, bytes.length, bytes.length]));
+          // 読み込みを待っていた play を鳴らす（その間に止められたものは鳴らさない）。
+          for (const ch of self.waiting.splice(0)) {
+            if (S(ch).stoppedAt === undefined && S(ch).offset < (sound.sampleCount / sound.rate) * 1000) startChannel(sound, ch);
+          }
+          display.dispatch(self, vm.construct(c.Event, ['complete']));
+        });
       },
       close: () => {},
     },

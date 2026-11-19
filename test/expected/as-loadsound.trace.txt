@@ -1,0 +1,10 @@
+event onLoad true frame>0=false dur=366 pos=0 bytes=1463/1463
+after event loadSound: dur=366 pos=0 bytes=1463/1463
+stream onLoad true dur=366 bytes=1463/1463
+after stream loadSound: dur=366 bytes=1463/1463
+missing onLoad false frame>0=false
+after missing loadSound
+stream complete pos=366 dur=366 frame>5=false
+frame 10: event pos=0 dur=366 | stream pos=true dur=366
+frame 20: start event
+event complete pos=366 dur=366

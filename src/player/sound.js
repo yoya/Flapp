@@ -14,6 +14,22 @@ import { scanMP3 } from '../audio/decode.js';
 
 const UNITY = { ll: 1, lr: 0, rl: 0, rr: 1 };
 
+/**
+ * 読み込んだ MP3 ファイルを、鳴らせるサウンドにする（Sound.loadSound / Sound.load 用）。MP3 でなければ null。
+ * 先頭の ID3v2 タグは読み飛ばす。復号は、鳴らすときに出力（ブラウザでは decodeAudioData）が行う。
+ */
+export function loadedMP3(bytes) {
+  let start = 0;
+  if (bytes.length >= 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) { // "ID3"
+    // 大きさは、各バイトの下位 7 ビットを並べた 28 ビット。フッタがあれば、さらに 10 バイト。
+    start = 10 + ((bytes[6] & 0x7f) << 21 | (bytes[7] & 0x7f) << 14 | (bytes[8] & 0x7f) << 7 | (bytes[9] & 0x7f)) + (bytes[5] & 0x10 ? 10 : 0);
+  }
+  const data = bytes.subarray(Math.min(start, bytes.length));
+  const scan = scanMP3(data);
+  if (!scan.frames) return null;
+  return { id: -1, format: 'mp3', rate: scan.rate, bits: 16, channels: scan.channels, sampleCount: scan.samples, seekSamples: 0, data };
+}
+
 /** サウンドの長さ（秒）。 */
 export function soundSeconds(sound) {
   return sound.sampleCount / sound.rate;

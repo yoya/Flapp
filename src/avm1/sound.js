@@ -1,6 +1,7 @@
 // Sound オブジェクト。鳴らす処理は player/sound.js の SoundMixer が受け持つ。
-import { toNumber, toStr } from './convert.js';
+import { toBool, toNumber, toStr } from './convert.js';
 import { defineClass, defineMethods } from './globals.js';
+import { loadedMP3 } from '../player/sound.js';
 import { AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM } from './object.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
@@ -69,14 +70,7 @@ export function installSound(vm) {
     // start(開始位置（秒）, 繰り返し回数)。鳴り終わると onSoundComplete が呼ばれる。
     start: (_, self, [offset, loops]) => {
       const st = state(self);
-      if (!st?.sound) return;
-      st.finished = false;
-      st.offset = Math.max(0, number(offset));
-      st.entry = st.movie.sounds.start(st.sound, { inPoint: st.offset * 44100, loops: Math.max(1, Math.trunc(number(loops)) || 1) }, st.target?.clip ?? st.movie.root, () => {
-        st.finished = true;
-        const fn = self.get('onSoundComplete');
-        if (fn instanceof AVMFunction) vm.invoke(fn, self, []);
-      });
+      if (st?.sound) play(self, st, Math.max(0, number(offset)), Math.max(1, Math.trunc(number(loops)) || 1));
     },
     // stop(): 対象で鳴っている音を全部止める。stop(名前): その書き出し名の音だけ止める。
     stop: (_, self, [name]) => {
@@ -86,18 +80,40 @@ export function installSound(vm) {
       const match = mine(st);
       st.movie.sounds.stop((p) => match(p) && (name === undefined || p.sound === only));
     },
-    // 外部の音は読み込まない。要求を記録して、その場で失敗を伝える（実機で存在しないファイルを指定したときと同じ）。
-    loadSound: (_, self, [url]) => {
+    // loadSound(URL, ストリーミングか): MP3 を読み込む。読み込みはホストに任せる（Movie.load の network）。
+    // 読めたら onLoad(true)、読めなければ onLoad(false)。ストリーミングなら、読めたところで鳴らし始める（start は要らない）。
+    // ホストがその場で返したときは、onLoad も loadSound の中で呼ぶ（実機で、ローカルのファイルを読んだときと同じ）。
+    loadSound: (_, self, [url, streaming]) => {
       const st = state(self);
       if (!st) return;
       st.loaded = 0;
-      vm.request({ kind: 'loadSound', url: toStr(vm, url), target: '', method: '' });
-      const fn = self.get('onLoad');
-      if (fn instanceof AVMFunction) vm.call(fn, self, [false]);
+      st.total = undefined;
+      const address = toStr(vm, url);
+      vm.request({ kind: 'loadSound', url: address, target: '', method: '' });
+      vm.load({ url: address, method: 'GET', data: null, contentType: null }, (bytes) => {
+        const sound = bytes && loadedMP3(bytes);
+        if (sound) {
+          if (st.entry) st.movie.sounds.stop((p) => p === st.entry);
+          Object.assign(st, { sound, loaded: bytes.length, total: bytes.length, entry: null, finished: false });
+          if (toBool(vm, streaming)) play(self, st, 0, 1);
+        }
+        const fn = self.get('onLoad');
+        if (fn instanceof AVMFunction) vm.call(fn, self, [!!sound]);
+      }, { sync: true });
     },
     getBytesLoaded: (_, self) => state(self)?.loaded,
-    getBytesTotal: () => undefined,
+    getBytesTotal: (_, self) => state(self)?.total,
   });
+  // 鳴らす（start と、ストリーミングの loadSound）。鳴り終わると onSoundComplete が呼ばれる。
+  const play = (self, st, offset, loops) => {
+    st.finished = false;
+    st.offset = offset;
+    st.entry = st.movie.sounds.start(st.sound, { inPoint: offset * 44100, loops }, st.target?.clip ?? st.movie.root, () => {
+      st.finished = true;
+      const fn = self.get('onSoundComplete');
+      if (fn instanceof AVMFunction) vm.invoke(fn, self, []);
+    });
+  };
   // 長さと再生位置（ミリ秒）。サウンドが割り当てられていなければ undefined。
   const duration = (st) => Math.round((st.sound.sampleCount / st.sound.rate) * 1000);
   proto.defineAccessor('duration', vm.native((_, self) => (state(self)?.sound ? duration(state(self)) : undefined)), null, HIDDEN);
@@ -116,7 +132,7 @@ export function installSound(vm) {
     const resolved = target instanceof AVMObject ? target
       : target !== undefined && base ? vm.resolvePath({ target: base, scopes: [{ object: base }], thisValue: base }, toStr(vm, target)) : undefined;
     const movie = base?.clip?.movie;
-    if (movie) obj.soundState = { movie, target: resolved?.isMovieClip ? resolved : null, sound: null, entry: null, finished: false, offset: 0, loaded: undefined };
+    if (movie) obj.soundState = { movie, target: resolved?.isMovieClip ? resolved : null, sound: null, entry: null, finished: false, offset: 0, loaded: undefined, total: undefined };
     return obj;
   });
 }

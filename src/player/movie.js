@@ -241,7 +241,7 @@ export class Movie {
       language,
       request: this.request,
       navigate: (req) => this.navigate(req),
-      load: (req, done) => this.load(req, (fn) => this.avm.later(fn), done),
+      load: (req, done, options) => this.load(req, (fn) => this.avm.later(fn), done, options),
       now: this.now,
       random,
       ...avm,
@@ -277,13 +277,16 @@ export class Movie {
    * 読み込みを、ホストに頼む（ホストが network.load を渡していなければ、読めなかったことにする）。
    * 結果は、later で予約した処理（フレームの処理の中で動く）から done(バイト列 | null) に渡す。
    * ホストがその場で値を返せば次のフレームで、Promise を返せば解決した後のフレームで届く。
+   * sync が真なら、ホストがその場で値を返したときは、done もその場で呼ぶ（AS2 の loadSound。実機は、ローカルのファイルなら
+   * loadSound の中で onLoad を呼ぶ）。
    */
-  load(req, later, done) {
-    const finish = (value) => later(() => {
+  load(req, later, done, { sync = false } = {}) {
+    const deliver = (value) => {
       const bytes = value instanceof Uint8Array ? value : value instanceof ArrayBuffer ? new Uint8Array(value) : null;
       if (bytes && bytes.length > MAX_LOADED_BYTES) this.warn(`loaded data is too large (${bytes.length} bytes): ${req.url}`);
       done(bytes && bytes.length <= MAX_LOADED_BYTES ? bytes : null);
-    });
+    };
+    const finish = (value) => later(() => deliver(value));
     let found = null;
     try {
       if (this.network?.load) found = this.network.load(req);
@@ -291,6 +294,7 @@ export class Movie {
       this.warn(`loading failed: ${e.message}`);
     }
     if (found && typeof found.then === 'function') found.then(finish, () => finish(null));
+    else if (sync) deliver(found);
     else finish(found);
   }
 

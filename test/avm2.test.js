@@ -63,7 +63,7 @@ test('読み込みは行わず、要求を記録して失敗を伝える。Share
     'URLLoader open 1',
     'URLLoader ioError true 2032 Error #2032: Stream Error. URL: missing-file.txt true true false false undefined 0 1',
     'Loader ioError true 2032 null 3',
-    'Sound ioError true 2032 http://example.com/missing-file.mp3 0 3',
+    'Sound ioError true 2032 null 0 3', // url は、読めたときに入る（実機でも、load の直後は null）
   ]);
   assert.deepEqual(movie.requests.map((r) => `${r.kind} ${r.url} ${r.target}`), [
     'load missing-file.txt ', 'navigateToURL http://example.com/page _blank', 'sendToURL http://example.com/log ', 'fscommand FSCommand:fullscreen true',
@@ -132,6 +132,6 @@ test('URLLoader と navigateToURL は、ホストの network に任せる', asyn
   // as3x-netfail: navigateToURL は移動として、sendToURL は応答を受け取らない読み込みとして渡る。fscommand は渡らない。
   const calls = [];
   const failing = await run('as3x-netfail', 8, { network: { navigate: (r) => calls.push(`navigate ${r.method} ${r.url} ${r.target}`), load: (r) => { calls.push(`load ${r.method} ${r.url}`); return null; } } });
-  assert.deepEqual(calls, ['load GET missing-file.txt', 'navigate GET http://example.com/page _blank', 'load GET http://example.com/log', 'load GET unheard.txt']);
+  assert.deepEqual(calls, ['load GET missing-file.txt', 'navigate GET http://example.com/page _blank', 'load GET http://example.com/log', 'load GET unheard.txt', 'load GET http://example.com/missing-file.mp3']);
   assert.equal(failing.traces[4], 'URLLoader ioError true 2032 Error #2032: Stream Error. URL: missing-file.txt true true false false undefined 0 1');
 });

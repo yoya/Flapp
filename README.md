@@ -26,7 +26,7 @@ SWF は信用できない入力として扱います。
 未対応のもの:
 
 - Screen Video v2 の、ストリームの中のパレット（実機も再生できません）
-- ほかの SWF や画像の読み込み（`loadMovie`、`Loader`）、外部の音の読み込み（`loadSound`）
+- ほかの SWF や画像の読み込み（`loadMovie`、`Loader`）
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
@@ -49,7 +49,7 @@ npm run serve
 - SWF 5 以前のファイルは、文字コードをページ上の一覧から選べます（ファイルからは判別できないため）。
 - `trace()` の出力、スクリプトが要求した URL、警告は、ステージの下に表示されます。
 - 「この SWF を信用する」をオンにする（または URL に `?trust` を付ける）と、スクリプトによるページの移動（`getURL`、`navigateToURL`）と、
-  `LoadVars`・`XML`・`loadVariables`・`URLLoader` の読み込み（`fetch`）を行います。http / https 以外の URL（`javascript:` など）は開きません。
+  `LoadVars`・`XML`・`loadVariables`・`URLLoader` のデータと、`loadSound`・`Sound.load` の MP3 の読み込み（`fetch`）を行います。http / https 以外の URL（`javascript:` など）は開きません。
   別のサーバからの読み込みは、相手が CORS で許しているときだけできます。既定はオフです（信用できない SWF では、オンにしないでください）。
 
 ## コードから使う

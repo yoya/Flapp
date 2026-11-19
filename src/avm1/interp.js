@@ -68,13 +68,13 @@ export class AVM1 {
    *   request: ({ kind, url, target, method }) => void   getURL / loadMovie / loadVariables の要求の通知先。
    *            通知するだけで、移動も読み込みもしない
    *   navigate: ({ url, target, method, data }) => void   移動を、ホストに任せるための関数（既定は何もしない）
-   *   load: (要求, done) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で呼ぶ
-   *            （既定は、次のフレームで null を渡す = 読めなかった扱い）
+   *   load: (要求, done, { sync }) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で
+   *            呼ぶ（sync なら、ホストがその場で返したときはその場で呼ぶ）。既定は、読めなかった扱い（null）
    */
   constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
     this.request = request;
     this.navigate = navigate;
-    this.load = load ?? ((req, done) => this.later(() => done(null)));
+    this.load = load ?? ((req, done, { sync = false } = {}) => (sync ? done(null) : this.later(() => done(null))));
     this.listeners = { Mouse: [], Key: [], Stage: [] }; // addListener で登録されたオブジェクト
     this.currentTarget = null;
     this.pending = []; // later() で予約した処理（読み込み失敗の通知など）。プレイヤーが次のフレームの後で実行する
