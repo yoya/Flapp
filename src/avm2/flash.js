@@ -9,6 +9,7 @@ import { installFilters } from './filters.js';
 import { installGeom } from './geom.js';
 import { installMedia } from './media.js';
 import { installNet } from './net.js';
+import { installStdlib } from './stdlib.js';
 import { installText } from './text.js';
 import { installVideo } from './video.js';
 import { ASArray, ASClass, ASFunction, ASObject, publicKey } from './object.js';
@@ -52,16 +53,32 @@ export function installFlash(vm, movie, types) {
       isDefaultPrevented: (self) => self.event.prevented,
       clone: (self) => vm.construct(self.klass, [self.event.type, self.event.bubbles, self.event.cancelable]),
       toString: (self) => `[${self.klass.shortName} type="${self.event.type}" bubbles=${self.event.bubbles} cancelable=${self.event.cancelable} eventPhase=${self.event.phase}]`,
+      // 派生のイベントの toString 用: formatToString("クラス名", "type", "bubbles", ...) が、[クラス名 type="…" bubbles=… …] を返す。
+      formatToString: (self, [className, ...names]) => formatEvent(self, str(className), names.map(str)),
     },
     staticValues: {
       ENTER_FRAME: 'enterFrame', EXIT_FRAME: 'exitFrame', FRAME_CONSTRUCTED: 'frameConstructed', ADDED: 'added', ADDED_TO_STAGE: 'addedToStage',
       REMOVED: 'removed', REMOVED_FROM_STAGE: 'removedFromStage', COMPLETE: 'complete', INIT: 'init', OPEN: 'open', CLOSE: 'close', CHANGE: 'change',
       RESIZE: 'resize', ACTIVATE: 'activate', DEACTIVATE: 'deactivate', RENDER: 'render', SOUND_COMPLETE: 'soundComplete', UNLOAD: 'unload', CANCEL: 'cancel',
       SELECT: 'select', SCROLL: 'scroll', MOUSE_LEAVE: 'mouseLeave', TAB_CHILDREN_CHANGE: 'tabChildrenChange', ID3: 'id3',
+      TAB_ENABLED_CHANGE: 'tabEnabledChange', TAB_INDEX_CHANGE: 'tabIndexChange', FULLSCREEN: 'fullScreen', CONNECT: 'connect', CLEAR: 'clear', COPY: 'copy',
+      CUT: 'cut', PASTE: 'paste', SELECT_ALL: 'selectAll', CLOSING: 'closing', FRAME_LABEL: 'frameLabel', CLOUD_CHANGE: 'cloudChange', SUSPEND: 'suspend',
+      TEXT_INTERACTION_MODE_CHANGE: 'textInteractionModeChange', VIDEO_FRAME: 'videoFrame', CHANNEL_MESSAGE: 'channelMessage', CHANNEL_STATE: 'channelState',
+      WORKER_STATE: 'workerState', USER_IDLE: 'userIdle', USER_PRESENT: 'userPresent', NETWORK_CHANGE: 'networkChange', EXITING: 'exiting', DISPLAYING: 'displaying',
+      HTML_BOUNDS_CHANGE: 'htmlBoundsChange', HTML_DOM_INITIALIZE: 'htmlDOMInitialize', HTML_RENDER: 'htmlRender', LOCATION_CHANGE: 'locationChange',
+      SCROLL_BOUNDS_CHANGE: 'scrollBoundsChange',
     },
   });
+  // [クラス名 項目=値 …]。文字列は引用符で囲み、それ以外は文字列にして出す（実機の Event.formatToString と同じ形）。
+  const formatEvent = (self, className, names) => {
+    const base = { type: self.event.type, bubbles: self.event.bubbles, cancelable: self.event.cancelable, eventPhase: self.event.phase };
+    return `[${className} ${names.map((name) => {
+      const v = name in base ? base[name] : self.event[name];
+      return `${name}=${typeof v === 'string' ? `"${v}"` : str(v === undefined ? null : v)}`;
+    }).join(' ')}]`;
+  };
   // 派生のイベント。fields は、コンストラクタの 4 番目以降の引数に対応する項目と、その既定値・変換（読み取り用のプロパティにもなる）。
-  const eventClass = (name, fields, constants, defaultBubbles = false, base = c.Event) => {
+  const eventClass = (name, fields, constants, defaultBubbles = false, base = c.Event, shown = null) => {
     const klass = vm.defineClass({
       name: `flash.events::${name}`, base,
       construct: (self, [type, bubbles = defaultBubbles, cancelable, ...rest]) => {
@@ -70,6 +87,7 @@ export function installFlash(vm, movie, types) {
       },
       methods: {
         clone: (self) => vm.construct(self.klass, [self.event.type, self.event.bubbles, self.event.cancelable, ...fields.map(([key]) => self.event[key])]),
+        ...(shown ? { toString: (self) => formatEvent(self, name, ['type', 'bubbles', 'cancelable', 'eventPhase', ...shown]) } : {}),
       },
       staticValues: constants,
     });
@@ -118,6 +136,14 @@ export function installFlash(vm, movie, types) {
   c.ProgressEvent = eventClass('ProgressEvent', [['bytesLoaded', 0, num], ['bytesTotal', 0, num]], { PROGRESS: 'progress', SOCKET_DATA: 'socketData' });
   c.HTTPStatusEvent = eventClass('HTTPStatusEvent', [['status', 0, (v) => vm.toInt32(v)]], { HTTP_STATUS: 'httpStatus' });
   c.NetStatusEvent = eventClass('NetStatusEvent', [['info', null, same]], { NET_STATUS: 'netStatus' });
+  c.FocusEvent = eventClass('FocusEvent', [['relatedObject', null, same], ['shiftKey', false, bool], ['keyCode', 0, (v) => vm.toUint32(v)], ['direction', 'none', str]],
+    { FOCUS_IN: 'focusIn', FOCUS_OUT: 'focusOut', KEY_FOCUS_CHANGE: 'keyFocusChange', MOUSE_FOCUS_CHANGE: 'mouseFocusChange' }, true, c.Event, ['relatedObject', 'shiftKey', 'keyCode']);
+  c.FocusEvent.instanceTraits.set(publicKey('isRelatedObjectInaccessible'), { kind: 'accessor', key: publicKey('isRelatedObjectInaccessible'), name: 'isRelatedObjectInaccessible', get: vm.native(() => false), set: vm.native(() => {}) });
+  c.StatusEvent = eventClass('StatusEvent', [['code', '', str], ['level', '', str]], { STATUS: 'status' }, false, c.Event, ['code', 'level']);
+  c.FullScreenEvent = eventClass('FullScreenEvent', [['fullScreen', false, bool], ['interactive', false, bool]], { FULL_SCREEN: 'fullScreen' }, false, c.Event, ['fullScreen', 'interactive']);
+  c.DataEvent = eventClass('DataEvent', [['data', '', str]], { DATA: 'data', UPLOAD_COMPLETE_DATA: 'uploadCompleteData' }, false, c.Event, ['data']);
+  c.ContextMenuEvent = eventClass('ContextMenuEvent', [['mouseTarget', null, same], ['contextMenuOwner', null, same]], { MENU_ITEM_SELECT: 'menuItemSelect', MENU_SELECT: 'menuSelect' }, false, c.Event, ['mouseTarget', 'contextMenuOwner']);
+  c.UncaughtErrorEvent = eventClass('UncaughtErrorEvent', [['error', null, same]], { UNCAUGHT_ERROR: 'uncaughtError' }, true, c.Event, ['error']);
   c.AsyncErrorEvent = eventClass('AsyncErrorEvent', [['text', '', str], ['error', null, same]], { ASYNC_ERROR: 'asyncError' }, false, c.ErrorEvent);
 
   // current に登録されたリスナーのうち、段階 phase（1: キャプチャ、2: ターゲット、3: バブリング）で呼ぶものを呼ぶ。
@@ -256,8 +282,9 @@ export function installFlash(vm, movie, types) {
   }
   for (const name of ['clearTimeout', 'clearInterval']) vm.defineGlobal(`flash.utils::${name}`, vm.native((_, [id]) => { timers.delete(vm.toUint32(id)); }, name));
   const FRAME_EVENTS = new Set(['enterFrame', 'exitFrame', 'frameConstructed']);
+  c.IEventDispatcher = vm.defineClass({ name: 'flash.events::IEventDispatcher', base: null, isInterface: true });
   c.EventDispatcher = vm.defineClass({
-    name: 'flash.events::EventDispatcher',
+    name: 'flash.events::EventDispatcher', interfaces: [c.IEventDispatcher],
     methods: {
       addEventListener: (self, [type, fn, useCapture, priority]) => {
         if (!(fn instanceof ASFunction)) return;
@@ -395,6 +422,7 @@ export function installFlash(vm, movie, types) {
 
   installText(vm, movie);
   installBitmap(vm, movie);
+  installStdlib(vm);
   const filters = installFilters(vm);
 
   // --- 子の出し入れ ---

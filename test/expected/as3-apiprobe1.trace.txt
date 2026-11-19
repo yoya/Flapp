@@ -1,0 +1,41 @@
+StageScaleMode noScale,showAll,exactFit,noBorder
+StageAlign T,B,L,R,TL,TR,BL,BR
+StageQuality low,medium,high,best
+StageDisplayState normal,fullScreen,fullScreenInteractive
+BlendMode add,alpha,darken,difference,erase,hardlight,invert,layer,lighten,multiply,normal,overlay,screen,subtract
+EventPhase 1,2,3
+FocusEvent consts focusIn,focusOut,keyFocusChange,mouseFocusChange
+FocusEvent new focusIn,true,false,true,true,9,false
+FocusEvent str [FocusEvent type="focusOut" bubbles=true cancelable=false eventPhase=2 relatedObject=null shiftKey=false keyCode=0]
+FocusEvent clone focusOut,true,true,3,true
+StatusEvent status,c,l,[StatusEvent type="status" bubbles=false cancelable=false eventPhase=2 code="c" level="l"]
+FullScreenEvent fullScreen,true,[FullScreenEvent type="fullScreen" bubbles=false cancelable=false eventPhase=2 fullScreen=true interactive=false]
+DataEvent data,uploadCompleteData,d,[DataEvent type="data" bubbles=false cancelable=false eventPhase=2 data="d"]
+ContextMenuEvent menuItemSelect,menuSelect
+Event.formatToString [Event type="x" bubbles=true cancelable=false eventPhase=2]
+IEventDispatcher true,true,true
+Keyboard ,,,,,,,,13,112
+TextLineMetrics 1,2,3,4,5,6
+ContextMenu 0,a,true,false,true,true
+Responder true
+ObjectEncoding 0,3,3
+StyleSheet .a,#ff0000
+LocalConnection true,true
+AccessibilityProperties n,false,false
+Accessibility false
+Vector3D 1,3.7416573867739413,1
+SoundLoaderContext 1000,true
+BitmapFilterQuality 1,2,3
+BitmapFilterType inner,outer,full
+SharedObjectFlushStatus flushed,pending
+IExternalizable true
+IBitmapDrawable true,true
+SecurityDomain true
+IME true
+PrintJob true
+URLStream false
+Clipboard true
+FileReference ERR 2037
+GraphicsSolidFill 16711680,0.5
+UncaughtErrorEvent uncaughtError
+done

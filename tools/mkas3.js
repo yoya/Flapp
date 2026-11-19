@@ -164,6 +164,8 @@ function build(name) {
   };
   const pack = (declaration) => `package
 {
+   import flash.accessibility.*;
+   import flash.desktop.*;
    import flash.display.*;
    import flash.errors.*;
    import flash.events.*;
@@ -174,8 +176,10 @@ function build(name) {
    import flash.net.*;
    import flash.system.*;
    import flash.text.*;
+   import flash.printing.*;
    import flash.ui.*;
    import flash.utils.*;
+   import flash.xml.*;
 
 ${declaration}
 }
