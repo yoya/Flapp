@@ -64,9 +64,10 @@
   encoding.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label, loaded.base); });
   // SWF を信用するか。信用すると、getURL / navigateToURL でページを移動し（別のウィンドウの指定なら新しいタブを開く）、
   // LoadVars / XML / loadVariables / URLLoader の読み込みを fetch で行う（相手のサーバが CORS で許していれば、別のサーバからも読める）。
-  // 既定は信用しない（要求は trace の欄に出すだけ）。?trust でも指定できる。切り替えると、ムービーを最初から読み直す。
+  // 既定は信用しない（要求は trace の欄に出すだけ）。?trust または ?trust=1 でも指定できる（未設定と ?trust=0 は信用しない）。切り替えると、ムービーを最初から読み直す。
   const trust = document.getElementById('trust');
-  trust.checked = new URLSearchParams(location.search).has('trust');
+  const query = new URLSearchParams(location.search);
+  trust.checked = query.has('trust') && query.get('trust') !== '0';
   trust.addEventListener('change', () => { if (loaded) play(loaded.bytes, loaded.label, loaded.base); });
 
   let redraw = () => {}; // 再生中のムービーを描き直す
