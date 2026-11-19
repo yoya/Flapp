@@ -28,6 +28,28 @@ export class LegacyText {
     this.lead = LEAD_BYTE[this.encoding] ?? (() => false);
   }
 
+  /**
+   * Unicode の文字列を、この文字コードのバイト列（1 バイト = 1 文字の文字列）にする。表せない文字は ?（実機が URL の
+   * 非 ASCII 文字をシステムの文字コードにするときの規則）。逆引きの表は、初めて使うときに全バイト列を復号して作る。
+   */
+  encode(text) {
+    if (!this.reverse) {
+      this.reverse = new Map();
+      const decoder = new TextDecoder(this.encoding);
+      const put = (bytes) => {
+        const ch = decoder.decode(Uint8Array.from(bytes));
+        if (ch.length === 1 && ch !== '\uFFFD' && !this.reverse.has(ch)) this.reverse.set(ch, String.fromCharCode(...bytes));
+      };
+      for (let b = 0x80; b <= 0xff; b++) {
+        if (!this.lead(b)) put([b]);
+        else for (let t = 0x40; t <= 0xfe; t++) put([b, t]);
+      }
+    }
+    let out = '';
+    for (const ch of text) out += ch.charCodeAt(0) < 0x80 ? ch : this.reverse.get(ch) ?? '?';
+    return out;
+  }
+
   /** バイト列の文字列を Unicode の文字列にする（表示用）。 */
   decode(s) {
     return this.decoder.decode(Uint8Array.from(s, (c) => c.charCodeAt(0)));

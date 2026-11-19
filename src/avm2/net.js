@@ -8,6 +8,7 @@
 // AS1 / AS2 の SWF は、表示はするが、スクリプトは動かない。
 // SharedObject は、このムービーを再生している間だけ値を持つ（保存はしない）。
 // Capabilities は固定の値を返す（再生している端末の情報は渡さない）。
+import { LegacyText } from '../swf/legacy.js';
 import { ASArray, ASClass, ASObject, publicKey } from './object.js';
 
 const MAX_SHARED = 100; // SharedObject の名前の数の上限
@@ -28,18 +29,43 @@ export function installNet(vm, movie) {
     if (!(v instanceof ASObject) || v.klass !== c.URLRequest) vm.throwError('TypeError', 2007, `Parameter ${name} must be non-null.`);
     return v;
   };
+  // 実機の URL の扱い（実機の画面から求めた規則）: 空白・制御文字・非 ASCII・{ } | \\ ^ ` < > " のどれかを含む URL は、全体を作り直す。
+  // 非 ASCII の文字は、システムの文字コード（movie.encoding）のバイトにして %XX にする（表せない文字は ?）。そのうえで、% を含む
+  // 安全でない文字を %XX にする（すでに %XX の形になっていても、% を %25 にする）。含まない URL は、そのまま。
+  let systemText;
+  const escapeUrl = (url) => {
+    if (!/[^\x21-\x7e]|[{}|\\^`<>"]/.test(url)) return url;
+    systemText ??= new LegacyText(movie.encoding);
+    const bytes = systemText.encode(url);
+    let out = '';
+    for (const ch of bytes) out += ch.charCodeAt(0) >= 0x80 ? `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}` : ch;
+    return out.replace(/[^\x21-\x7e]|[%{}|\\^`<>"]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+  };
   // URLRequest を、ホストの読み込みの関数に渡す形にする。data は、ByteArray ならその中身、ほかは文字列にして送る。
-  // GET のときは、data を URL の後ろに付ける。
+  // 実機で確認した規則:
+  //   GET のときは、data を URL の後ろに付ける（URL に ? があれば、区切りなしにそのまま続ける）。
+  //   POST で送る本文が空（data が無いか、空の文字列・URLVariables）のときは、GET で送る。Content-Type は、data があれば付く。
+  //   Content-Type は、requestHeaders に Content-Type があればそれ、無ければ contentType、さらに無ければ application/x-www-form-urlencoded。
   const hostRequest = (request) => {
-    const method = String(request.method ?? 'GET').toUpperCase();
+    let method = String(request.method ?? 'GET').toUpperCase();
     const data = request.data;
     let url = request.url ?? '';
     let body = null;
+    const headers = {};
+    for (const [name, value] of vm.requestHeaders(request)) headers[name] = value;
+    const typeHeader = Object.keys(headers).find((name) => name.toLowerCase() === 'content-type');
+    let contentType = null;
     if (data !== undefined && data !== null) {
-      if (method === 'GET') url += `${url.includes('?') ? '&' : '?'}${str(data)}`;
-      else body = data instanceof ASObject && data.bytes ? data.bytes.data.slice(0, data.bytes.length) : new TextEncoder().encode(str(data));
+      if (method === 'GET') url += `${url.includes('?') ? '' : '?'}${str(data)}`;
+      else {
+        body = data instanceof ASObject && data.bytes ? data.bytes.data.slice(0, data.bytes.length) : new TextEncoder().encode(str(data));
+        contentType = request.contentType ?? 'application/x-www-form-urlencoded';
+        if (!body.length) body = null;
+      }
     }
-    return { url, method, data: body, contentType: body ? (request.contentType ?? 'application/x-www-form-urlencoded') : null };
+    if (method === 'POST' && !body) method = 'GET';
+    if (typeHeader) { contentType = headers[typeHeader]; delete headers[typeHeader]; }
+    return { url: escapeUrl(url), method, data: body, contentType, headers: Object.keys(headers).length ? headers : undefined };
   };
   // 読み込みの失敗を、次のフレームの後で target に伝える。誰も聞いていなければ警告を残す（実機は、エラーの窓を出す）。
   // opened が真なら、先に open を伝える（実機の URLLoader は、ファイルが無くても open を出す）。
@@ -123,6 +149,8 @@ export function installNet(vm, movie) {
   });
   // 送るだけで、応答は受け取らない。
   vm.defineGlobal('flash.net::sendToURL', vm.native((_, [request]) => {
+    requestOf(request, 'request');
+    vm.simpleOnly(request);
     movie.request({ kind: 'sendToURL', url: requestOf(request, 'request').url ?? '', target: '', method: request.method ?? 'GET' });
     movie.load(hostRequest(request), display.later, () => {});
   }, 'sendToURL'));

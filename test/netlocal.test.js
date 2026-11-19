@@ -1,8 +1,9 @@
 // 通信の送信内容。ホストの network.load に渡される要求（メソッド・URL・Content-Type・追加のヘッダ・本文）を、実機の受信側の記録と
-// 照らして確かめた値で見る。見本は test/as/netlocal.as（SWF 7 と 8）。
+// 照らして確かめた値で見る。見本は test/as/netlocal.as（SWF 7 と 8）と test/as3/netlocal.as。
 //
 // 実機との照合は、サンドボックス（ループバック以外へ通信できない）の中のデバッガ版と、127.0.0.1 の受信サーバで行った
-// （道具は tmp/netlab にあるが、git の対象外）。
+// （道具は tmp/netlab にあるが、git の対象外）。AS3 の変数の並び順（URLVariables）は、実機でも実行のたびに
+// 変わるので、ここの値は Flapp の並び順（代入順）。AS3 の送信は、実機のデバッガ版が URLLoader で落ちるので sendToURL で確かめている。
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -56,3 +57,41 @@ for (const name of ['asx-netlocal', 'asx-netlocal8']) {
     assert.deepEqual(movie.warnings, []);
   });
 }
+
+// AS3（sendToURL）。
+//   - GET の data は、URL に ? があれば区切りなしでそのまま続ける（"u1?pre=1a=1&…"）。
+//   - 本文の無い POST は、GET で送る（空の URLVariables でも。この場合は Content-Type が付く）。
+//   - requestHeaders の Content-Type は contentType より優先。sendToURL は、単純なヘッダ以外（application/octet-stream や application/json の
+//     Content-Type、X-Flapp など）に SecurityError #3769。
+//   - 空白・非 ASCII などを含む URL は、全体を作り直す（非 ASCII はシステムの文字コード（ここでは Shift-JIS）のバイトにして、表せない文字は ?。% は %25）。
+const AS3 = [
+  "GET /u1?pre=1a=1&b=x%20y%26z%3D%25&c=%E6%97%A5%E6%9C%AC -",
+  "POST /u2 application/x-www-form-urlencoded \"a=1&b=x%20y%26z%3D%25&c=%E6%97%A5%E6%9C%AC\"",
+  "POST /u3 text/plain \"plain text body\"",
+  "GET /u6?p=1&q=2 -",
+  "POST /u7?pre=1 application/x-www-form-urlencoded \"a=1&b=x%20y%26z%3D%25&c=%E6%97%A5%E6%9C%AC\"",
+  "GET /u8 -",
+  "GET /u9 application/x-www-form-urlencoded",
+  "POST /u10 application/x-www-form-urlencoded \"zeta=1&alpha=2&mid=3&beta=4&n1=5&flag=true&nothing=null\"",
+  "GET /u11?zeta=1&alpha=2&mid=3&beta=4&n1=5&flag=true&nothing=null -",
+  "POST /u12 application/x-www-form-urlencoded; charset=UTF-8 \"raw=1&x=%41\"",
+  "POST /u14 application/x-www-form-urlencoded \"\\u0000\\u0001ÿab\"",
+  "POST /u15 application/x-www-form-urlencoded \"æ¥æ¬èª\"",
+  "POST /u16 text/plain \"k=v\"",
+  "POST /u17 application/x-www-form-urlencoded {\"Accept\":\"text/html\"} \"k=v\"",
+  "GET /u18 -",
+  "GET /u19?q=1#fragx=1 -",
+  "GET /u%2020/? -",
+  "GET /q1/p%20? -",
+  "GET /q2?k=?&l=%2593%25FA%2596%7B -",
+  "GET /q3/%2593%25FA%2596%7B/x -",
+  "GET /q4?a%2520b=c%252Fd&e%20f=g%20h -",
+  "GET /q5?k=? -",
+  "POST /q6 application/x-www-form-urlencoded \"k=Ã©\"",
+];
+test('as3x-netlocal: AS3 の sendToURL は、実機と同じ内容をホストに渡す', async () => {
+  const { seen, traces, movie } = await run('as3x-netlocal');
+  assert.deepEqual(seen, AS3);
+  assert.deepEqual(traces, ["g1 ok","g2 ok","g3 ok","g4 SecurityError 3769","g5 SecurityError 3769","g6 ok","g7 ok","g8 ok","g9 ok","g10 ok","g11 ok","g12 ok","g13 SecurityError 3769","g14 ok","g15 ok","g16 ok","g17 ok","g18 ok","g19 ok","g20 ok","g21 ok","g22 ok","g23 ok","g24 ok","g25 ok","g26 ok","defaults GET null len0 null null","sent"]);
+  assert.deepEqual(movie.warnings, []);
+});

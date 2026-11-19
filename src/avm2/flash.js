@@ -773,12 +773,34 @@ export function installFlash(vm, movie, types) {
   c.URLRequest = vm.defineClass({
     name: 'flash.net::URLRequest',
     construct: (self, [url]) => { self.url = url === undefined || url === null ? null : str(url); },
-    getters: { url: (self) => self.url ?? null, method: (self) => self.method ?? 'GET', data: (self) => self.data ?? null },
-    setters: { url: (self, v) => { self.url = v === null || v === undefined ? null : str(v); }, method: (self, v) => { self.method = str(v); }, data: (self, v) => { self.data = v; } },
+    getters: {
+      url: (self) => self.url ?? null, method: (self) => self.method ?? 'GET', data: (self) => self.data ?? null,
+      contentType: (self) => self.contentType ?? null, digest: (self) => self.digest ?? null,
+      requestHeaders: (self) => (self.requestHeaders ??= new ASArray(vm, [])),
+    },
+    setters: {
+      url: (self, v) => { self.url = v === null || v === undefined ? null : str(v); }, method: (self, v) => { self.method = str(v); }, data: (self, v) => { self.data = v; },
+      contentType: (self, v) => { self.contentType = v === null || v === undefined ? null : str(v); },
+      digest: (self, v) => { self.digest = v === null || v === undefined ? null : str(v); },
+      requestHeaders: (self, v) => { self.requestHeaders = v instanceof ASArray ? v : new ASArray(vm, []); },
+    },
   });
+  // navigateToURL と sendToURL で送れるのは、単純なヘッダ（Accept、Accept-Language、Content-Language と、値が
+  // application/x-www-form-urlencoded・multipart/form-data・text/plain の Content-Type）だけ。ほかは SecurityError（実機で確認）。
+  const SIMPLE_HEADERS = new Set(['accept', 'accept-language', 'content-language']);
+  const SIMPLE_TYPES = new Set(['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
+  vm.requestHeaders = (request) => (request.requestHeaders instanceof ASArray ? request.requestHeaders.items : [])
+    .filter((h) => h instanceof ASObject).map((h) => [str(vm.getProperty(h, vm.keyName('name'))), str(vm.getProperty(h, vm.keyName('value')))]);
+  vm.simpleOnly = (request) => {
+    const simpleType = (value) => SIMPLE_TYPES.has(value.split(';')[0].trim().toLowerCase());
+    const bad = vm.requestHeaders(request).some(([name, value]) => (name.toLowerCase() === 'content-type' ? !simpleType(value) : !SIMPLE_HEADERS.has(name.toLowerCase())))
+      || (request.contentType !== undefined && request.contentType !== null && !simpleType(request.contentType));
+    if (bad) vm.throwError('SecurityError', 3769, 'Security sandbox violation: Only simple headers can be used with navigateToUrl() or sendToUrl().');
+  };
   // 要求を記録して、移動はホストに任せる（AVM1 の getURL と同じ扱い）。
   vm.defineGlobal('flash.net::navigateToURL', vm.native((_, [request, window]) => {
     if (!(request instanceof ASObject) || request.klass !== c.URLRequest) vm.throwError('TypeError', 2007, 'Parameter request must be non-null.');
+    vm.simpleOnly(request);
     const req = { kind: 'navigateToURL', url: request.url ?? '', target: window === undefined || window === null ? '' : str(window), method: request.method ?? 'GET' };
     movie.request(req);
     movie.navigate({ ...req, data: request.data === undefined || request.data === null ? '' : str(request.data) });

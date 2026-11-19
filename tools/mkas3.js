@@ -25,6 +25,7 @@
 //    DefineSceneAndFrameLabelData に書く（FrameLabel タグは書かない）。シーンの指定が無ければ、全体を「Scene 1」にする。
 //   「// framelabel: 名前 frame=F」は、メインタイムラインの F フレーム目に FrameLabel タグを書く。
 //   「// binary: クラス名 text=文字列」は、そのクラスに結び付いたバイナリデータ（DefineBinaryData。中身は文字列の UTF-8、空白は含められない）を作る。
+//   「// network」は、FileAttributes の UseNetwork を立てる（ローカルの SWF からネットワークへ送れるようにする）。
 //   「// unverified: 理由」は、実機と照合できないテスト。SWF の名前が as3x-*.swf になる（期待値は test/avm2.test.js に書く）。
 // スクリプトは有限回の trace で終わるように書く。
 import { execFileSync } from 'node:child_process';
@@ -198,7 +199,7 @@ ${members}
     version: 15,
     frames,
     tags: [
-      tag(69, [0x08, 0, 0, 0]), // FileAttributes: ActionScript3
+      tag(69, [/^\/\/ network\b/m.test(source) ? 0x09 : 0x08, 0, 0, 0]), // FileAttributes: ActionScript3（と UseNetwork）
       tag(9, [255, 255, 255]),
       ...(sprites.length || places.length ? [square(1, 800, [0x33, 0x66, 0x99])] : []),
       ...sprites.map((sprite) => DefineSprite(sprite.id, sprite.frames, [...timeline(sprite.cls, sprite.frames, true), End()])),
