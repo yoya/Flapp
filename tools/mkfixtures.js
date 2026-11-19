@@ -236,6 +236,19 @@ const glowFilter = ({ color, blur, strength = 1, flags = 0x20, passes = 1 }) => 
   2, ...color, ...fixed32(blur), ...fixed32(blur), ...u16(Math.round(strength * 256)), flags | passes,
 ];
 const colorMatrixFilter = (m) => [6, ...m.flatMap(float32)];
+// flags: 0x80 内側 / 0x40 ノックアウト / 0x20 元の絵も描く / 0x10 上に重ねる。下位 4 ビットはぼかしの回数。
+const bevelFilter = ({ shadow, highlight, blur, angle, distance, strength = 1, flags = 0xa0, passes = 1 }) => [
+  3, ...shadow, ...highlight, ...fixed32(blur), ...fixed32(blur), ...fixed32(angle), ...fixed32(distance), ...u16(Math.round(strength * 256)), flags | passes,
+];
+// type: 4 グラデーション光彩 / 7 グラデーションベベル。stops は [ratio, ...color] の列。
+const gradientFilter = ({ type, stops, blur, angle = 0, distance = 0, strength = 1, flags = 0xa0, passes = 1 }) => [
+  type, stops.length, ...stops.flatMap(([, ...color]) => color), ...stops.map(([ratio]) => ratio),
+  ...fixed32(blur), ...fixed32(blur), ...fixed32(angle), ...fixed32(distance), ...u16(Math.round(strength * 256)), flags | passes,
+];
+// flags: 0x02 範囲外は端の画素 / 0x01 アルファを変えない。
+const convolutionFilter = ({ x, y, matrix: m, divisor = 1, bias = 0, color = [0, 0, 0, 0], flags = 0 }) => [
+  5, x, y, ...float32(divisor), ...float32(bias), ...m.flatMap(float32), ...color, flags,
+];
 
 // --- ボタン ---
 // records: [{ states, id, depth, matrix, cxform }]。states は 1 通常 / 2 マウスが乗った状態 / 4 押下 / 8 当たり判定 の和。
@@ -663,6 +676,30 @@ export const fixtures = {
         [blurFilter(3, 3, 1), dropShadowFilter({ color: [0, 0, 160, 255], blur: 4, angle: Math.PI / 2, distance: 5 })],
       ].map((filters, i) => PlaceObject3({
         depth: 1 + i, id: 1, filters, matrix: { tx: 400 + (i % 4) * 1100, ty: 400 + Math.floor(i / 4) * 1400 },
+      })),
+      ShowFrame(),
+      End(),
+    ],
+  }),
+  // ベベル（内側・外側・上に重ねる・ノックアウト）、グラデーション光彩（外側・内側）、グラデーションベベル、畳み込み。
+  'filter-bevel': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      square(1, 800, [255, 160, 0]),
+      DefineShape({ id: 2, version: 3, bounds: [0, 800, 0, 800], fills: [solid(255, 160, 0, 255), solid(0, 0, 200, 255)],
+        records: [...rectRecords(0, 0, 800, 800, { fill1: 1 }), ...rectRecords(200, 200, 400, 400, { fill1: 2 })] }),
+      ...[
+        [1, bevelFilter({ shadow: [0, 0, 0, 255], highlight: [255, 255, 255, 255], blur: 4, angle: Math.PI / 4, distance: 4 })],
+        [1, bevelFilter({ shadow: [0, 0, 0, 255], highlight: [255, 255, 255, 255], blur: 4, angle: Math.PI / 4, distance: 4, flags: 0x20 })],
+        [1, bevelFilter({ shadow: [0, 0, 160, 255], highlight: [255, 255, 0, 255], blur: 4, angle: Math.PI / 4, distance: 4, flags: 0x30 })],
+        [1, bevelFilter({ shadow: [0, 0, 255, 255], highlight: [255, 0, 0, 128], blur: 2, angle: -Math.PI / 3, distance: 6, strength: 2, flags: 0xe0 })],
+        [1, gradientFilter({ type: 4, stops: [[0, 255, 255, 255, 0], [128, 255, 255, 0, 255], [255, 255, 0, 0, 255]], blur: 8, flags: 0x20 })],
+        [1, gradientFilter({ type: 4, stops: [[0, 0, 0, 255, 0], [255, 0, 0, 255, 255]], blur: 6, angle: Math.PI / 4, distance: 4, strength: 2 })],
+        [1, gradientFilter({ type: 7, stops: [[0, 0, 0, 200, 255], [128, 255, 0, 0, 0], [255, 255, 255, 255, 255]], blur: 4, angle: Math.PI / 4, distance: 4 })],
+        [2, convolutionFilter({ x: 3, y: 3, matrix: [-2, -1, 0, -1, 1, 1, 0, 1, 2], color: [0, 160, 0, 255], bias: 20 })],
+      ].map(([id, filter], i) => PlaceObject3({
+        depth: 1 + i, id, filters: [filter], matrix: { tx: 300 + (i % 4) * 1150, ty: 400 + Math.floor(i / 4) * 1400 },
       })),
       ShowFrame(),
       End(),

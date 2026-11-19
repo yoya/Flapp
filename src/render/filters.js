@@ -1,5 +1,5 @@
-// 表示オブジェクトのフィルタ（ぼかし・影・光彩・色行列）。DOM に依存しない画素演算。
-// 未対応: ベベル、グラデーション光彩、グラデーションベベル、畳み込み。
+// 表示オブジェクトのフィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み）。
+// DOM に依存しない画素演算。ベベル系とグラデーション光彩の向きと合成は、実機の画面から求めた規則による。
 
 /**
  * @param {Uint8ClampedArray} rgba   乗算済みでない RGBA（Canvas の ImageData と同じ並び）
@@ -27,8 +27,12 @@ export function applyFilters(rgba, width, height, filters, scale) {
       boxBlur(px, width, height, 4, blurSize(f.blurX, scale), blurSize(f.blurY, scale), f.passes);
     } else if (f.type === 'dropShadow' || f.type === 'glow') {
       px = shadow(px, width, height, f, scale);
+    } else if (f.type === 'bevel' || f.type === 'gradientBevel' || f.type === 'gradientGlow') {
+      px = bevel(px, width, height, f, scale);
     } else if (f.type === 'colorMatrix') {
       colorMatrix(px, f.matrix);
+    } else if (f.type === 'convolution') {
+      px = convolution(px, width, height, f);
     } else {
       unsupported.push(f.type);
     }
@@ -88,20 +92,27 @@ export function boxBlur(buf, width, height, channels, sizeX, sizeY, passes) {
   }
 }
 
+// アルファ（1 画素 1 値）を (dx, dy) だけずらした写し。範囲の外は outside。
+function shifted(alpha, width, height, dx, dy, outside = 0) {
+  const out = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const sy = y - dy;
+    for (let x = 0; x < width; x++) {
+      const sx = x - dx;
+      out[y * width + x] = sx >= 0 && sx < width && sy >= 0 && sy < height ? alpha[sy * width + sx] : outside;
+    }
+  }
+  return out;
+}
+
 // 影と光彩。元の絵のアルファをずらしてぼかし、指定の色を付けて元の絵と合成する。
 function shadow(px, width, height, f, scale) {
   const n = width * height;
   const dx = f.type === 'dropShadow' ? Math.round(Math.cos(f.angle) * f.distance * scale) : 0;
   const dy = f.type === 'dropShadow' ? Math.round(Math.sin(f.angle) * f.distance * scale) : 0;
-  const alpha = new Float32Array(n);
-  for (let y = 0; y < height; y++) {
-    const sy = y - dy;
-    for (let x = 0; x < width; x++) {
-      const sx = x - dx;
-      const a = sx >= 0 && sx < width && sy >= 0 && sy < height ? px[(sy * width + sx) * 4 + 3] : 0;
-      alpha[y * width + x] = f.inner ? 255 - a : a; // 内側の影は「絵の無いところ」から落ちる
-    }
-  }
+  const source = new Float32Array(n);
+  for (let i = 0; i < n; i++) source[i] = f.inner ? 255 - px[i * 4 + 3] : px[i * 4 + 3]; // 内側の影は「絵の無いところ」から落ちる
+  const alpha = shifted(source, width, height, dx, dy, f.inner ? 255 : 0);
   boxBlur(alpha, width, height, 1, blurSize(f.blurX, scale), blurSize(f.blurY, scale), f.passes);
 
   const { r, g, b } = f.color;
@@ -129,6 +140,121 @@ function shadow(px, width, height, f, scale) {
     out[o + 1] = px[o + 1] * srcWeight + sg * shadowWeight;
     out[o + 2] = px[o + 2] * srcWeight + sb * shadowWeight;
     out[o + 3] = px[o + 3] * srcWeight + s * shadowWeight;
+  }
+  return out;
+}
+
+// グラデーションの色の表（位置 0〜255 → 乗算前の RGBA。端の外は端の色）。
+function gradientTable(colors) {
+  const table = new Float32Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    let k = colors.findIndex((c) => c.ratio >= i);
+    if (k < 0) k = colors.length - 1;
+    const to = colors[k];
+    const from = colors[Math.max(0, k - 1)];
+    const t = to.ratio > from.ratio ? Math.max(0, Math.min(1, (i - from.ratio) / (to.ratio - from.ratio))) : 1;
+    for (const [j, c] of ['r', 'g', 'b', 'a'].entries()) table[i * 4 + j] = from.color[c] + (to.color[c] - from.color[c]) * t;
+  }
+  return table;
+}
+
+// ベベル・グラデーションベベル・グラデーション光彩。ぼかしたアルファを、角度の向きとその逆向きに距離だけずらして比べる。
+// ベベルは、角度の向きの側（逆向きにずらしたアルファの方が大きい所）がハイライト、反対の側が影。グラデーションベベルは、
+// 影の側を 255、ハイライトの側を 0 とする位置でグラデーションの色を引く。グラデーション光彩は、角度の向きにずらしたアルファ
+// （内側でも反転しない）の位置で色を引く。内側は絵の中にだけ、外側は絵の外にだけ出る。onTop（full）はどちらにも出て、絵の上に重なる。
+function bevel(px, width, height, f, scale) {
+  const n = width * height;
+  const dx = Math.round(Math.cos(f.angle) * f.distance * scale);
+  const dy = Math.round(Math.sin(f.angle) * f.distance * scale);
+  const alpha = new Float32Array(n);
+  for (let i = 0; i < n; i++) alpha[i] = px[i * 4 + 3];
+  boxBlur(alpha, width, height, 1, blurSize(f.blurX, scale), blurSize(f.blurY, scale), f.passes);
+  const table = f.colors ? gradientTable(f.colors) : null;
+  const lit = shifted(alpha, width, height, dx, dy); // 角度の逆向きから引いたアルファ
+  const dark = f.type === 'gradientGlow' ? null : shifted(alpha, width, height, -dx, -dy);
+  const out = new Float32Array(n * 4);
+  const effect = [0, 0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (f.type === 'bevel') {
+      const d = (lit[i] - dark[i]) * f.strength;
+      const color = d > 0 ? f.highlightColor : f.shadowColor;
+      const a = (Math.min(255, Math.abs(d)) * color.a) / 255;
+      effect[0] = (color.r * a) / 255; effect[1] = (color.g * a) / 255; effect[2] = (color.b * a) / 255; effect[3] = a;
+    } else {
+      const v = f.type === 'gradientGlow' ? lit[i] * f.strength : 128 + ((dark[i] - lit[i]) * f.strength) / 2;
+      const t = Math.max(0, Math.min(255, Math.round(v))) * 4;
+      const a = table[t + 3];
+      effect[0] = (table[t] * a) / 255; effect[1] = (table[t + 1] * a) / 255; effect[2] = (table[t + 2] * a) / 255; effect[3] = a;
+    }
+    const srcA = px[o + 3] / 255;
+    const keep = f.knockout || !f.compositeSource ? 0 : 1; // 元の絵を残すか
+    if (f.onTop) {
+      const over = effect[3] / 255;
+      for (let j = 0; j < 4; j++) out[o + j] = effect[j] + px[o + j] * keep * (1 - over);
+    } else if (f.inner) {
+      const over = (effect[3] * srcA) / 255;
+      for (let j = 0; j < 4; j++) out[o + j] = effect[j] * srcA + px[o + j] * keep * (1 - over);
+    } else {
+      const under = f.knockout ? 1 - srcA : keep ? 1 - srcA : 1;
+      for (let j = 0; j < 4; j++) out[o + j] = px[o + j] * keep + effect[j] * under;
+    }
+  }
+  return out;
+}
+
+// 畳み込み。乗算前の RGBA に行列を掛けて、divisor で割り bias を足す。行列は、デバイスの画素の間隔で掛ける。
+// 計算するのは、絵が描かれた範囲（アルファが 0 でない画素を囲む矩形）を、左上へ行列の中心まで、右下へ行列の残りの大きさだけ
+// 広げた範囲（3 × 3 なら左上へ 1、右下へ 2。実機の画面に合わせた）。その外は、clamp なら端の画素、そうでなければ defaultColor
+// として読む。preserveAlpha なら、アルファは元のまま。
+function convolution(px, width, height, f) {
+  const n = width * height;
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (px[(y * width + x) * 4 + 3] <= 0) continue;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+  }
+  if (x1 < 0) return px;
+  const { matrixX: mx, matrixY: my, matrix: m, defaultColor: dc } = f;
+  const hx = Math.floor(mx / 2), hy = Math.floor(my / 2);
+  x0 = Math.max(0, x0 - hx); y0 = Math.max(0, y0 - hy);
+  x1 = Math.min(width - 1, x1 + mx - hx); y1 = Math.min(height - 1, y1 + my - hy);
+  const plain = new Float32Array(n * 4);
+  for (let i = 0; i < n * 4; i += 4) {
+    const a = px[i + 3];
+    const k = a > 0 ? 255 / a : 0;
+    plain[i] = px[i] * k; plain[i + 1] = px[i + 1] * k; plain[i + 2] = px[i + 2] * k; plain[i + 3] = a;
+  }
+  const out = new Float32Array(n * 4);
+  const divisor = f.divisor || 1;
+  const outside = [dc.r, dc.g, dc.b, dc.a];
+  const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  const sum = [0, 0, 0, 0];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      sum[0] = sum[1] = sum[2] = sum[3] = 0;
+      for (let j = 0; j < my; j++) {
+        for (let i = 0; i < mx; i++) {
+          const w = m[j * mx + i];
+          if (!w) continue;
+          let sx = x + i - hx, sy = y + j - hy;
+          let sample = null;
+          if (sx < x0 || sx > x1 || sy < y0 || sy > y1) {
+            if (!f.clamp) sample = outside;
+            sx = Math.max(x0, Math.min(x1, sx));
+            sy = Math.max(y0, Math.min(y1, sy));
+          }
+          const s = (sy * width + sx) * 4;
+          for (let c = 0; c < 4; c++) sum[c] += w * (sample ? sample[c] : plain[s + c]);
+        }
+      }
+      const o = (y * width + x) * 4;
+      const a = f.preserveAlpha ? plain[o + 3] : clamp(sum[3] / divisor + f.bias);
+      for (let c = 0; c < 3; c++) out[o + c] = (clamp(sum[c] / divisor + f.bias) * a) / 255;
+      out[o + 3] = a;
+    }
   }
   return out;
 }

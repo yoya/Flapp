@@ -84,7 +84,7 @@ test('光彩: ノックアウトと内側', () => {
   assert.deepEqual(at(out, 3, 1, 0), [128, 128, 0, 255]); // 外側 2 画素ぶん (2/3) × 0.75 = 0.5 の赤が緑に重なる
 });
 
-test('色行列と未対応フィルタ', () => {
+test('色行列と畳み込み、未対応フィルタ', () => {
   const src = image(1, 1, [[0, 0, 200, 100, 50, 255]]);
   // 赤 ← 緑、緑 ← 青、青 ← 赤、アルファ半分
   const swap = [0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0.5, 0];
@@ -95,7 +95,17 @@ test('色行列と未対応フィルタ', () => {
   result = applyFilters(src, 1, 1, [{ type: 'colorMatrix', matrix: add }], 1);
   assert.deepEqual(at(result.rgba, 1, 0, 0), [255, 0, 50, 255]);
 
-  result = applyFilters(src, 1, 1, [{ type: 'bevel' }, { type: 'convolution' }], 1);
-  assert.deepEqual(result.unsupported, ['bevel', 'convolution']);
+  // 畳み込み: 3 × 1 の行列で、左右の画素の差を取る。範囲の外は defaultColor（clamp なし）か端の画素（clamp）。
+  const row = image(3, 1, [[0, 0, 10, 20, 30, 255], [1, 0, 50, 60, 70, 255], [2, 0, 90, 100, 110, 255]]);
+  const conv = { type: 'convolution', matrixX: 3, matrixY: 1, matrix: [-1, 0, 1], divisor: 1, bias: 0, defaultColor: { r: 0, g: 0, b: 0, a: 255 }, clamp: false, preserveAlpha: true };
+  result = applyFilters(row, 3, 1, [conv], 1);
+  assert.deepEqual(at(result.rgba, 3, 0, 0), [50, 60, 70, 255]);
+  assert.deepEqual(at(result.rgba, 3, 1, 0), [80, 80, 80, 255]);
+  assert.deepEqual(at(result.rgba, 3, 2, 0), [0, 0, 0, 255]); // 0 - 90 は 0 で止まる
+  result = applyFilters(row, 3, 1, [{ ...conv, clamp: true, divisor: 2, bias: 10 }], 1);
+  assert.deepEqual(at(result.rgba, 3, 0, 0), [30, 30, 30, 255]);
+
+  result = applyFilters(src, 1, 1, [{ type: 'shader' }], 1);
+  assert.deepEqual(result.unsupported, ['shader']);
   assert.deepEqual(at(result.rgba, 1, 0, 0), [200, 100, 50, 255]); // 絵はそのまま
 });
