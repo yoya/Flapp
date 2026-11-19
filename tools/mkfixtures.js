@@ -479,6 +479,76 @@ const GRAD = 1400 / 32768; // グラデーションの定義域 (±16384) を 14
 const COS45 = Math.SQRT1_2;
 const COS30 = Math.sqrt(3) / 2;
 
+// ビットマップ塗りの見本（バージョン違いの比較用）。8×8 の模様を、32 px おきのセルに置く。各セルは 1 つの図形で、
+// t: 塗りの種類（0x40 繰り返し / 0x41 繰り返さない（どちらも補間あり）、0x42 / 0x43 は補間なし）、a: 1 画素あたりの twips
+// （20 が 1:1）、tx / ty: 塗りの行列の位置（twips）、ptx / pty: 図形を置く位置の小数分（twips）。
+// frames: メインタイムラインのフレーム数（2 以上はアニメーション）。spriteFrames: 2 以上なら、2 フレームのスプライト（見えない）を置く。
+function bitmapGrid(version, { frames = 1, spriteFrames = 1, stop = false } = {}) {
+  const cells = [
+    { t: 0x40 }, { t: 0x41 }, { t: 0x42 }, { t: 0x43 }, // 種類（1:1、整数の位置）
+    { t: 0x43, a: 40 }, { t: 0x41, a: 40 }, { t: 0x43, a: 60 }, { t: 0x41, a: 60 }, { t: 0x43, a: 10 }, { t: 0x41, a: 10 }, // 拡大率
+    ...[5, 10, 15].flatMap((f) => [{ t: 0x43, tx: f, ty: f }, { t: 0x41, tx: f, ty: f }]), // 塗りの行列が小数の位置
+    ...[5, 10, 15].flatMap((f) => [{ t: 0x43, ptx: f, pty: f }, { t: 0x41, ptx: f, pty: f }]), // 置く位置が小数
+    { t: 0x43, a: 40, tx: 10, ty: 10 }, { t: 0x43, a: 40, ptx: 10, pty: 10 }, { t: 0x43, a: 60, ptx: 10, pty: 10 }, { t: 0x43, a: 60, tx: 20, ty: 20 }, // 拡大して小数
+    { t: 0x43, ptx: 2, pty: 2 }, { t: 0x43, ptx: 8, pty: 8 }, { t: 0x43, ptx: 5, pty: 5, tx: 5, ty: 5 }, { t: 0x43, a: 40, ptx: 15, pty: 15 }, // 置く位置の小数の丸め方
+    // ビットマップの種類（bm: 1 = DefineBitsLossless、2 = DefineBitsLossless2）と、図形のタグの版（sv）。補間ありで 2 倍と 1 倍
+    { t: 0x41, a: 40, bm: 2 }, { t: 0x43, a: 40, bm: 2 }, { t: 0x41, a: 40, sv: 1 }, { t: 0x41, a: 40, sv: 2 }, { t: 0x41, a: 40, sv: 1, bm: 2 }, { t: 0x41, a: 20, bm: 2 },
+    // 実物の SWF の特徴: 先頭に無効なビットマップ ID（65535）の塗りがある / スプライトの中に置く / 透明な画素がある（bm: 3 は 1 ビットのアルファ、4 は半透明）
+    { t: 0x41, a: 40, bad: true }, { t: 0x41, a: 40, nest: true }, { t: 0x41, a: 40, bm: 3 }, { t: 0x41, a: 40, bm: 4 },
+  ];
+  const place = [];
+  const shapes = cells.map((c, i) => {
+    const { t, a = 20, tx = 0, ty = 0, ptx = 0, pty = 0, bm = 1, sv = 3, bad = false, nest = false } = c;
+    const size = 8 * a;
+    // スプライトの中に置くものは、図形（id 10 + i）をスプライト（id 100 + i）に入れて、スプライトを置く。
+    place.push(PlaceObject2({ depth: i + 1, id: nest ? 100 + i : 10 + i, matrix: { tx: (4 + 32 * (i % 10)) * 20 + ptx, ty: (4 + 32 * Math.floor(i / 10)) * 20 + pty } }));
+    const fill = bitmapFill(t, bm, { a, d: a, tx, ty });
+    const shape = DefineShape({
+      id: 10 + i, version: sv, bounds: [-20, size + 20, -20, size + 20], fills: bad ? [bitmapFill(t, 0xffff, { a, d: a, tx, ty }), fill] : [fill],
+      records: rectRecords(0, 0, size, size, { fill1: bad ? 2 : 1 }),
+    });
+    return nest ? [shape, DefineSprite(100 + i, 1, [PlaceObject2({ depth: 1, id: 10 + i }), ShowFrame(), End()])] : [shape];
+  }).flat();
+  return swf({
+    version, width: 320, height: 140, frames,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineBitsLossless({ id: 1, format: 5, width: 8, height: 8, pixel: (x, y) => [(x * 36) & 255, (y * 36) & 255, (x + y) & 1 ? 200 : 40] }),
+      DefineBitsLossless({ id: 2, format: 5, alpha: true, width: 8, height: 8, pixel: (x, y) => [(x * 36) & 255, (y * 36) & 255, (x + y) & 1 ? 200 : 40, 255] }),
+      DefineBitsLossless({ id: 3, format: 5, alpha: true, width: 8, height: 8, pixel: (x, y) => [(x * 36) & 255, (y * 36) & 255, (x + y) & 1 ? 200 : 40, (x * 3 + y * 5) % 4 === 0 ? 0 : 255] }),
+      DefineBitsLossless({ id: 4, format: 5, alpha: true, width: 8, height: 8, pixel: (x, y) => [(x * 36) & 255, (y * 36) & 255, (x + y) & 1 ? 200 : 40, 128 + ((x + y) & 1) * 100] }),
+      ...shapes, ...place,
+      ...(spriteFrames > 1 ? [DefineSprite(900, spriteFrames, [...Array.from({ length: spriteFrames }, () => ShowFrame()), End()]), PlaceObject2({ depth: 200, id: 900 })] : []),
+      ...(stop ? [DoAction([[0x07]])] : []), // stop
+      ...Array.from({ length: frames }, () => ShowFrame()), End(),
+    ],
+  });
+}
+
+// 回転・非整数の拡大で置いたビットマップ塗り（40 px おきのセル）。frames: 2 以上でアニメーション。
+function bitmapRot(version, frames) {
+  const cs = [
+    { t: 0x41, rot: 20 }, { t: 0x43, rot: 20 }, { t: 0x41, scale: 1.3 }, { t: 0x43, scale: 1.3 }, { t: 0x41, scale: 1.5 }, { t: 0x41, scale: 0.7 }, { t: 0x41, rot: 90 }, { t: 0x41, sx: 2.001, sy: 3.046 },
+  ];
+  const shapes = [], place = [];
+  cs.forEach((c, i) => {
+    const th = ((c.rot ?? 0) * Math.PI) / 180, sx = c.sx ?? c.scale ?? 1, sy = c.sy ?? c.scale ?? 1;
+    shapes.push(DefineShape({ id: 10 + i, version: 3, bounds: [-20, 340, -20, 340], fills: [bitmapFill(c.t, 1, { a: 40, d: 40 })], records: rectRecords(0, 0, 320, 320, { fill1: 1 }) }));
+    place.push(PlaceObject2({
+      depth: i + 1, id: 10 + i,
+      matrix: { a: Math.cos(th) * sx, b: Math.sin(th) * sx, c: -Math.sin(th) * sy, d: Math.cos(th) * sy, tx: (24 + 40 * (i % 8)) * 20, ty: (24 + 40 * Math.floor(i / 8)) * 20 },
+    }));
+  });
+  return swf({
+    version, width: 340, height: 70, frames,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineBitsLossless({ id: 1, format: 5, width: 8, height: 8, pixel: (x, y) => [(x * 36) & 255, (y * 36) & 255, (x + y) & 1 ? 200 : 40] }),
+      ...shapes, ...place, ...Array.from({ length: frames }, () => ShowFrame()), End(),
+    ],
+  });
+}
+
 export const fixtures = {
   // 背景色 + AVM1 の trace 1 回。実機の起動・trace 取得・画面取得の確認用。
   'trace-hello': swf({
@@ -545,6 +615,20 @@ export const fixtures = {
   // 可逆ビットマップの各形式（13x9 画素を補間なしで 4 倍に拡大）。上段左から
   // 24 ビット、カラーテーブル、15 ビット。下段はアルファつき 32 ビット、アルファつきカラーテーブル、
   // カラーテーブルの繰り返し塗り。右下は補間ありの塗りを回転・色変換して置いたもの。
+  'bitmap-v4': bitmapGrid(4),
+  'bitmap-v5': bitmapGrid(5),
+  'bitmap-v6': bitmapGrid(6),
+  'bitmap-v7': bitmapGrid(7),
+  'bitmap-v8': bitmapGrid(8),
+  'bitmap-v4-anim': bitmapGrid(4, { frames: 2 }),
+  'bitmap-v4-spriteanim': bitmapGrid(4, { spriteFrames: 2 }),
+  'bitmap-v4-stop': bitmapGrid(4, { frames: 2, stop: true }),
+  'bitmap-rot-v4': bitmapRot(4, 1),
+  'bitmap-rot-v4-anim': bitmapRot(4, 2),
+  'bitmap-v5-anim': bitmapGrid(5, { frames: 2 }),
+  'bitmap-v6-anim': bitmapGrid(6, { frames: 2 }),
+  'bitmap-v7-anim': bitmapGrid(7, { frames: 2 }),
+  'bitmap-v8-anim': bitmapGrid(8, { frames: 2 }),
   'bitmap-lossless': swf({
     version: 8,
     tags: [

@@ -7,6 +7,10 @@
 // 縮めて四隅が入りきらないときは、四隅を入りきる比率で縮める（中央は幅 0）。対象はクリップ直下の図形と描画 API の内容で、
 // 入れ子のクリップは普通に拡大する。倍率はステージから見たクリップの倍率で、回転や傾きがあるときは 9 分割せず普通に拡大する。
 //
+// バージョンの古い SWF（8 未満）のビットマップ塗りは、実機の画面から求めた規則で色を引く位置と補間を変える（#oldSampling）:
+// メインのタイムラインが 2 フレーム以上あると補間しない、色を引く位置は装置の画素の左上の角で、バージョン 6 以下は
+// 置く位置の小数を四捨五入する、など。
+//
 // グラデーションの範囲の外（reflect / repeat）は、描く範囲を覆う数だけ周期を並べた色の指定で描く。linearRGB は、
 // 色の指定の間に、線形の色空間で補間した色を足して近づける。
 //
@@ -413,18 +417,52 @@ export class CanvasRenderer {
     }
     if (!space) return;
     ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
-    if (this.#paint(ctx, style, cx)) ctx.fill(op.spacePath, rule);
+    if (this.#paint(ctx, style, cx, m)) ctx.fill(op.spacePath, rule);
     ctx.globalAlpha = 1;
+  }
+
+  // バージョンの古い SWF の、ビットマップ塗りの色を引く位置のずれ（実機の画面から求めた規則。ビットマップの画素の単位で返す）。
+  //   バージョン 8 以降: 装置の画素の中心で引く（Canvas の標準）。
+  //   バージョン 7 以前: 装置の画素の左上の角で引く。補間なしでは、絵が装置の画素で 0.5 だけ右下へ動いて見える。
+  //     境目にちょうど乗った点は、バージョン 7 では後ろの、6 以前では 1 つ手前のビットマップの画素になる（わずかに動かす量を変えて再現する）。
+  //     補間ありでは、ビットマップの画素の左上の角を基準に補間する（拡大率 s のとき、絵が装置の画素で (s - 1) / 2 だけ
+  //     左上へ動いて見える。s = 1 なら同じ）。
+  //   バージョン 6 以前は、図形を置く位置（world の平行移動）の小数が、装置の画素へ四捨五入された位置を、ビットマップの
+  //     原点にする（図形の縁は小数のまま）。塗りの行列の小数は丸められない。world は、図形を置く行列（装置の画素）。
+  //   バージョン 6 以前は、等倍（装置の画素とビットマップの画素が 1 対 1）のビットマップは、補間ありの指定でも補間しない
+  //     （補間なしと同じ規則になる）。
+  //   バージョン 8 未満は、メインのタイムラインが 2 フレーム以上ある（アニメーションする）SWF では、補間ありの指定でも
+  //     補間しない（旧版の「画質 HIGH では、アニメーションが無いときだけ補間する」規則。スプライトの中のアニメーションは数えない。
+  //     stop で止まっていても、フレーム数で決まる）。
+  //   返す nearest が真なら、補間なしで描く。
+  #oldSampling(ctx, style, world) {
+    const version = this.movie.version;
+    const m = ctx.getTransform();
+    const inverse = new DOMMatrix([m.a, m.b, m.c, m.d, 0, 0]).inverse();
+    // 補間なしで、ちょうど境目に乗る点が、割り切れる値の誤差でどちらへ倒れるかを決める量（装置の画素）。
+    // 倒れる向きはバージョン 8 以降と 7 は後ろの、6 以前は 1 つ手前のビットマップの画素。
+    const shift = (k, rx, ry) => { const p = inverse.transformPoint(new DOMPoint(k + rx, k + ry)); return { du: p.x, dv: p.y }; };
+    if (version >= 8) return style.smooth ? { du: 0, dv: 0 } : { ...shift(-1e-3, 0, 0), nearest: true };
+    // 置く位置を丸める分（装置の画素）。
+    const rx = version <= 6 && world ? Math.round(world.tx) - world.tx : 0, ry = version <= 6 && world ? Math.round(world.ty) - world.ty : 0;
+    const sx = Math.hypot(m.a, m.b), sy = Math.hypot(m.c, m.d); // ビットマップの 1 画素あたりの装置の画素数
+    const unit = version <= 6 && Math.abs(sx - 1) < 1e-3 && Math.abs(sy - 1) < 1e-3 && Math.abs(m.b) < 1e-3 && Math.abs(m.c) < 1e-3;
+    const animated = (this.movie.root?.totalFrames ?? 1) > 1;
+    if (!style.smooth || unit || animated) return { ...shift(version <= 6 ? 0.5 + 1e-3 : 0.5 - 1e-3, rx, ry), nearest: true };
+    if (!(sx > 0 && sy > 0)) return { du: 0, dv: 0 };
+    const p = inverse.transformPoint(new DOMPoint(rx, ry));
+    return { du: 0.5 / sx - 0.5 + p.x, dv: 0.5 / sy - 0.5 + p.y };
   }
 
   // グラデーションかビットマップの塗りを、ctx の fillStyle にする（ctx の変換は、塗りの定義空間に合わせておく）。
   // 描けない（未定義・未復号のビットマップ）なら偽。
-  #paint(ctx, style, cx) {
+  #paint(ctx, style, cx, world) {
     if (style.type === 'bitmap') {
       const def = style.bitmap ?? this.movie.dictionary.get(style.bitmapId); // スクリプトが作ったビットマップは、直接持っている
       const source = def?.type === 'bitmap' && this.#bitmapSource(def, cx);
       if (!source) return false;
-      ctx.imageSmoothingEnabled = style.smooth;
+      const old = this.#oldSampling(ctx, style, world);
+      ctx.imageSmoothingEnabled = style.smooth && !old.nearest;
       ctx.globalAlpha = source.alpha;
       const blended = style.blendRight && !style.smooth && this.#blendRight(ctx, source.image);
       if (blended) {
@@ -433,12 +471,14 @@ export class CanvasRenderer {
         pattern.setTransform(new DOMMatrix([1 / blended.z, 0, 0, 1, 0, 0]));
         ctx.fillStyle = pattern;
       } else if (style.repeat) {
-        ctx.fillStyle = ctx.createPattern(source.image, 'repeat');
+        const pattern = ctx.createPattern(source.image, 'repeat');
+        if (old.du || old.dv) pattern.setTransform(new DOMMatrix([1, 0, 0, 1, old.du, old.dv]));
+        ctx.fillStyle = pattern;
       } else {
         // 繰り返さない塗りは、縁の画素を 1 画素外へ延ばした画像を使う。そのままだと縁が
         // 外側の透明と補間されて薄くなる（実機は範囲外を縁の色で埋める）。
         const pattern = ctx.createPattern(this.#padded(source.image), 'no-repeat');
-        pattern.setTransform(new DOMMatrix([1, 0, 0, 1, -1, -1]));
+        pattern.setTransform(new DOMMatrix([1, 0, 0, 1, old.du - 1, old.dv - 1]));
         ctx.fillStyle = pattern;
       }
       return true;
@@ -563,7 +603,7 @@ export class CanvasRenderer {
     target.globalCompositeOperation = 'source-in';
     target.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
     target.transform(space.a, space.b, space.c, space.d, space.e, space.f);
-    if (this.#paint(target, fill, cx)) {
+    if (this.#paint(target, fill, cx, m)) {
       const inverse = target.getTransform().inverse();
       const { width: w, height: h } = layer.canvas;
       const corners = [[0, 0], [w, 0], [0, h], [w, h]].map(([px, py]) => inverse.transformPoint(new DOMPoint(px, py)));
