@@ -31,7 +31,7 @@ function adler32(bytes) {
   return ((b << 16) | a) >>> 0;
 }
 
-export function installBytes(vm) {
+export function installBytes(vm, movie) {
   const c = vm.classes;
   const str = (v) => vm.toStr(v);
   const num = (v) => vm.toNumber(v);
@@ -51,9 +51,19 @@ export function installBytes(vm) {
 
   // --- ByteArray ---
   const B = (self) => self.bytes;
+  // バイナリデータ（DefineBinaryData）に結び付いたクラスのオブジェクトは、はじめは中身をキャラクタと共有している。
+  // メソッドで書き込むときは、先に自分の写しにする（添字での書き込みは、共有の中身に入る。実機で確認）。
+  const own = (b) => {
+    if (!b.shared) return;
+    vm.charge(b.data.length >> 3);
+    b.data = b.data.slice();
+    b.shared = false;
+    b.view = null;
+  };
   // 長さを n にする。縮めても中身は消さないので、縮めてから伸ばすと前の中身が見える（実機で確認）。
   const resize = (b, n) => {
     if (n > MAX_BYTES) vm.throwError('MemoryError', 1000, 'The system is out of memory.');
+    own(b);
     if (n > b.data.length) {
       const capacity = Math.min(Math.max(n, b.data.length * 2, 64), MAX_BYTES);
       vm.charge((capacity - b.data.length) >> 3);
@@ -73,6 +83,7 @@ export function installBytes(vm) {
   };
   // 書き込み: 現在位置から n バイトぶんの場所を用意して、位置を進める。書き始めの位置を返す。
   const room = (b, n) => {
+    own(b);
     if (b.position + n > b.length) resize(b, b.position + n);
     b.position += n;
     return b.position - n;
@@ -130,6 +141,7 @@ export function installBytes(vm) {
       const at = take(b, n);
       const chunk = b.data.slice(at, at + n); // 先に写しを取る（読み込み先が自分自身でもよいように）
       const start = vm.toUint32(offset);
+      own(to);
       if (start + n > to.length) resize(to, start + n);
       vm.step(n >> 6);
       to.data.set(chunk, start);
@@ -142,7 +154,7 @@ export function installBytes(vm) {
       if (start + n > from.length) vm.throwError('RangeError', 2006, 'The supplied index is out of bounds.');
       put(B(self), from.data.slice(start, start + n));
     },
-    clear: (self) => { Object.assign(B(self), { data: new Uint8Array(0), length: 0, position: 0, view: null }); },
+    clear: (self) => { Object.assign(B(self), { data: new Uint8Array(0), length: 0, position: 0, view: null, shared: false }); },
     toString: (self) => { const b = B(self); return decode(b.data.subarray(0, b.length)); },
     // 圧縮と展開。失敗したら IOError で、中身は変わらない。
     // 空のものは、どちらも何もしない。
@@ -191,7 +203,12 @@ export function installBytes(vm) {
   const output = vm.defineClass({ name: 'flash.utils::IDataOutput', base: null, isInterface: true });
   c.ByteArray = vm.defineClass({
     name: 'flash.utils::ByteArray', interfaces: [input, output],
-    allocate: (klass) => Object.assign(new ASObject(klass), { bytes: { data: new Uint8Array(0), length: 0, position: 0, little: false, view: null } }),
+    allocate: (klass) => {
+      let binary;
+      for (let k = klass; k && !binary; k = k.superClass) binary = movie?.linkedCharacter(k.name);
+      const data = binary?.type === 'binary' ? binary.data : null;
+      return Object.assign(new ASObject(klass), { bytes: { data: data ?? new Uint8Array(0), length: data?.length ?? 0, position: 0, little: false, view: null, shared: !!data } });
+    },
     construct: () => {},
     getters: {
       length: (self) => B(self).length, position: (self) => B(self).position, bytesAvailable: (self) => Math.max(0, B(self).length - B(self).position),

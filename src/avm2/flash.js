@@ -29,7 +29,7 @@ export function installFlash(vm, movie, types) {
   const report = (text) => movie.warn(`uncaught error: ${text}`);
 
   installUtils(vm);
-  installBytes(vm);
+  installBytes(vm, movie);
 
   // --- イベント ---
   c.Event = vm.defineClass({

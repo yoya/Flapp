@@ -1051,6 +1051,9 @@ export class Movie {
           const { buttonId, sounds } = parseDefineButtonSound(tag);
           const button = lib.dictionary.get(buttonId);
           if (button?.button) button.buttonSounds = sounds;
+        } else if (tag.code === 87 && tag.length >= 6) {
+          // DefineBinaryData: ID、予約（u32）、中身。AS3 のクラスに結び付けて、ByteArray として使う。
+          this.#define({ type: 'binary', id: tag.body[0] | (tag.body[1] << 8), data: new Uint8Array(tag.body.subarray(6)) }, lib); // 写しにする（Node の Buffer の slice は写さない）
         } else if (tag.code === 78) {
           // DefineScalingGrid: スプライト（ボタン）の 9 分割拡大の枠。描き方は描画側が決める。
           const r = new Reader(tag.body);

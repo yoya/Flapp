@@ -21,6 +21,7 @@
 //   「// field: name=名前 text=文字列 x=X y=Y」は、メインタイムラインの 1 フレーム目に、その名前のテキストフィールド
 //    （100×20 px、文字列は空白を含められない）を置く。
 //   「// sound: クラス名 seconds=秒」は、そのクラスに結び付いたサウンド（小さな音量の 440 Hz の音）を作る。
+//   「// binary: クラス名 text=文字列」は、そのクラスに結び付いたバイナリデータ（DefineBinaryData。中身は文字列の UTF-8、空白は含められない）を作る。
 //   「// unverified: 理由」は、実機と照合できないテスト。SWF の名前が as3x-*.swf になる（期待値は test/avm2.test.js に書く）。
 // スクリプトは有限回の trace で終わるように書く。
 import { execFileSync } from 'node:child_process';
@@ -128,6 +129,8 @@ function build(name) {
   };
   // サウンド（22050 Hz、16 ビットの PCM）。キャラクタ ID は 200 以降。
   const sounds = [...source.matchAll(/^\/\/ sound: (\w+)(?: seconds=([\d.]+))?/gm)].map((m, i) => ({ cls: m[1], seconds: Number(m[2] ?? 0.3), id: 200 + i }));
+  // バイナリデータ。キャラクタ ID は 300 以降。
+  const binaries = [...source.matchAll(/^\/\/ binary: (\w+) text=(\S+)/gm)].map((m, i) => ({ cls: m[1], text: m[2], id: 300 + i }));
   const timeline = (owner, count, shape) => {
     const mine = places.filter((p) => (p.in ?? doc) === owner);
     const tags = [];
@@ -189,8 +192,9 @@ ${members}
       ...sprites.map((sprite) => DefineSprite(sprite.id, sprite.frames, [...timeline(sprite.cls, sprite.frames, true), End()])),
       ...fields.map(editText),
       ...sounds.map((sound) => DefineSound(sound.id, 3, 22050, Math.round(22050 * sound.seconds), pcmBytes(tone(22050, sound.seconds)))),
+      ...binaries.map((binary) => tag(87, [...u16(binary.id), ...u32(0), ...utf8(binary.text)])),
       tag(82, [...u32(1), ...utf8('frame1'), 0, ...abc], true), // DoABC（遅延初期化）
-      tag(76, [...u16(sprites.length + sounds.length + 1), ...[...sprites, ...sounds].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8(doc), 0]), // SymbolClass: スプライト、サウンド、メインタイムライン
+      tag(76, [...u16(sprites.length + sounds.length + binaries.length + 1), ...[...sprites, ...sounds, ...binaries].flatMap((symbol) => [...u16(symbol.id), ...utf8(symbol.cls), 0]), ...u16(0), ...utf8(doc), 0]), // SymbolClass: スプライト、サウンド、バイナリデータ、メインタイムライン
       ...timeline(doc, frames, false), End(),
     ],
   }));

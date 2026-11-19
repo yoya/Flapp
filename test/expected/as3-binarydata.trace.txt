@@ -1,0 +1,5 @@
+12 0 12 bigEndian true true Blob
+Hello 5 44 Hello,Flapp!
+104 90 ZZllo,Flapp! 2 hello,Flapp!
+12 hello,Flapp! true
+3 xyz 0
