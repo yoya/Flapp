@@ -726,6 +726,38 @@ export const fixtures = {
   }),
   // クリップ層（マスク）。左上: 半透明の塗りと太い線を持つ丸で、深度 3〜4 を切り抜く（深度 5 は対象外）。
   // 右上: スプライト（正方形 2 つ）をマスクにする。下: マスクの範囲の中にもう 1 つマスクがある入れ子。
+  // 9 スライスの拡大（DefineScalingGrid）。枠（太い線つきの長方形）の四隅に赤い正方形、中央に青い正方形を置いたスプライトを、
+  // 縦横の拡大率を変えて置く。四隅は拡大されず、辺は一方向だけ、中央は両方向に引き伸ばされる。
+  // 右上は、入れ子のスプライト（緑の正方形）を持つもの。右下は、回転したもの。
+  'scale9': swf({
+    version: 8,
+    tags: [
+      SetBackgroundColor(0xee, 0xee, 0xee),
+      DefineShape({
+        id: 1, version: 3, bounds: [-40, 1240, -40, 840],
+        fills: [solid(255, 220, 120, 255), solid(220, 0, 0, 255), solid(0, 0, 220, 255)],
+        lines: [lineStyle(80, 0, 0, 0, 255)],
+        records: [
+          ...rectRecords(0, 0, 1200, 800, { fill0: 1, line: 1 }),
+          ...rectRecords(80, 80, 200, 200, { fill0: 2, line: 0 }), ...rectRecords(920, 80, 200, 200, { fill0: 2 }),
+          ...rectRecords(80, 520, 200, 200, { fill0: 2 }), ...rectRecords(920, 520, 200, 200, { fill0: 2 }),
+          ...rectRecords(500, 300, 200, 200, { fill0: 3 }),
+        ],
+      }),
+      square(3, 200, [0, 160, 0]),
+      DefineSprite(4, 1, [PlaceObject2({ depth: 1, id: 3 }), ShowFrame(), End()]),
+      DefineSprite(2, 1, [PlaceObject2({ depth: 1, id: 1 }), ShowFrame(), End()]),
+      DefineSprite(5, 1, [PlaceObject2({ depth: 1, id: 1 }), PlaceObject2({ depth: 2, id: 4, matrix: { tx: 500, ty: 300 } }), ShowFrame(), End()]),
+      tag(78, [...u16(2), ...rect(300, 900, 300, 500)]), // DefineScalingGrid: 枠の内側（中央の 600×200 twips）
+      tag(78, [...u16(5), ...rect(300, 900, 300, 500)]),
+      PlaceObject2({ depth: 1, id: 2, matrix: { a: 3, d: 1, tx: 200, ty: 200 } }), // 横に 3 倍
+      PlaceObject2({ depth: 2, id: 2, matrix: { a: 1, d: 3, tx: 200, ty: 1200 } }), // 縦に 3 倍
+      PlaceObject2({ depth: 3, id: 2, matrix: { a: 0.5, d: 0.25, tx: 1700, ty: 2700 } }), // 縮小（四隅の大きさの合計より小さくなる）
+      PlaceObject2({ depth: 4, id: 5, matrix: { a: 2, d: 1.5, tx: 2000, ty: 200 } }), // 入れ子のスプライトを持つもの
+      PlaceObject2({ depth: 5, id: 2, matrix: { a: 2 * COS45, b: 2 * COS45, c: -COS45, d: COS45, tx: 3600, ty: 1600 } }), // 回転
+      ShowFrame(), End(),
+    ],
+  }),
   mask: swf({
     version: 8,
     tags: [

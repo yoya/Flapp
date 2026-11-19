@@ -1051,6 +1051,11 @@ export class Movie {
           const { buttonId, sounds } = parseDefineButtonSound(tag);
           const button = lib.dictionary.get(buttonId);
           if (button?.button) button.buttonSounds = sounds;
+        } else if (tag.code === 78) {
+          // DefineScalingGrid: スプライト（ボタン）の 9 分割拡大の枠。描き方は描画側が決める。
+          const r = new Reader(tag.body);
+          const target = lib.dictionary.get(r.u16());
+          if (target?.type === 'sprite') target.scalingGrid = r.rect();
         } else if (tag.code === 9) {
           if (lib.main) this.backgroundColor ??= parseSetBackgroundColor(tag);
         } else if (SHAPE_TAGS.has(tag.code)) {

@@ -2,6 +2,11 @@
 //
 // マスク・ブレンド・フィルタは、対象を別のキャンバス（レイヤー）に描いてから合成する。
 //
+// 9 分割拡大（DefineScalingGrid）は、実機の画面から求めた規則で描く: クリップの範囲（線を含む）を枠で 9 つに分け、
+// 四隅は拡大せず、辺は一方向、中央は両方向に伸ばす。全体の大きさは普通に拡大したときと同じで、線幅は拡大しない。
+// 縮めて四隅が入りきらないときは、四隅を入りきる比率で縮める（中央は幅 0）。対象はクリップ直下の図形と描画 API の内容で、
+// 入れ子のクリップは普通に拡大する。倍率はステージから見たクリップの倍率で、回転や傾きがあるときは 9 分割せず普通に拡大する。
+//
 // 未対応: グラデーションの reflect / repeat と linearRGB、線のグラデーション・ビットマップ塗り、
 //         始端と終端で異なるキャップ、繰り返さないビットマップ塗りで画像から 1 画素より外側
 //         （実機は縁の色で埋めるが、ここでは透明）、透明なレイヤー上での subtract。
@@ -10,6 +15,7 @@ import { applyFilters } from './filters.js';
 
 const GRADIENT_HALF = 16384; // グラデーションは (-16384, -16384)〜(16384, 16384) の正方形で定義される
 const IDENTITY_CX = null;
+const IDENTITY = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
 // マスクは形だけを使うので、色とアルファによらず不透明に描く。
 const OPAQUE_CX = { rm: 256, gm: 256, bm: 256, am: 0, ra: 0, ga: 0, ba: 0, aa: 255 };
 const TINT_CACHE_SIZE = 8;
@@ -63,6 +69,8 @@ export class CanvasRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.compiled = new WeakMap(); // 描画命令の配列 → Path2D 化したもの
+    this.sliced = new WeakMap(); // 描画命令の配列 → 9 分割拡大の座標に移したもの { key, paths }
+    this.slice = null; // 9 分割拡大で描いているクリップ { clip, x, y, m }
     this.bitmaps = new WeakMap(); // ビットマップ定義 → 描画に使える画像
     this.tinted = new WeakMap(); // ビットマップ定義 → Map(色変換 → 変換済みの画像)
     this.padded = new WeakMap(); // 画像 → 縁を 1 画素延ばした画像
@@ -135,7 +143,7 @@ export class CanvasRenderer {
    */
   #rasterize(movie, d, m, width, height) {
     const sub = new CanvasRenderer(new OffscreenCanvas(width, height));
-    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded, blended: this.blended, decoding: this.decoding, decodes: this.decodes });
+    Object.assign(sub, { movie, scale: 1, compiled: this.compiled, sliced: this.sliced, bitmaps: this.bitmaps, tinted: this.tinted, padded: this.padded, blended: this.blended, decoding: this.decoding, decodes: this.decodes });
     sub.base = { a: m.a / 20, b: m.b / 20, c: m.c / 20, d: m.d / 20, tx: m.tx, ty: m.ty };
     sub.#drawContent(sub.ctx, d, sub.base, IDENTITY_CX, false);
     return sub.ctx.getImageData(0, 0, width, height).data;
@@ -239,11 +247,37 @@ export class CanvasRenderer {
 
   #drawContent(ctx, child, m, cx, mask) {
     if (child instanceof MovieClip) {
+      const outer = this.slice;
+      const grid = child.character?.scalingGrid;
+      const box = grid && child.bounds(IDENTITY);
+      const unit = Math.hypot(this.base.a, this.base.b);
+      const sx = Math.hypot(m.a, m.b) / unit;
+      const sy = Math.hypot(m.c, m.d) / unit;
+      if (box && sx > 0 && sy > 0 && m.b === 0 && m.c === 0) {
+        // 1 つの軸の写像: 範囲 lo..hi を、枠 a..b で 3 つに分ける。s は倍率。
+        const axis = (lo, hi, a, b, s) => {
+          a = Math.min(Math.max(a, lo), hi);
+          b = Math.min(Math.max(b, a), hi);
+          const fixed = a - lo + (hi - b);
+          const k = fixed > 0 ? Math.min(1, ((hi - lo) * s) / fixed) : 1;
+          const left = lo * s + (a - lo) * k;
+          const right = hi * s - (hi - b) * k;
+          return (v) => (v <= a ? lo * s + (v - lo) * k : v >= b ? hi * s - (hi - v) * k : left + ((v - a) * (right - left)) / (b - a));
+        };
+        this.slice = {
+          clip: child, key: `${sx},${sy},${box.xmin},${box.xmax},${box.ymin},${box.ymax}`,
+          x: axis(box.xmin, box.xmax, grid.xmin, grid.xmax, sx), y: axis(box.ymin, box.ymax, grid.ymin, grid.ymax, sy),
+          sx, sy, m: concat(m, { a: 1 / sx, b: 0, c: 0, d: 1 / sy, tx: 0, ty: 0 }),
+        };
+      } else this.slice = null;
       const drawn = child.drawingPaths(); // 描画 API で描いた内容は子の下
-      if (drawn) this.#drawShape(ctx, drawn, m, cx, mask);
+      if (drawn && this.slice) this.#drawShape(ctx, this.#sliced(drawn, IDENTITY), this.slice.m, cx, mask);
+      else if (drawn) this.#drawShape(ctx, drawn, m, cx, mask);
       this.#drawChildren(ctx, child.sortedChildren(), 0, Infinity, m, cx, mask);
+      this.slice = outer;
     } else if (child.character.type === 'shape') {
-      this.#drawShape(ctx, child.character.paths, m, cx, mask);
+      if (this.slice?.clip === child.parent) this.#drawShape(ctx, this.#sliced(child.character.paths, child.matrix), this.slice.m, cx, mask);
+      else this.#drawShape(ctx, child.character.paths, m, cx, mask);
     } else if (child.character.type === 'edittext' || child.character.type === 'video') {
       this.#drawShape(ctx, child.paths(), m, cx, mask);
     } else if (child.character.type === 'morph') {
@@ -315,6 +349,25 @@ export class CanvasRenderer {
     });
     this.compiled.set(paths, ops);
     return ops;
+  }
+
+  // 図形の描画命令を、行列 matrix でクリップの座標へ移してから、9 分割拡大の写像（this.slice）で移す。
+  // 塗りのグラデーションとビットマップは、普通に拡大したときと同じ向きと大きさにする。
+  #sliced(paths, matrix) {
+    const { x, y, sx, sy } = this.slice;
+    const key = `${this.slice.key},${matrix.a},${matrix.b},${matrix.c},${matrix.d},${matrix.tx},${matrix.ty}`;
+    const cached = this.sliced.get(paths);
+    if (cached?.key === key) return cached.paths;
+    const point = (px, py) => [x(matrix.a * px + matrix.c * py + matrix.tx), y(matrix.b * px + matrix.d * py + matrix.ty)];
+    const result = paths.map((op) => {
+      if (op.kind === 'text') return op;
+      const path = op.path.map((cmd) =>
+        cmd[0] === 'M' || cmd[0] === 'L' ? [cmd[0], ...point(cmd[1], cmd[2])] : cmd[0] === 'Q' ? ['Q', ...point(cmd[1], cmd[2]), ...point(cmd[3], cmd[4])] : cmd);
+      const style = op.style.matrix ? { ...op.style, matrix: concat({ a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0 }, concat(matrix, op.style.matrix)) } : op.style;
+      return { ...op, path, style };
+    });
+    this.sliced.set(paths, { key, paths: result });
+    return result;
   }
 
   #drawShape(ctx, paths, m, cx, mask) {
