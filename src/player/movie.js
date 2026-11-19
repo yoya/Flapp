@@ -1309,7 +1309,7 @@ export class TextField extends DisplayObject {
     this.text = text.replace(/\r\n|\n/g, '\r'); // 改行は CR で持つ
     this.format = { ...this.newFormat };
     this.changed();
-    if (fromScript && this.variable) this.#variable(this.text);
+    if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text); // SWF 5 以前の変数はバイト列
   }
 
   /** 変数 name と連動させる（null で解除）。initial が真（定義で指定された場合）なら、変数が未定義のときに今の文字列を変数へ入れる。 */
@@ -1320,7 +1320,7 @@ export class TextField extends DisplayObject {
       return;
     }
     this.movie.boundFields.add(this);
-    if (initial && this.#variable() === undefined) this.#variable(this.text);
+    if (initial && this.#variable() === undefined) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
     else this.pull();
   }
 
@@ -1329,7 +1329,9 @@ export class TextField extends DisplayObject {
     if (!this.variable) return;
     const value = this.#variable();
     if (value === undefined) return;
-    const text = toStr(this.movie.avm, value).replace(/\r\n|\n/g, '\r');
+    let text = toStr(this.movie.avm, value);
+    if (this.movie.legacy) text = this.movie.legacy.decode(text); // SWF 5 以前の変数はバイト列。表示は文字コードで直す
+    text = text.replace(/\r\n|\n/g, '\r');
     if (text !== this.text) {
       this.text = text;
       this.changed();

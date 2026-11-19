@@ -123,3 +123,12 @@ test('テキストは置ける。フォントは置けない', async () => {
   ]);
   assert.equal(movie.dictionary.get(1).type, 'font');
 });
+
+test('SWF 4 の変数連動テキスト: 変数のバイト列を、指定の文字コードで表示する', async () => {
+  const movie = await Movie.load(fixtures['as-swf4-edittext-sjis'], { encoding: 'shift_jis' });
+  movie.advance();
+  const shown = [];
+  const walk = (c) => { if (c.variable) shown.push(c.text); for (const [, child] of c.children ?? []) walk(child); };
+  walk(movie.root);
+  assert.deepEqual(shown, ['あい', 'アヂ']); // 実機の画面と同じ（定義の初期値も、スクリプトが入れた値も）
+});

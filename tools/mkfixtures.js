@@ -377,7 +377,7 @@ function DefineEditText({ id, bounds, fontId, height, color, text, multiline, wo
     ...color,
     align, ...u16(0), ...u16(0), ...u16(0), ...u16(leading & 0xffff), // 左右の余白、字下げ、行間
     ...cstr(variable), // 連動する変数の名前（無ければ空）
-    ...cstr(text),
+    ...(Array.isArray(text) ? [...text, 0] : cstr(text)), // バイト列で渡すと、そのまま入れる（SWF 5 以前の Shift-JIS など）
   ]);
 }
 
@@ -1513,6 +1513,21 @@ Object.assign(fixtures, {
       ]),
       ShowFrame(),
       DoAction([tr('frame 3: one=[', variable('one'), ']'), Stop]),
+      ShowFrame(), End(),
+    ],
+  }),
+  // 変数と連動するテキストフィールドに、Shift-JIS のバイト列が入っているとき。変数はバイト列のまま（長さはバイト数）で、
+  // 画面には Shift-JIS の文字として出る。画面の確認は test/text.test.js（trace では見えない）。
+  'as-swf4-edittext-sjis': swf({
+    version: 4, frames: 2,
+    tags: [
+      DefineEditText({ id: 1, bounds: [0, 2000, 0, 400], height: 240, color: [0, 0, 0, 255], text: SJIS.ai, variable: 'one' }),
+      DefineEditText({ id: 2, bounds: [0, 2000, 0, 400], height: 240, color: [0, 0, 0, 255], text: 'x', variable: 'two' }),
+      DoAction([PushString('two'), bytes([...SJIS.kanaA, ...SJIS.kanaDi]), SetVariable]),
+      PlaceObject2({ depth: 1, id: 1, matrix: { tx: 200, ty: 200 } }),
+      PlaceObject2({ depth: 2, id: 2, matrix: { tx: 200, ty: 800 } }),
+      ShowFrame(),
+      DoAction([...variable('one'), [0x14], ...Trace(), ...variable('two'), [0x14], ...Trace(), ...variable('two'), [0x31], ...Trace(), Stop]),
       ShowFrame(), End(),
     ],
   }),
