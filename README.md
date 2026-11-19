@@ -1,6 +1,6 @@
 # Flapp
 
-Claude に Flash 仕様を渡して生成した Flash Player です。
+Claude Code に Flash 仕様書を渡して生成された Flash Player です。
 JavaScript で動きます。
 
 # 機能
