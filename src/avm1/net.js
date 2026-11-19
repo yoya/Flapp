@@ -4,7 +4,7 @@
 // スクリプトには「読み込みに失敗した」と伝える。実機で存在しないファイルを指定したときと同じ流れになる。
 import { toStr } from './convert.js';
 import { defineClass, defineMethods } from './globals.js';
-import { AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM } from './object.js';
+import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM } from './object.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
 
@@ -33,12 +33,24 @@ export function installNet(vm) {
     vm.decodeVariables(clip, text);
     callMethod(clip, 'onData', []);
   };
-  // getURL / loadVariables にメソッド（GET / POST）を指定したときに送る、クリップの変数（"a=1&b=2" の形）。
-  // 関数と、子のクリップなどの表示オブジェクトは送らない。
+  // getURL / loadVariables にメソッド（GET / POST）を指定したときに送る、クリップの変数（"a=1&b=2" の形）。実機で確認した規則:
+  // 子のクリップなどの表示オブジェクトと $version は送らない。関数は "[type Function]" として送る。作った順に並べる
+  // （for..in や LoadVars の送信とは逆）。空白は + にする（LoadVars は %20）。
+  const formEscape = (v) => escape(v).replace(/%20/g, '+');
   vm.clipVariables = (clip) => clip.ownKeys().filter((key) => {
     const v = clip.get(key);
-    return !(v instanceof AVMFunction) && !(v instanceof AVMObject && (v.isMovieClip || v.isTextField || v.isVideo));
-  }).map((key) => `${escape(key)}=${escape(clip.get(key))}`).join('&');
+    return key !== '$version' && !(v instanceof AVMObject && !(v instanceof AVMFunction) && (v.isMovieClip || v.isTextField || v.isVideo));
+  }).reverse().map((key) => `${formEscape(key)}=${formEscape(clip.get(key))}`).join('&');
+  // addRequestHeader(名前, 値)、または addRequestHeader(["名前", "値", "名前", "値", ...])。同じ名前は、後のものが勝つ。
+  // 追加のヘッダは POST のときだけ送られる（実機で確認）。ここでは、名前の小文字 → { name, value } の Map に控える。
+  vm.addRequestHeader = (self, [name, value]) => {
+    if (!(self instanceof AVMObject)) return;
+    self.requestHeaders ??= new Map();
+    const pairs = [];
+    if (name instanceof AVMArray) for (let i = 0; i + 1 < name.items.length; i += 2) pairs.push([name.items[i], name.items[i + 1]]);
+    else if (name !== undefined) pairs.push([name, value]);
+    for (const [n, v] of pairs) self.requestHeaders.set(toStr(vm, n).toLowerCase(), { name: toStr(vm, n), value: toStr(vm, v) });
+  };
   // "a=1&b=2" の形にする。新しいプロパティが先（for..in と同じ順）。
   const encodeVariables = (obj) => obj.ownKeys().map((key) => `${escape(key)}=${escape(obj.get(key))}`).join('&');
   // 読み込みを始める。読み込みはホストに任せる（ホストが読まなければ、次のフレームで失敗を伝える）。
@@ -50,13 +62,14 @@ export function installNet(vm) {
     const body = sender instanceof AVMObject ? encodeVariables(sender) : '';
     const contentType = sender instanceof AVMObject ? toStr(vm, sender.get('contentType')) : undefined;
     self.bytesTotal = undefined;
-    vm.loadText({ url: toStr(vm, url), method, body, contentType }, (text, size) => {
+    vm.loadText({ url: toStr(vm, url), method, body, contentType, question: sender instanceof AVMObject, headers: sender?.requestHeaders }, (text, size) => {
       if (text !== undefined) self.bytesLoaded = self.bytesTotal = size;
       callMethod(self, 'onData', [text]);
     });
     return true;
   };
   defineMethods(vm, loadVarsProto, {
+    addRequestHeader: (_, self, args) => { vm.addRequestHeader(self, args); },
     load: (_, self, [url]) => startLoad(self, url, ''),
     // send: 中身を付けて、その URL へ移動する（移動はホストに任せる）。
     send: (_, self, [url, target, method]) => {

@@ -231,11 +231,11 @@
         else window.open(to.href, where, 'noopener');
       },
       // 読み込み: 結果のバイト列を返す。読めなければ null（スクリプトには失敗として伝わる）。
-      async load({ url, method, data, contentType }) {
+      async load({ url, method, data, contentType, headers }) {
         const from = resolve(url);
         if (!from) return null;
         try {
-          const res = await fetch(from, { method, body: data ?? undefined, headers: data && contentType ? { 'Content-Type': contentType } : undefined });
+          const res = await fetch(from, { method, body: data ?? undefined, headers: { ...(data && contentType ? { 'Content-Type': contentType } : {}), ...(headers ?? {}) } });
           if (!res.ok) trace(`[load] ${from.href}: HTTP ${res.status}`);
           return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
         } catch (e) {

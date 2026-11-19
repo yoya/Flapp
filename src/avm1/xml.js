@@ -192,10 +192,11 @@ export function installXML(vm) {
     self.define('loaded', false, HIDDEN);
     const body = sender && data(sender) ? toStr(vm, sender) : '';
     const contentType = sender && data(sender) ? toStr(vm, sender.get('contentType')) : undefined;
-    vm.loadText({ url: toStr(vm, url), method, body, contentType }, (text) => callMethod(self, 'onData', [text]));
+    vm.loadText({ url: toStr(vm, url), method, body, contentType, headers: sender?.requestHeaders }, (text) => callMethod(self, 'onData', [text]));
     return true;
   };
   defineMethods(vm, xmlProto, {
+    addRequestHeader: (_, self, args) => { vm.addRequestHeader(self, args); },
     parseXML: (_, self, [text]) => { if (data(self)) parse(self, toStr(vm, text), data(self).ignoreWhite ?? false); },
     createElement: (_, __, [name]) => newNode(1, toStr(vm, name)),
     createTextNode: (_, __, [text]) => newNode(3, toStr(vm, text)),

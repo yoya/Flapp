@@ -120,8 +120,8 @@ test('getURL は要求を記録し、移動はホストの network.navigate に�
   assert.deepEqual(seen, ['http://example.com/a', 'next.swf', 'http://example.com/b', 'FSCommand:quit', 'other.swf']);
   assert.deepEqual(navigated, [
     { kind: 'getURL', url: 'http://example.com/a', target: '_blank', method: '', data: '' },
-    // 変数は for..in と同じもの（実機の for..in でも、ルートには $version が出る）。
-    { kind: 'getURL', url: 'http://example.com/b', target: '_self', method: 'GET', data: 'greeting=hi%20there&%24version=MAC%2035%2C0%2C0%2C61' },
+    // 送る変数は、作った順（for..in とは逆）で、空白は + にする。ルートの $version は送らない（loadVariablesNum の GET で実機に確認）。
+    { kind: 'getURL', url: 'http://example.com/b', target: '_self', method: 'GET', data: 'greeting=hi+there' },
   ]);
   // ホストが network を渡していなければ、何も起きない（要求の記録だけ）。
   const quiet = await movieWith([[getURL]]);
@@ -203,7 +203,7 @@ test('LoadVars / XML の送信と、変数を付けた getURL / loadVariables �
     'load POST echo.txt [score=12&user=yo%20ya] application/x-www-form-urlencoded', // sendAndLoad: 中身を本文にして送る
     'navigate POST http://example.com/form _blank [score=12&user=yo%20ya]', // send: 中身を付けて移動する
     'load POST xml-echo.txt [<a b="1">x</a>] application/x-www-form-urlencoded',
-    'navigate GET http://example.com/page _self [count=3&greeting=hi%20there&an]', // getURL(…, "GET"): ルートの変数を付ける
+    'navigate GET http://example.com/page _self [form=score%3D12%26user%3Dyo%25]', // getURL(…, "GET"): ルートの変数を作った順に付ける（先頭は form。LoadVars は toString の文字列）
     'load GET next.swf [] null', // getURL(…, "_level1") は、レベルへの読み込み
     'load POST vars.txt [color=red] application/x-www-form-urlencoded', // box.loadVariables(…, "POST"): box の変数を送る
   ]);

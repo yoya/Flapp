@@ -195,16 +195,22 @@ export class AVM1 {
   /**
    * 文字のデータを読み込む（LoadVars、XML、loadVariables 用）。要求を記録して、ホストに読み込みを頼む。
    * done(文字列 | undefined, バイト数) を、後のフレームの処理の中で呼ぶ（読めなければ undefined）。
-   * body は送る本文（文字列）。GET で送るときは、URL の後ろに付ける。
+   * body は送る本文（文字列）。GET で送るときは、URL の後ろに付ける（URL に ? があれば &、無ければ ?）。
+   * question が真なら、URL に ? があっても、本文が空でも、? を付けて続ける（LoadVars.sendAndLoad の GET。実機で確認）。
+   * headers は、POST で送る追加のヘッダ（addRequestHeader。名前の小文字 → { name, value } の Map）。Content-Type があれば、それが優先される。
    */
-  loadText({ kind = 'loadVariables', url, target = '', method = '', body = '', contentType = 'application/x-www-form-urlencoded' }, done) {
+  loadText({ kind = 'loadVariables', url, target = '', method = '', body = '', contentType = 'application/x-www-form-urlencoded', question = false, headers = null }, done) {
     this.request({ kind, url, target, method });
     const post = method.toUpperCase() === 'POST';
-    const address = !post && body ? `${url}${url.includes('?') ? '&' : '?'}${body}` : url;
+    const address = !post && question ? `${url}?${body}` : !post && body ? `${url}${url.includes('?') ? '&' : '?'}${body}` : url;
+    const extra = {};
+    if (post && headers) for (const { name, value } of headers.values()) extra[name] = value;
+    const typeHeader = Object.keys(extra).find((name) => name.toLowerCase() === 'content-type');
+    if (typeHeader) { contentType = extra[typeHeader]; delete extra[typeHeader]; }
     // SWF 5 以前の文字列は、バイト列をそのまま 1 文字ずつにしたもの。SWF 6 以降は UTF-8。
     const encode = (text) => (this.legacy ? Uint8Array.from(text, (ch) => ch.charCodeAt(0) & 0xff) : new TextEncoder().encode(text));
     const decode = (bytes) => (this.legacy ? Array.from(bytes, (b) => String.fromCharCode(b)).join('') : decoder.decode(bytes).replace(/^\uFEFF/, ''));
-    this.load({ url: address, method: post ? 'POST' : 'GET', data: post ? encode(body) : null, contentType: post ? contentType : null }, (bytes) => done(bytes ? decode(bytes) : undefined, bytes?.length ?? 0));
+    this.load({ url: address, method: post ? 'POST' : 'GET', data: post ? encode(body) : null, contentType: post ? contentType : null, headers: Object.keys(extra).length ? extra : undefined }, (bytes) => done(bytes ? decode(bytes) : undefined, bytes?.length ?? 0));
   }
 
   /** 処理を予約する。次のフレームのスクリプトが済んだ後に実行される（実機で読み込みの失敗が届く時機）。 */

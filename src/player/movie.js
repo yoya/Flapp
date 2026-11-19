@@ -152,9 +152,11 @@ export class Movie {
    *   network: 移動と通信を、ホストに任せるための関数（省略すると、どちらも行わない。要求は記録だけして、読み込みは
    *             失敗として伝える）。プレイヤーは自分では通信しない。SWF を信用するか、どの URL を許すかは、ホストが決める。
    *             navigate: ({ url, target, method, data }) => void   getURL / navigateToURL などによる移動
-   *             load: ({ url, method, data, contentType }) => Uint8Array | ArrayBuffer | null（または、その Promise）
+   *             load: ({ url, method, data, contentType, headers }) => Uint8Array | ArrayBuffer | null（または、その Promise）
    *                   LoadVars / XML / loadVariables / URLLoader のデータ、loadMovie / MovieClipLoader / Loader の画像と SWF、
-   *                   loadSound / Sound.load の MP3 の読み込み。data は送る本文（Uint8Array か null）。
+   *                   loadSound / Sound.load の MP3 の読み込み。data は送る本文（Uint8Array か null）。headers は、スクリプトが
+   *                   足したヘッダ（addRequestHeader、URLRequest.requestHeaders。{ 名前: 値 }、無ければ undefined）。
+   *                   AS3 の URL は、実機と同じ規則で escape した文字列（空白・非 ASCII・% などを含むとき）で渡す。
    *                   読めなければ null を返す（スクリプトには、読み込みの失敗として伝わる）
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
