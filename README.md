@@ -9,7 +9,7 @@ SWF ファイルを読み込んで、ブラウザの Canvas に再生します�
 
 - **ファイル**: 無圧縮、zlib 圧縮 (CWS)、LZMA 圧縮 (ZWS) の SWF
 - **表示**: 図形（単色・グラデーション・ビットマップの塗りと線）、ビットマップ、モーフ、文字（静的なテキストとテキストフィールド）、
-  ボタン、マスク、ブレンド、フィルタ（ぼかし・影・光彩・色行列）
+  ボタン、マスク、ブレンド、9 分割拡大、シーン、フィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み）
 - **スクリプト**: ActionScript 1 / 2 (AVM1) と ActionScript 3 (AVM2)
 - **音**: イベント音とストリーム音（PCM、ADPCM、MP3）
 - **ビデオ**: SWF に埋め込まれたビデオと FLV ファイル（Sorenson H.263、Screen Video、VP6 とアルファ付きの VP6。FLV では Screen Video v2 も。
@@ -32,7 +32,8 @@ SWF は信用できない入力として扱います。
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
 - テキストフィールドへの文字入力、範囲ごとの書式
-- ベベル、グラデーション光彩、畳み込みのフィルタ
+- スクリプトから作るフィルタ（`flash.filters` のクラス）と、描画 API のグラデーションの塗り（`beginGradientFill` など）
+- 共有ライブラリ（`ImportAssets`）
 
 # 使い方
 
