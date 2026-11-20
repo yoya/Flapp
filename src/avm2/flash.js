@@ -13,7 +13,7 @@ import { installNet } from './net.js';
 import { installStdlib } from './stdlib.js';
 import { installText } from './text.js';
 import { installVideo } from './video.js';
-import { ASArray, ASClass, ASFunction, ASObject, publicKey } from './object.js';
+import { ASArray, ASClass, ASFunction, ASObject, ASVector, publicKey } from './object.js';
 import { installUtils } from './utils.js';
 
 const DEG = 180 / Math.PI;
@@ -548,7 +548,7 @@ export function installFlash(vm, movie, types) {
     return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: Math.round(Math.min(Math.max(a, 0), 1) * 255) };
   };
   // new Graphics() で直接作ったもの（描き先が無い）への描画は、何もしない。
-  const nowhere = { clear() {}, lineStyle() {}, lineGradient() {}, beginFill() {}, beginStyle() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {} };
+  const nowhere = { clear() {}, lineStyle() {}, lineGradient() {}, beginFill() {}, beginStyle() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {}, cubicTo() {}, setWinding() {} };
   const G = (self) => self.display?.drawing?.() ?? nowhere;
   // 楕円は、実機と同じく 8 本の 2 次ベジェ曲線で描く。
   const ellipse = (g, cx, cy, rx, ry) => {
@@ -618,6 +618,37 @@ export function installFlash(vm, movie, types) {
     }
     return style;
   };
+  // beginBitmapFill / lineBitmapStyle の塗り。行列はビットマップの画素から描く座標（px）へ。省略すると、原点に等倍で置く。
+  // 既定は繰り返しあり・補間なし。ビットマップは参照で持つので、あとで画素を変えると、塗りも変わる（実機で確認）。
+  const bitmapStyleOf = (bitmap, matrix, repeat, smooth) => {
+    if (!(bitmap instanceof ASObject) || !bitmap.klass?.isSubclassOf?.(c.BitmapData)) vm.throwError('TypeError', 2007, 'Parameter bitmap must be non-null.');
+    const field = (name, otherwise) => (matrix instanceof ASObject ? num(matrix.values.get(publicKey(name))) : otherwise);
+    return {
+      type: 'bitmap', bitmap: bitmap.bitmap,
+      matrix: { a: field('a', 1) * 20, b: field('b', 0) * 20, c: field('c', 0) * 20, d: field('d', 1) * 20, tx: field('tx', 0) * 20, ty: field('ty', 0) * 20 },
+      repeat: repeat === undefined || repeat === null ? true : vm.toBoolean(repeat), smooth: smooth === undefined || smooth === null ? false : vm.toBoolean(smooth),
+    };
+  };
+  const get = (obj, name) => obj.values.get(publicKey(name));
+  // drawPath: 命令（1 moveTo、2 lineTo、3 curveTo、4 wideMoveTo、5 wideLineTo、6 cubicCurveTo。wide は前の 2 つの値を飛ばす）。
+  // 知らない命令は飛ばす。データが足りなければ ArgumentError #2004、winding が evenOdd と nonZero 以外なら #2008（実機で確認）。
+  const PATH_DATA = { 1: 2, 2: 2, 3: 4, 4: 4, 5: 4, 6: 6 };
+  const drawPath = (g, commands, data, winding) => {
+    const w = winding === null || winding === undefined ? 'evenOdd' : str(winding);
+    if (w !== 'evenOdd' && w !== 'nonZero') vm.throwError('ArgumentError', 2008, 'Parameter winding must be one of the accepted values.');
+    if (!(commands instanceof ASVector) || !(data instanceof ASVector)) return;
+    const cmds = commands.items.map((v) => vm.toInt32(v)), d = data.items.map(num);
+    if (cmds.reduce((n, cmd) => n + (PATH_DATA[cmd] ?? 0), 0) > d.length) vm.throwError('ArgumentError', 2004, 'One of the parameters is invalid.');
+    g.setWinding(w === 'evenOdd');
+    let i = 0;
+    const p = () => d[i++] * 20;
+    for (const cmd of cmds) {
+      if (cmd === 1) g.moveTo(p(), p());
+      else if (cmd === 2) g.lineTo(p(), p());
+      else if (cmd === 3) g.curveTo(p(), p(), p(), p());
+      else if (cmd === 4) { i += 2; g.moveTo(p(), p()); } else if (cmd === 5) { i += 2; g.lineTo(p(), p()); } else if (cmd === 6) g.cubicTo(p(), p(), p(), p(), p(), p());
+    }
+  };
   c.Graphics = vm.defineClass({
     name: 'flash.display::Graphics', final: true,
     methods: {
@@ -632,7 +663,33 @@ export function installFlash(vm, movie, types) {
       beginFill: (self, [color, alpha]) => { G(self).beginFill(rgba(color, alpha)); },
       beginGradientFill: (self, args) => { G(self).beginStyle(gradientOf(...args)); },
       lineGradientStyle: (self, args) => { G(self).lineGradient(gradientOf(...args)); },
+      beginBitmapFill: (self, [bitmap, matrix, repeat, smooth]) => { G(self).beginStyle(bitmapStyleOf(bitmap, matrix, repeat, smooth)); },
+      lineBitmapStyle: (self, [bitmap, matrix, repeat, smooth]) => { G(self).lineGradient(bitmapStyleOf(bitmap, matrix, repeat, smooth)); },
       endFill: (self) => { G(self).endFill(); },
+      cubicCurveTo: (self, [c1x, c1y, c2x, c2y, x, y]) => { G(self).cubicTo(num(c1x) * 20, num(c1y) * 20, num(c2x) * 20, num(c2y) * 20, num(x) * 20, num(y) * 20); },
+      drawPath: (self, [commands, data, winding = 'evenOdd']) => { drawPath(G(self), commands, data, winding); },
+      // 並びの中の塗り・線・パスを、順に描く。知らないもの（三角形・シェーダ）は飛ばす。
+      drawGraphicsData: (self, [list]) => {
+        if (!(list instanceof ASVector)) return;
+        const g = G(self);
+        const is = (o, name) => o instanceof ASObject && o.klass === c[name];
+        const fillStyle = (f) => (is(f, 'GraphicsSolidFill') ? { type: 'solid', color: rgba(get(f, 'color'), get(f, 'alpha')) }
+          : is(f, 'GraphicsGradientFill') ? gradientOf(get(f, 'type'), get(f, 'colors'), get(f, 'alphas'), get(f, 'ratios'), get(f, 'matrix'), get(f, 'spreadMethod'), get(f, 'interpolationMethod'), get(f, 'focalPointRatio'))
+            : is(f, 'GraphicsBitmapFill') && get(f, 'bitmapData') ? bitmapStyleOf(get(f, 'bitmapData'), get(f, 'matrix'), get(f, 'repeat'), get(f, 'smooth')) : null);
+        for (const item of list.items) {
+          if (is(item, 'GraphicsPath')) drawPath(g, item.gp.commands, item.gp.data, item.gp.winding);
+          else if (is(item, 'GraphicsEndFill')) g.endFill();
+          else if (is(item, 'GraphicsStroke')) {
+            const w = num(get(item, 'thickness'));
+            if (Number.isNaN(w)) { g.lineStyle(undefined); continue; }
+            const fill = get(item, 'fill'), style = fillStyle(fill);
+            g.lineStyle(Math.min(Math.max(w, 0), 255) * 20, style?.type === 'solid' ? style.color : rgba(0, 1), lineOptions({
+              pixelHinting: vm.toBoolean(get(item, 'pixelHinting')), scaleMode: str(get(item, 'scaleMode')), caps: str(get(item, 'caps')), joints: str(get(item, 'joints')), miterLimit: num(get(item, 'miterLimit')),
+            }));
+            if (style && style.type !== 'solid') g.lineGradient(style);
+          } else if (item instanceof ASObject) { const style = fillStyle(item); if (style || is(item, 'GraphicsBitmapFill')) g.beginStyle(style); }
+        }
+      },
       moveTo: (self, [x, y]) => { G(self).moveTo(num(x) * 20, num(y) * 20); },
       lineTo: (self, [x, y]) => { G(self).lineTo(num(x) * 20, num(y) * 20); },
       curveTo: (self, [cx, cy, x, y]) => { G(self).curveTo(num(cx) * 20, num(cy) * 20, num(x) * 20, num(y) * 20); },
@@ -660,6 +717,51 @@ export function installFlash(vm, movie, types) {
       drawEllipse: (self, [x, y, w, h]) => { ellipse(G(self), num(x) + num(w) / 2, num(y) + num(h) / 2, num(w) / 2, num(h) / 2); },
     },
   });
+  // --- drawGraphicsData の材料（IGraphicsData）。既定値は実機で確認 ---
+  const iface = (name) => vm.classByName(`flash.display::${name}`);
+  const plainData = (name, fields, interfaces) => (c[name] = vm.defineClass({
+    name: `flash.display::${name}`, final: true, interfaces: interfaces.map(iface),
+    slots: Object.fromEntries(fields.map(([key, initial]) => [key, initial])),
+    construct: (self, args) => { fields.forEach(([key, initial, convert], i) => self.values.set(publicKey(key), args[i] === undefined ? initial : convert(args[i]))); },
+  }));
+  const wordOrNull = (v) => (v === null || v === undefined ? null : str(v));
+  plainData('GraphicsSolidFill', [['color', 0, (v) => vm.toUint32(v)], ['alpha', 1, num]], ['IGraphicsData', 'IGraphicsFill']);
+  plainData('GraphicsEndFill', [], ['IGraphicsData', 'IGraphicsFill']);
+  plainData('GraphicsBitmapFill', [['bitmapData', null, same], ['matrix', null, same], ['repeat', true, bool], ['smooth', false, bool]], ['IGraphicsData', 'IGraphicsFill']);
+  plainData('GraphicsGradientFill', [['type', 'linear', wordOrNull], ['colors', null, same], ['alphas', null, same], ['ratios', null, same], ['matrix', null, same], ['spreadMethod', 'pad', same], ['interpolationMethod', 'rgb', wordOrNull], ['focalPointRatio', 0, num]], ['IGraphicsData', 'IGraphicsFill']);
+  plainData('GraphicsStroke', [['thickness', NaN, num], ['pixelHinting', false, bool], ['scaleMode', 'normal', wordOrNull], ['caps', 'none', wordOrNull], ['joints', 'round', wordOrNull], ['miterLimit', 3, num], ['fill', null, same]], ['IGraphicsData', 'IGraphicsStroke']);
+  plainData('GraphicsTrianglePath', [['vertices', null, same], ['indices', null, same], ['uvtData', null, same], ['culling', 'none', wordOrNull]], ['IGraphicsData', 'IGraphicsPath']);
+  vm.defineClass({ name: 'flash.display::GraphicsPathCommand', final: true, staticValues: { NO_OP: 0, MOVE_TO: 1, LINE_TO: 2, CURVE_TO: 3, WIDE_MOVE_TO: 4, WIDE_LINE_TO: 5, CUBIC_CURVE_TO: 6 } });
+  vm.defineClass({ name: 'flash.display::GraphicsPathWinding', final: true, staticValues: { EVEN_ODD: 'evenOdd', NON_ZERO: 'nonZero' } });
+  // GraphicsPath: 命令とデータの Vector（無ければ null。moveTo などで足すときに作る）と、winding（evenOdd か nonZero。ほかは #2008）。
+  const pathWinding = (v) => {
+    const w = str(v);
+    if (w !== 'evenOdd' && w !== 'nonZero') vm.throwError('ArgumentError', 2008, 'Parameter winding must be one of the accepted values.');
+    return w;
+  };
+  const push = (self, cmd, ...values) => {
+    const gp = self.gp;
+    gp.commands ??= new ASVector(vm.applyType(c.Vector, [c.int]), []);
+    gp.data ??= new ASVector(vm.applyType(c.Vector, [c.Number]), []);
+    gp.commands.items.push(cmd);
+    gp.data.items.push(...values.map(num));
+  };
+  c.GraphicsPath = vm.defineClass({
+    name: 'flash.display::GraphicsPath', final: true, interfaces: [iface('IGraphicsData'), iface('IGraphicsPath')],
+    allocate: (klass) => Object.assign(new ASObject(klass), { gp: { commands: null, data: null, winding: 'evenOdd' } }),
+    construct: (self, [commands = null, data = null, winding = 'evenOdd']) => { Object.assign(self.gp, { commands, data, winding: pathWinding(winding) }); },
+    getters: { commands: (self) => self.gp.commands, data: (self) => self.gp.data, winding: (self) => self.gp.winding },
+    setters: { commands: (self, v) => { self.gp.commands = v; }, data: (self, v) => { self.gp.data = v; }, winding: (self, v) => { self.gp.winding = pathWinding(v); } },
+    methods: {
+      moveTo: (self, [x, y]) => push(self, 1, x, y),
+      lineTo: (self, [x, y]) => push(self, 2, x, y),
+      curveTo: (self, [cx, cy, x, y]) => push(self, 3, cx, cy, x, y),
+      wideMoveTo: (self, [x, y]) => push(self, 4, 0, 0, x, y),
+      wideLineTo: (self, [x, y]) => push(self, 5, 0, 0, x, y),
+      cubicCurveTo: (self, [c1x, c1y, c2x, c2y, x, y]) => push(self, 6, c1x, c1y, c2x, c2y, x, y),
+    },
+  });
+
   const graphics = (self) => {
     if (!self.graphics) {
       self.graphics = new ASObject(c.Graphics);

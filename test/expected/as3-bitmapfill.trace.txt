@@ -1,0 +1,18 @@
+null bitmap ERR 2007
+disposed ok
+line null bitmap ERR 2007
+drawPath null ok
+drawPath short data ERR 2004
+drawPath bad winding ERR 2008
+drawPath bad command ok
+drawGraphicsData null ok
+GraphicsPath defaults ||evenOdd
+GraphicsPath methods 1,2,3,5,4,6|1,2,3,4,5,6,7,8,0,0,9,10,0,0,11,12,1,2,3,4,5,6
+GraphicsPath winding nonZero ERR 2008 nonZero
+GraphicsStroke defaults NaN|false|normal|none|round|3|
+GraphicsSolidFill defaults 0|1
+GraphicsBitmapFill defaults ||true|false
+GraphicsGradientFill defaults linear|||||pad|rgb|0
+constants 0,1,2,3,4,5,6,evenOdd,nonZero
+readGraphicsData ERR 1069
+width 371.5,178

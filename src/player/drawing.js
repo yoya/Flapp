@@ -72,6 +72,26 @@ export class Drawing {
     this.#line = { ...this.#line, fill: style };
   }
 
+  /** 今の塗りの、重なりの規則（drawPath の winding）。偽なら nonZero。 */
+  setWinding(evenOdd) {
+    if (this.#fill) { this.#fill.evenOdd = evenOdd; this.#snapshot = null; }
+  }
+
+  /** 3 次ベジェ曲線。4 つに分けて、それぞれを 2 次曲線で近似する。 */
+  cubicTo(c1x, c1y, c2x, c2y, x, y) {
+    const [x0, y0] = [this.#x, this.#y];
+    const at = (t, a, b, c, d) => { const u = 1 - t; return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d; };
+    const slope = (t, a, b, c, d) => { const u = 1 - t; return 3 * (u * u * (b - a) + 2 * u * t * (c - b) + t * t * (d - c)); };
+    const N = 4;
+    for (let i = 1; i <= N; i++) {
+      const t0 = (i - 1) / N, t1 = i / N, h = (t1 - t0) / 2;
+      // 区間の両端の点と接線から、2 次曲線の制御点を、両端の接線の中点の平均で取る。
+      const px = at(t0, x0, c1x, c2x, x) + slope(t0, x0, c1x, c2x, x) * h, py = at(t0, y0, c1y, c2y, y) + slope(t0, y0, c1y, c2y, y) * h;
+      const qx = at(t1, x0, c1x, c2x, x) - slope(t1, x0, c1x, c2x, x) * h, qy = at(t1, y0, c1y, c2y, y) - slope(t1, y0, c1y, c2y, y) * h;
+      this.curveTo((px + qx) / 2, (py + qy) / 2, i === N ? x : at(t1, x0, c1x, c2x, x), i === N ? y : at(t1, y0, c1y, c2y, y));
+    }
+  }
+
   /** color が undefined なら塗りなし。 */
   beginFill(color) {
     this.beginStyle(color && { type: 'solid', color });

@@ -49,8 +49,6 @@ export function installStdlib(vm) {
   plain('flash.net::Responder', [['result', null, (v) => v], ['status', null, (v) => v]]);
   plain('flash.accessibility::AccessibilityProperties', [['name', '', str], ['description', '', str], ['shortcut', '', str], ['silent', false, bool], ['forceSimple', false, bool], ['noAutoLabeling', false, bool]]);
   vm.defineClass({ name: 'flash.accessibility::Accessibility', final: true, staticValues: { active: false }, staticMethods: { updateProperties: () => {} } });
-  plain('flash.display::GraphicsSolidFill', [['color', 0, (v) => vm.toUint32(v)], ['alpha', 1, num]]);
-  plain('flash.display::GraphicsEndFill', []);
 
   // コンテキストメニュー。表示はしない（ブラウザの環境では、右クリックのメニューにはつながらない）が、スクリプトが組み立てられる。
   const builtIn = (self) => get(self, 'builtInItems');

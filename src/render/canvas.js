@@ -89,6 +89,19 @@ function directionOf(text) {
 }
 
 const resetTransform = (ctx) => ctx.setTransform(1, 0, 0, 1, 0, 0);
+// 塗りの図形（op.path）が届く範囲を、塗りの定義空間（space はそこから図形への行列）での外接矩形 { x0, y0, x1, y1 } にする。
+function reachOf(op, space) {
+  const inv = space.inverse();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const cmd of op.path) {
+    for (let i = 1; i + 1 < cmd.length; i += 2) {
+      const p = inv.transformPoint(new DOMPoint(cmd[i], cmd[i + 1]));
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+    }
+  }
+  return Number.isFinite(x0) ? { x0, y0, x1, y1 } : null;
+}
+
 
 export class CanvasRenderer {
   /** @param {HTMLCanvasElement | OffscreenCanvas} canvas */
@@ -101,6 +114,7 @@ export class CanvasRenderer {
     this.bitmaps = new WeakMap(); // ビットマップ定義 → 描画に使える画像
     this.tinted = new WeakMap(); // ビットマップ定義 → Map(色変換 → 変換済みの画像)
     this.padded = new WeakMap(); // 画像 → 縁を 1 画素延ばした画像
+    this.clamped = new WeakMap(); // 画像 → { 延ばす量 → 縁を延ばした画像 }
     this.decoding = new WeakSet(); // 復号を始めたビットマップ定義（読み込んだ画像など、prepare の後で現れたもの）
     this.decodes = new Set(); // 済んでいない復号（Promise）
     this.blended = new WeakMap(); // 画像 → { z, image }: 実機と同じに、横方向に右隣の画素を混ぜて拡大した画像（#blendRight）
@@ -465,7 +479,7 @@ export class CanvasRenderer {
     }
     if (!space) return;
     ctx.transform(space.a, space.b, space.c, space.d, space.e, space.f);
-    if (this.#paint(ctx, style, cx, m)) ctx.fill(op.spacePath, rule);
+    if (this.#paint(ctx, style, cx, m, style.type === 'bitmap' && !style.repeat ? reachOf(op, space) : null)) ctx.fill(op.spacePath, rule);
     ctx.globalAlpha = 1;
   }
 
@@ -504,7 +518,7 @@ export class CanvasRenderer {
 
   // グラデーションかビットマップの塗りを、ctx の fillStyle にする（ctx の変換は、塗りの定義空間に合わせておく）。
   // 描けない（未定義・未復号のビットマップ）なら偽。
-  #paint(ctx, style, cx, world) {
+  #paint(ctx, style, cx, world, reach = null) {
     if (style.type === 'bitmap') {
       const def = style.bitmap ?? this.movie.dictionary.get(style.bitmapId); // スクリプトが作ったビットマップは、直接持っている
       const source = def?.type === 'bitmap' && this.#bitmapSource(def, cx);
@@ -523,10 +537,11 @@ export class CanvasRenderer {
         if (old.du || old.dv) pattern.setTransform(new DOMMatrix([1, 0, 0, 1, old.du, old.dv]));
         ctx.fillStyle = pattern;
       } else {
-        // 繰り返さない塗りは、縁の画素を 1 画素外へ延ばした画像を使う。そのままだと縁が
-        // 外側の透明と補間されて薄くなる（実機は範囲外を縁の色で埋める）。
-        const pattern = ctx.createPattern(this.#padded(source.image), 'no-repeat');
-        pattern.setTransform(new DOMMatrix([1, 0, 0, 1, old.du - 1, old.dv - 1]));
+        // 繰り返さない塗りは、範囲の外を縁の画素の色で埋める（実機で確認）。塗る図形が届く範囲（reach。ビットマップの画素の単位）まで、
+        // 縁の画素を延ばした画像を使う（少なくとも 1 画素。そうしないと、縁が外側の透明と補間されて薄くなる）。
+        const { image, left, top } = this.#clamped(source.image, reach);
+        const pattern = ctx.createPattern(image, 'no-repeat');
+        pattern.setTransform(new DOMMatrix([1, 0, 0, 1, old.du - left, old.dv - top]));
         ctx.fillStyle = pattern;
       }
       return true;
@@ -706,6 +721,34 @@ export class CanvasRenderer {
   }
 
   // --- ビットマップ ---
+
+  // 縁の画素を、上下左右に reach（{ x0, y0, x1, y1 }。ビットマップの画素の単位）の範囲まで延ばした画像と、元の画像の左上の位置。
+  // 延ばす量は、少なくとも 1 画素、全体で 1 辺 4096 画素まで。
+  #clamped(image, reach) {
+    const { width: w, height: h } = image;
+    const room = (n, size) => Math.max(1, Math.min(Math.ceil(n), Math.max(1, Math.floor((4096 - size) / 2))));
+    const [left, top, right, bottom] = reach
+      ? [room(-reach.x0, w), room(-reach.y0, h), room(reach.x1 - w, w), room(reach.y1 - h, h)]
+      : [1, 1, 1, 1];
+    if (left === 1 && top === 1 && right === 1 && bottom === 1) return { image: this.#padded(image), left: 1, top: 1 };
+    const key = `${left},${top},${right},${bottom}`;
+    let cache = this.clamped.get(image);
+    if (!cache) this.clamped.set(image, (cache = new Map()));
+    let out = cache.get(key);
+    if (!out) {
+      if (cache.size > 8) cache.clear();
+      out = new OffscreenCanvas(w + left + right, h + top + bottom);
+      const c = out.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(image, left, top);
+      c.drawImage(image, 0, 0, 1, h, 0, top, left, h); // 左
+      c.drawImage(image, w - 1, 0, 1, h, left + w, top, right, h); // 右
+      c.drawImage(out, 0, top, out.width, 1, 0, 0, out.width, top); // 上（角を含む）
+      c.drawImage(out, 0, top + h - 1, out.width, 1, 0, top + h, out.width, bottom); // 下（角を含む）
+      cache.set(key, out);
+    }
+    return { image: out, left, top };
+  }
 
   // 上下左右に 1 画素ずつ、縁の画素を複製した画像。
   #padded(image) {
