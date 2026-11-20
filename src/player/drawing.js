@@ -47,6 +47,23 @@ export class Drawing {
   bounds = null; // { xmin, xmax, ymin, ymax }。線の太さを含む
   edgeBounds = null; // 線の太さを含まない外接矩形
 
+  /** 写し（duplicateMovieClip 用）。描いたもの・作りかけの塗りや線・今の位置と線スタイルまで写し、以後は別々に描ける。 */
+  copy() {
+    const out = new Drawing();
+    const ops = this.#ops.map((op) => ({ ...op, path: op.path.map((cmd) => [...cmd]) }));
+    out.#ops = ops;
+    out.#fill = this.#fill ? ops[this.#ops.indexOf(this.#fill)] : null;
+    out.#stroke = this.#stroke ? ops[this.#ops.indexOf(this.#stroke)] : null;
+    out.#line = this.#line;
+    out.#start = this.#start && { ...this.#start };
+    out.#x = this.#x;
+    out.#y = this.#y;
+    out.#segments = this.#segments;
+    out.bounds = this.bounds && { ...this.bounds };
+    out.edgeBounds = this.edgeBounds && { ...this.edgeBounds };
+    return out;
+  }
+
   clear() {
     this.#segments = 0;
     this.#ops = [];

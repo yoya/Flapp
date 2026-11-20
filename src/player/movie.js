@@ -2437,7 +2437,10 @@ export class MovieClip extends DisplayObject {
   duplicate(name, depth) {
     if (!this.parent) return undefined;
     const desc = { ...describe(this), name, clipActions: this.clipActions };
-    return this.parent.#instantiate(depth, desc, true, this.character);
+    const copy = this.parent.#instantiate(depth, desc, true, this.character);
+    // 描画 API で描いた中身も写す（スクリプトで作った子は写さない。SWF 6〜8 の実機で確認）。
+    if (copy && this.#drawing) copy.#drawing = this.#drawing.copy();
+    return copy;
   }
 
   /** 中身を空にする（unloadMovie、または読み込みに失敗した loadMovie）。フレーム数は 0 になる。 */
