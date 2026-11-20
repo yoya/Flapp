@@ -174,6 +174,16 @@ export function textToPaths(text, getFont) {
 
 const IDENTITY = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
 const GUTTER = 40; // テキストフィールドの内側の余白（2px）
+
+/**
+ * 端末のフォント（実機の既定の「Times Roman」）の、大きさ size（px）の行の寸法（px）。実機で測った: 上端から文字の基準線まで（ascent）は
+ * 大きさの 3/4、下（descent）は 1/4 を、それぞれ 0.5 px の単位に切り上げたもので、行の高さはその和（leading が 0 のとき）。
+ */
+export function deviceMetrics(size) {
+  const ceil2 = (v) => Math.ceil(v * 2 - 1e-9) / 2;
+  const ascent = ceil2(size * 0.75), descent = ceil2(size * 0.25);
+  return { ascent, descent, height: ascent + descent };
+}
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
 
 // HTML テキストを素の文字列にする。段落と改行タグは改行にし、書式タグは捨てる。
@@ -210,7 +220,7 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
   };
   const heightOf = (line, pf) => {
     const size = line.length ? Math.max(...line.map(sizeOf)) : sizeOf({ f: pf });
-    return [size, (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : size * 1.15) + pf.leading * 20];
+    return [size, (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : deviceMetrics(size / 20).height * 20) + pf.leading * 20];
   };
   // 画像（<img>）は、それがある行の下に置かれ、あとの行の文章は、画像の横へ回り込む。位置は実機で測った（左右の端から hspace、
   // 行の下から vspace。いずれも余白の 2 倍ぶん内側）。images は { index, bitmap, width, height, align, hspace, vspace }（twips でなく px）。
@@ -337,8 +347,8 @@ export function editTextToPaths(edit, getFont) {
   const outlines = edit.useOutlines && font?.advances && [...content].every((ch) => /[\r\n]/.test(ch) || glyphOf.has(ch.codePointAt(0)));
   if (edit.runs) return richText(edit, ops, content, font, glyphOf, outlines);
   const scale = font ? edit.height / font.unitsPerEm : 0;
-  const ascent = outlines ? font.ascent * scale : edit.height * 0.9; // 端末フォントの寸法は概算
-  const lineHeight = (outlines ? (font.ascent + font.descent) * scale : edit.height * 1.15) + edit.leading;
+  const ascent = outlines ? font.ascent * scale : deviceMetrics(edit.height / 20).ascent * 20;
+  const lineHeight = (outlines ? (font.ascent + font.descent) * scale : deviceMetrics(edit.height / 20).height * 20) + edit.leading;
   const widthOf = (s) => [...s].reduce((w, ch) => w + font.advances[glyphOf.get(ch.codePointAt(0))] * scale, 0);
 
   const left = xmin + GUTTER + edit.leftMargin;

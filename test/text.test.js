@@ -105,7 +105,7 @@ test('テキストフィールド: 字形が無ければ端末フォント、HTM
   let ops = editTextToPaths({ ...base, text: 'あ\nb' }, () => undefined);
   assert.deepEqual(ops.map((o) => [o.kind, o.text, o.x, o.y, o.width, o.align, o.size]), [
     ['text', 'あ', 140, 40, 1820, 'right', 240],
-    ['text', 'b', 140, 40 + 240 * 1.15, 1820, 'right', 240],
+    ['text', 'b', 140, 40 + 240, 1820, 'right', 240], // 行の高さは、実機で測った式（大きさ 12 で 12 px）
   ]);
   ops = editTextToPaths({ ...base, html: true, text: '<p align="left"><font color="#ff0000">a &lt; b</font></p><p>c&amp;d</p>' }, () => undefined);
   assert.deepEqual(ops.map((o) => o.text), ['a < b', 'c&d']);

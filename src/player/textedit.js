@@ -3,6 +3,8 @@
 // 文字の位置は、描画側（swf/text.js）の配置と同じ決まりの概算。端末のフォントの幅は movie.measureText（描く側が測る）で測り、無ければ
 // 半角は大きさの半分、全角は 1 倍にする。実機のフォントとは一致しないので、クリックで決まるキャレットは 1 文字ほどずれることがある。
 
+import { deviceMetrics } from '../swf/text.js';
+
 const GUTTER = 40; // フィールドの内側の余白（2px = 40 twips）
 
 /**
@@ -82,7 +84,7 @@ export function layoutOf(field) {
       let size = 0;
       for (let i = a; i < b; i++) size = Math.max(size, fmtAt(i).size * 20);
       if (!size) size = (pf.size ?? 12) * 20;
-      const height = size * 1.15 + (pf.leading ?? 0) * 20;
+      const height = deviceMetrics(size / 20).height * 20 + (pf.leading ?? 0) * 20;
       lines.push({ start: a, end: b, x: xs, y, height });
       y += height;
     });

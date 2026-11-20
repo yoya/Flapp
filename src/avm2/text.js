@@ -4,6 +4,7 @@
 // 書式は文字ごとに持つ（player/richtext.js）。範囲ごとの書式と HTML の書式は、実機の読み書きに合わせてある。
 // 文字の寸法（textWidth など）は概算で、端末のフォントで決まる実機の値とは一致しない。
 import { cssPatch, mergeFormat } from '../player/richtext.js';
+import { deviceMetrics } from '../swf/text.js';
 import { ASArray, ASObject, publicKey } from './object.js';
 
 // TextFormat の項目。[名前, getTextFormat が返す既定値]
@@ -315,16 +316,16 @@ export function installText(vm, movie) {
       getLineIndexOfChar: (self, [i]) => { const f = F(self); return f.text.slice(0, index(f, i, 'charIndex')).split('\r').length - 1; },
       getCharIndexAtPoint: () => -1,
       getLineIndexAtPoint: () => -1,
-      // 寸法は概算（textWidth と同じ、1 文字 = 文字の大きさの半分、行の高さ = 1.15 倍）。
+      // 寸法は概算（textWidth と同じ、1 文字 = 文字の大きさの半分、行の高さ・上下は実機で測った式）。
       getLineMetrics: (self, [i]) => {
         const f = F(self), [list, at] = lineAt(f, i), size = f.format.size;
-        return vm.construct(c.TextLineMetrics, [2, Math.round(list[at].length * size * 0.5), Math.round(size * 1.15), Math.round(size * 0.9), Math.round(size * 0.25), f.format.leading ?? 0]);
+        return vm.construct(c.TextLineMetrics, [2, Math.round(list[at].length * size * 0.5), deviceMetrics(size).height, deviceMetrics(size).ascent, deviceMetrics(size).descent, f.format.leading ?? 0]);
       },
       getCharBoundaries: (self, [i]) => {
         const f = F(self), n = vm.toInt32(i);
         if (n < 0 || n >= f.text.length) return null;
         const row = f.text.slice(0, n).split('\r').length - 1, col = n - f.text.slice(0, n).lastIndexOf('\r') - 1, size = f.format.size;
-        return vm.construct(c.Rectangle, [2 + col * size * 0.5, 2 + row * size * 1.15, size * 0.5, size * 1.15]);
+        return vm.construct(c.Rectangle, [2 + col * size * 0.5, 2 + row * deviceMetrics(size).height, size * 0.5, deviceMetrics(size).height]);
       },
       // 段落は CR で区切られる。長さは、区切りの CR を含む。
       getFirstCharInParagraph: (self, [i]) => { const f = F(self); return f.text.lastIndexOf('\r', index(f, i, 'charIndex') - 1) + 1; },

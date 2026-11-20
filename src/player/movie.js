@@ -22,7 +22,7 @@ import { layoutRunsOf, mergeFormat, mergeRange, parseHtml, sameFormat, toHtml } 
 import { caretAt, indexAt, layoutOf, lineOf, restricts } from './textedit.js';
 import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
-import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
+import { deviceMetrics, editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
 import { shapeToPaths } from '../shape/paths.js';
 
 const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
@@ -1663,7 +1663,7 @@ export class TextField extends DisplayObject {
     if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
   }
 
-  // 文字の寸法の概算（端末のフォントの寸法は実機と同じにならない）: 1 文字 = 大きさの半分、1 行 = 大きさの 1.15 倍（行の中で最大）。
+  // 文字の寸法の概算（端末のフォントの寸法は実機と同じにならない）: 1 文字 = 大きさの半分（幅）。行の高さは実機で測った式（deviceMetrics）。
   approxWidth() {
     let best = 0, width = 0;
     for (let i = 0; i <= this.text.length; i++) {
@@ -1676,9 +1676,9 @@ export class TextField extends DisplayObject {
     if (!this.text) return 0;
     let total = 0, line = 0;
     for (let i = 0; i <= this.text.length; i++) {
-      if (i === this.text.length || this.text[i] === '\r') { total += (line || this.format.size) * 1.15; line = 0; } else line = Math.max(line, this.formatAt(i).size);
+      if (i === this.text.length || this.text[i] === '\r') { total += deviceMetrics(line || this.format.size).height; line = 0; } else line = Math.max(line, this.formatAt(i).size);
     }
-    return Math.round(total);
+    return total;
   }
 
   /** 今の文字列と書式を、実機と同じ形の HTML にしたもの。 */
