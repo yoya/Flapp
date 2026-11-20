@@ -37,7 +37,7 @@
   import { FlvPlayback } from '../src/player/video.js';
   import { parseFLV } from '../src/video/flv.js';
   import { WebCodecsVideo } from '../src/video/webcodecs.js';
-  import { sendKey, trustedHttp, trustedStorage } from './flapp.js'; // 信用する SWF の通信と保存（埋め込み用の <flapp-player> と共通）
+  import { attachInput, trustedHttp, trustedStorage } from './flapp.js'; // 信用する SWF の通信と保存（埋め込み用の <flapp-player> と共通）
 
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
@@ -126,8 +126,7 @@
   canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
   window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
   // キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡す。
-  canvas.addEventListener('keydown', input(sendKey));
-  canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
+  attachInput(canvas, () => current, () => { canvas.style.cursor = current.avm && !current.avm.mouseVisible ? 'none' : current.hoverButton ? 'pointer' : ''; redraw(); });
 
   // base は、?swf= で読んだときの SWF の URL。信用しないときは、そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
   // 信用するときは、ページの移動や読み込みと同じく、http / https の URL から取る（trustedHttp）。

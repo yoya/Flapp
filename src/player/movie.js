@@ -19,7 +19,7 @@ import { parseSWF } from '../swf/parse.js';
 import { toBool, toStr } from '../avm1/convert.js';
 import { LegacyText } from '../swf/legacy.js';
 import { layoutRunsOf, mergeFormat, mergeRange, parseHtml, sameFormat, toHtml } from './richtext.js';
-import { caretAt, indexAt, layoutOf, lineOf, restricts } from './textedit.js';
+import { caretAt, indexAt, layoutOf, lineOf, restricts, shiftOps, wordAt } from './textedit.js';
 import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
 import { deviceMetrics, editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
@@ -136,6 +136,7 @@ export class Movie {
   textImages = new Map(); // <img src> の画像 src → { bitmap, failed, fields }
   focus = null; // キーボードのフォーカスを持つ表示オブジェクト（テキストフィールドなど。無ければ null）
   #selecting = null; // マウスで文字を選んでいる最中の { field, anchor }
+  #lastClick = null; // ダブルクリックの判定用の、前のクリック { field, at, time }
   #drag = null; // startDrag で引きずっているクリップ { clip, bounds, dx, dy } // マウスがステージの上にあるか（最初の mouseMove までは外にある扱い）
 
   /**
@@ -477,6 +478,7 @@ export class Movie {
       if (field.removed) this.boundFields.delete(field);
       else this.#guard(() => field.pull());
     }
+    if (this.focus instanceof TextField) this.focus.tickCaret();
     this.#updateButtons(); // マウスが動かなくても、ボタンの方が現れたり消えたりする
   }
 
@@ -519,31 +521,44 @@ export class Movie {
   }
 
   // マウスを押したときのフォーカス: 選べるテキストフィールドならそこへ（キャレットは押した位置）、それ以外なら外す。
+  // 点 (x, y) にある、いちばん手前のテキストフィールド（無ければ null）。
+  #fieldAt(x, y) {
+    if (this.avm2) {
+      const hit = this.#pick(this.stage, x, y);
+      return hit instanceof TextField ? hit : null;
+    }
+    const find = (clip) => {
+      const children = clip.sortedChildren();
+      for (let i = children.length - 1; i >= 0; i--) {
+        const child = children[i];
+        if (!child.visible || child.clipDepth) continue;
+        if (child instanceof TextField) { if (child.hitPoint(x, y)) return child; } else if (child instanceof MovieClip) { const found = find(child); if (found) return found; }
+      }
+      return null;
+    };
+    for (const level of this.levelsFromTop()) { const field = find(level); if (field) return field; }
+    return null;
+  }
+
   #clickFocus() {
     if (!this.#mouseInside) return;
-    let field = null;
-    if (this.avm2) {
-      const hit = this.#pick(this.stage, this.mouse.x, this.mouse.y);
-      field = hit instanceof TextField ? hit : null;
-    } else {
-      const find = (clip) => {
-        const children = clip.sortedChildren();
-        for (let i = children.length - 1; i >= 0; i--) {
-          const child = children[i];
-          if (!child.visible || child.clipDepth) continue;
-          if (child instanceof TextField) { if (child.hitPoint(this.mouse.x, this.mouse.y)) return child; } else if (child instanceof MovieClip) { const found = find(child); if (found) return found; }
-        }
-        return null;
-      };
-      for (const level of this.levelsFromTop()) if ((field = find(level))) break;
-    }
+    let field = this.#fieldAt(this.mouse.x, this.mouse.y);
     if (field && !(field.type === 'input' || field.selectable)) field = null;
     this.setFocus(field);
-    if (field) {
-      const at = field.indexAtStage(this.mouse.x, this.mouse.y);
-      field.setSelection(at, at);
-      this.#selecting = { field, anchor: at };
+    if (!field) { this.#lastClick = null; return; }
+    const at = field.indexAtStage(this.mouse.x, this.mouse.y), now = this.now();
+    // 同じフィールドの同じ文字の上で 500 ms 以内にもう一度押したら、ダブルクリック: その単語（空白なら空白の続き）を選ぶ。
+    const last = this.#lastClick;
+    this.#lastClick = { field, at, time: now };
+    if (last && last.field === field && last.at === at && now - last.time <= 500) {
+      const [a, b] = wordAt(field.text, at);
+      field.setSelection(a, b);
+      this.#lastClick = null;
+      this.#selecting = null;
+      return;
     }
+    field.setSelection(at, at);
+    this.#selecting = { field, anchor: at };
   }
 
   /**
@@ -587,8 +602,53 @@ export class Movie {
   /** 打ち込まれた文字（IME で確定した文字列も）を、フォーカスのある入力フィールドへ入れる。キーが押されたことは、keyDown で別に伝える。 */
   textInput(text) {
     if (!(this.focus instanceof TextField)) return;
+    this.compose('');
     this.focus.typeText(String(text));
     this.runActions();
+  }
+
+  /** IME で変換中の文字列を伝える（空にすると消える）。確定した文字列は textInput で渡す。 */
+  compose(text) {
+    const field = this.focus;
+    if (!(field instanceof TextField) || field.type !== 'input') return;
+    const next = text === '' || text === null || text === undefined ? null : String(text);
+    if (next === field.composition) return;
+    field.setComposition(next);
+  }
+
+  /** コピー: フォーカスのあるフィールドの選択中の文字列（無ければ null。パスワードのフィールドは何も渡さない）。 */
+  copySelection() {
+    const f = this.focus;
+    if (!(f instanceof TextField) || f.password || f.selection[0] === f.selection[1]) return null;
+    return f.text.slice(f.selection[0], f.selection[1]).replace(/\r/g, '\n');
+  }
+
+  /** 切り取り: copySelection と同じ文字列を返して、入力フィールドなら選択を消す。 */
+  cutSelection() {
+    const text = this.copySelection();
+    if (text !== null && this.focus.type === 'input') { this.focus.deleteSelection(); this.runActions(); }
+    return text;
+  }
+
+  /** 貼り付け: 文字列を、打ち込んだときと同じ規則で、フォーカスのある入力フィールドへ入れる。 */
+  paste(text) {
+    this.textInput(text);
+  }
+
+  /** マウスホイール: ポインタの下のスクロールできるフィールドを、lines 行（正なら下へ）動かす。動かせたら true。 */
+  mouseWheel(lines) {
+    if (!this.#mouseInside) return false;
+    const field = this.#fieldAt(this.mouse.x, this.mouse.y);
+    if (!field || field.mouseWheelEnabled === false) return false;
+    const before = field.scrollV;
+    field.setScroll(field.scrollV + Math.trunc(lines));
+    return field.scrollV !== before;
+  }
+
+  /** テキストフィールドのスクロールが変わった（AS3 は scroll、AS2 は onScroller）。 */
+  scrolled(field) {
+    this.avm2?.display.scroll(field);
+    this.#guard(() => this.avm?.scrolled?.(field));
   }
 
   /** AS3: テキストフィールドに文字が入る直前の textInput イベント。取り消されたら false。 */
@@ -1397,6 +1457,13 @@ export class TextField extends DisplayObject {
     this.sheet = null; // スタイルシート（AS3 の TextField.styleSheet）
     this.selection = [0, 0]; // 選択の範囲 [始まり, 終わり]（文字の位置）。caret は、そのどちらか（動かしている側）
     this.caret = 0;
+    this.scrollV = 1; // 最初に見える行（1 から）
+    this.scrollH = 0; // 横にずらした量（px）
+    this.live = false; // コンストラクタが終わるまで、スクロールの検査はしない
+    this.scrollStamp = '1,1,0,0'; // 前に伝えた scrollV, maxScrollV, maxScrollH, scrollH（文字列が変わってこれが変わると、scroll のイベントを出す）
+    this.composition = null; // IME で変換中の文字列（確定するまで、キャレットの位置に重ねて描く）
+    this.caretOn = true; // キャレットの点滅（見えている間は true）
+    this.blinkAt = 0; // 点滅の起点（キャレットを動かした時刻）
     this.htmlText = this.html ? edit.text : null; // html が真のとき、代入された HTML そのもの
     this.fmts = null; // 文字ごとの書式（範囲ごとの書式や HTML の書式があるときだけ。無ければ、全体が this.format）
     this.text = edit ? (this.html ? plainText(edit.text) : edit.text) : '';
@@ -1417,6 +1484,7 @@ export class TextField extends DisplayObject {
     this.variable = null;
     if (parent && !this.name) this.name = movie.nextInstanceName();
     if (edit?.variableName) this.bind(edit.variableName, true);
+    this.live = true;
   }
 
   /** スクリプトから見たこのフィールド。AVM1 が無ければ undefined。 */
@@ -1446,6 +1514,7 @@ export class TextField extends DisplayObject {
     this.format = { ...this.newFormat };
     this.fmts = null;
     this.changed();
+    this.#checkScroll();
     if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text); // SWF 5 以前の変数はバイト列
   }
 
@@ -1494,7 +1563,90 @@ export class TextField extends DisplayObject {
     this.selection = [Math.min(a, b), Math.max(a, b)];
     this.caret = b;
     this.#paths = null;
+    this.#touchCaret();
+    if (this.movie.focus === this) this.#follow();
   }
+
+  // キャレットを動かしたら、点滅を最初（見える状態）からやり直す。
+  #touchCaret() {
+    this.blinkAt = this.movie.now();
+    this.caretOn = true;
+  }
+
+  /** 点滅の状態を、今の時刻に合わせる（フレームごとに呼ぶ）。変わったら描き直しになる。 */
+  tickCaret() {
+    const on = Math.floor((this.movie.now() - this.blinkAt) / 500) % 2 === 0;
+    if (on !== this.caretOn && this.selection[0] === this.selection[1]) { this.caretOn = on; this.#paths = null; }
+  }
+
+  /**
+   * スクロールの状態（概算の配置から）。maxV は最初に見える行の最大、bottom は今、最後まで見えている行（どちらも 1 から）、
+   * maxH は横にずらせる最大（px。折り返しがあれば 0）。範囲を出ていた scrollV / scrollH は収める。
+   */
+  scrollInfo() {
+    const layout = this.layout(), { lines } = layout;
+    const visH = this.box.ymax - this.box.ymin - 80, visW = this.box.xmax - this.box.xmin - 80;
+    let maxV = lines.length;
+    for (let v = 1; v <= lines.length; v++) if (layout.height - (lines[v - 1].y - 40) <= visH) { maxV = v; break; }
+    const maxH = this.wordWrap ? 0 : Math.max(0, Math.ceil((layout.width + this.compositionWidth() - visW) / 20));
+    this.scrollV = Math.min(Math.max(this.scrollV, 1), maxV);
+    this.scrollH = Math.min(Math.max(this.scrollH, 0), maxH);
+    const top = lines[this.scrollV - 1].y - 40;
+    let bottom = this.scrollV;
+    while (bottom < lines.length && lines[bottom].y + lines[bottom].height - 40 - top <= visH) bottom++;
+    return { layout, maxV, maxH, bottom, visW, visH, offsetY: top };
+  }
+
+  /** スクロールを変える（範囲に収める）。変わったら scroll のイベントが届く。 */
+  setScroll(v = this.scrollV, h = this.scrollH) {
+    const before = [this.scrollV, this.scrollH];
+    this.scrollV = Number.isFinite(v) ? Math.trunc(v) : 1;
+    this.scrollH = Number.isFinite(h) ? Math.trunc(h) : 0;
+    const info = this.scrollInfo(), stamp = `${this.scrollV},${info.maxV},${info.maxH},${this.scrollH}`;
+    this.scrollStamp = stamp;
+    if (this.scrollV === before[0] && this.scrollH === before[1]) return;
+    this.#paths = null;
+    this.movie.scrolled(this);
+  }
+
+  /** 文字列が変わった後に呼ぶ。スクロールの範囲か位置が変わっていたら、scroll のイベントを出す（実機で確認: scrollV が同じでも、最大が変われば出る）。 */
+  #checkScroll() {
+    if (!this.live) return;
+    const info = this.scrollInfo(), stamp = `${this.scrollV},${info.maxV},${info.maxH},${this.scrollH}`;
+    if (stamp === this.scrollStamp) return;
+    this.scrollStamp = stamp;
+    this.movie.scrolled(this);
+  }
+
+  /** 変換中の文字列の幅（twips）。 */
+  compositionWidth() {
+    if (!this.composition) return 0;
+    const f = this.formatAt(Math.max(0, this.selection[0] - 1));
+    return [...this.composition].reduce((sum, ch) => sum + (this.movie.measureText?.(ch, f) ?? (ch.codePointAt(0) >= 0x2e80 ? f.size * 20 : f.size * 10)), 0);
+  }
+
+  /** IME で変換中の文字列を入れる（null で消す）。見える位置までスクロールする。 */
+  setComposition(text) {
+    this.composition = text;
+    this.#paths = null;
+    this.#follow();
+  }
+
+  // キャレットが見える位置まで、スクロールする。
+  #follow() {
+    if (this.type !== 'input') return;
+    const info = this.scrollInfo(), row = lineOf(info.layout, this.caret) + 1;
+    let v = this.scrollV, h = this.scrollH;
+    if (row < v) v = row;
+    else if (row > info.bottom) v = row - (info.bottom - v);
+    if (!this.wordWrap) {
+      const x = (caretAt(info.layout, this.composition ? this.selection[0] : this.caret).x + this.compositionWidth() - 40) / 20, visible = info.visW / 20;
+      if (x < h) h = Math.floor(x);
+      else if (x > h + visible) h = Math.ceil(x - visible);
+    }
+    this.setScroll(v, h);
+  }
+
 
   /** キャレットや選択の描画に使う、文字の配置（概算）。 */
   layout() {
@@ -1511,6 +1663,8 @@ export class TextField extends DisplayObject {
   #edited() {
     if (this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
     this.changed();
+    this.#touchCaret();
+    this.#follow();
     this.movie.textChanged(this);
   }
 
@@ -1534,6 +1688,11 @@ export class TextField extends DisplayObject {
     this.caret = a + out.length;
     this.#edited();
     return out;
+  }
+
+  /** 選択を消す（切り取り）。 */
+  deleteSelection() {
+    this.#erase(this.selection[0], this.selection[1]);
   }
 
   /** 範囲 a〜b を消す（BackSpace・Delete）。 */
@@ -1635,6 +1794,7 @@ export class TextField extends DisplayObject {
     this.htmlText = null;
     if (this.fmts.length === 0) this.format = { ...this.newFormat };
     this.#settle();
+    this.#checkScroll();
   }
 
   /**
@@ -1660,6 +1820,7 @@ export class TextField extends DisplayObject {
     this.format = fmts[0] ?? { ...this.newFormat };
     this.htmlText = html;
     this.#settle();
+    this.#checkScroll();
     if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
   }
 
@@ -1701,7 +1862,7 @@ export class TextField extends DisplayObject {
         runs: this.fmts ? layoutRunsOf(this.text, this.fmts) : !this.embedFonts && this.text && (this.wordWrap || f.bullet || f.blockIndent) ? [{ text: this.text, fmt: f }] : null, // 端末のフォントで、折り返しや箇条書きがあるときは、書式が 1 つでも同じ配置を使う // 文字ごとの書式があるときだけ（text と同じ並び）
         border: this.border, background: this.background, borderColor: rgbOf(this.borderColor), backgroundColor: rgbOf(this.backgroundColor),
       }, this.character.library);
-      this.#paths = this.#withSelection(this.#paths);
+      this.#paths = this.#scrolled(this.#withSelection(this.#paths));
     }
     return this.#paths;
   }
@@ -1720,6 +1881,15 @@ export class TextField extends DisplayObject {
     return out;
   }
 
+  // スクロールしているとき、文字（背景と枠の後ろ）をずらして、フィールドの枠の中だけに見せる。
+  #scrolled(ops) {
+    if (this.scrollV <= 1 && this.scrollH <= 0) return ops;
+    const info = this.scrollInfo(), n = (this.background ? 1 : 0) + (this.border ? 1 : 0), { xmin, xmax, ymin, ymax } = this.box;
+    if (info.maxV <= 1 && info.maxH <= 0) return ops;
+    const inner = { kind: 'clip', style: { type: 'solid', color: { r: 0, g: 0, b: 0, a: 255 } }, evenOdd: true, path: [['M', xmin + 40, ymin + 40], ['L', xmax - 40, ymin + 40], ['L', xmax - 40, ymax - 40], ['L', xmin + 40, ymax - 40], ['Z']] }; // 余白（2px）の内側だけに見せる
+    return [...ops.slice(0, n), inner, ...shiftOps(ops.slice(n), -this.scrollH * 20, -info.offsetY), { kind: 'unclip' }];
+  }
+
   // フォーカスがあるとき、選択（黒地に白い文字）とキャレット（1 本の縦線）を重ねる。実機で、選択の見た目を確かめた。
   #withSelection(ops) {
     if (this.movie.focus !== this || (this.type !== 'input' && !this.selectable)) return ops;
@@ -1735,9 +1905,15 @@ export class TextField extends DisplayObject {
         out.push(rect(x1, ymin + line.y, x2, ymin + line.y + line.height));
         out.push({ kind: 'text', text: this.password ? '*'.repeat(to - from) : this.text.slice(from, to), x: x1, y: ymin + line.y, width: x2 - x1 + 40, align: 'left', size: f.size * 20, family: f.font, bold: f.bold, italic: f.italic, color: white });
       }
-    } else if (this.type === 'input') {
+    } else if (this.type === 'input' && this.caretOn && !this.composition) {
       const at = caretAt(layout, this.caret);
       out.push(rect(xmin + at.x, ymin + at.y, xmin + at.x + 20, ymin + at.y + at.height));
+    }
+    if (this.composition && this.type === 'input') {
+      // 変換中の文字列は、選択の始まりに重ねて、下線を引く（確定すると、そこに入る）。
+      const at = caretAt(layout, this.selection[0]), f = this.formatAt(Math.max(0, this.selection[0] - 1)), width = this.compositionWidth();
+      out.push({ kind: 'fill', style: { type: 'solid', color: white }, evenOdd: true, path: [['M', xmin + at.x, ymin + at.y], ['L', xmin + at.x + width, ymin + at.y], ['L', xmin + at.x + width, ymin + at.y + at.height], ['L', xmin + at.x, ymin + at.y + at.height], ['Z']] });
+      out.push({ kind: 'text', x: xmin + at.x, y: ymin + at.y, width: width + 40, align: 'left', size: f.size * 20, runs: [{ text: this.composition, size: f.size * 20, family: f.font, bold: f.bold, italic: f.italic, underline: true, color: { r: 0, g: 0, b: 0, a: 255 }, letterSpacing: 0 }] });
     }
     return out;
   }

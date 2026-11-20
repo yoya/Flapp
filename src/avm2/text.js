@@ -225,8 +225,10 @@ export function installText(vm, movie) {
       f.setStyleSheet(f.styleSheetObject ? sheetOf(f.styleSheetObject) : null);
       fit(f);
     }],
-    scrollH: stored('scrollH', 0, (v) => vm.toInt32(v)), scrollV: stored('scrollV', 1, (v) => Math.max(1, vm.toInt32(v))),
-    maxScrollH: fixed(0), maxScrollV: fixed(1), bottomScrollV: fixed(1),
+    // スクロールは、フィールドの配置（概算）から決まる。代入は範囲に収める。変わると scroll イベントが届く。
+    scrollH: [(self) => { F(self).scrollInfo(); return F(self).scrollH; }, (self, v) => { F(self).setScroll(undefined, vm.toInt32(v)); }],
+    scrollV: [(self) => { F(self).scrollInfo(); return F(self).scrollV; }, (self, v) => { F(self).setScroll(vm.toInt32(v), undefined); }],
+    maxScrollH: [(self) => F(self).scrollInfo().maxH, null], maxScrollV: [(self) => F(self).scrollInfo().maxV, null], bottomScrollV: [(self) => F(self).scrollInfo().bottom, null],
     selectionBeginIndex: [(self) => F(self).selection[0], null], selectionEndIndex: [(self) => F(self).selection[1], null],
     caretIndex: [(self) => F(self).caret, null],
     selectedText: [(self) => { const f = F(self); const [a, b] = f.selection; return f.text.slice(a, b); }, null],

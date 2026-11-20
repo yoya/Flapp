@@ -117,15 +117,46 @@ const defaultEncoding = () => {
 
 /**
  * keydown をムービーへ伝える。キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡し、打ち込まれた文字
- * （1 文字のキー）は、フォーカスのある入力フィールドへ入れる（textInput）。⌘ はコピーや貼り付けなどのためにブラウザへ返す（⌘ + A だけ全選択）。
- * Tab は、入力フィールドにフォーカスがあるときだけ、ブラウザの移動に使わせない。IME の変換中の入力は扱わない。
+ * （1 文字のキー）は、フォーカスのある入力フィールドへ入れる（textInput）。コピー・切り取り・貼り付け（Ctrl / ⌘ + C・X・V）は、ブラウザの
+ * イベント（attachInput）に任せる。⌘ + A 以外の ⌘ のキーはブラウザへ返す。Tab は、入力フィールドにフォーカスがあるときだけ、ブラウザの
+ * 移動に使わせない。IME の変換中の入力は、attachInput が受ける。
  */
 export function sendKey(movie, e) {
-  if (!e.keyCode || e.isComposing || (e.metaKey && e.key !== 'a')) return;
+  if (!e.keyCode || e.isComposing || e.keyCode === 229 || (e.metaKey && e.key !== 'a')) return;
   const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && 'cxv'.includes(e.key.toLowerCase())) return;
   movie.keyDown(e.keyCode, e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : e.key === 'Enter' ? 13 : 0, { shift: e.shiftKey, ctrl, alt: e.altKey });
   if (e.key.length === 1 && !ctrl) movie.textInput(e.key);
   if (e.keyCode !== 9 || movie.focus) e.preventDefault();
+}
+
+/**
+ * canvas のキーボード入力（キー、IME、コピー・切り取り・貼り付け）とマウスホイールを、ムービーへつなぐ。
+ * キーは、canvas の横に置く見えない textarea が受ける（IME の変換は、textarea でないと受けられない）。canvas にフォーカスが来たら、
+ * textarea へ移す。getMovie は今のムービー（無ければ null）、after は入力のあとに呼ぶ（描き直しなど）。
+ */
+export function attachInput(canvas, getMovie, after = () => {}) {
+  const area = document.createElement('textarea');
+  area.setAttribute('aria-hidden', 'true');
+  area.autocapitalize = 'off';
+  area.spellcheck = false;
+  area.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;resize:none;overflow:hidden;font-size:16px;pointer-events:none';
+  canvas.after(area);
+  const act = (handle) => (e) => { const movie = getMovie(); if (movie) { handle(movie, e); after(movie); } };
+  const place = () => { area.style.left = `${canvas.offsetLeft}px`; area.style.top = `${canvas.offsetTop}px`; };
+  const focus = () => { place(); area.focus({ preventScroll: true }); };
+  canvas.addEventListener('focus', focus);
+  canvas.addEventListener('mousedown', () => setTimeout(focus));
+  area.addEventListener('keydown', act(sendKey));
+  area.addEventListener('keyup', act((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
+  area.addEventListener('compositionupdate', act((movie, e) => movie.compose(e.data)));
+  area.addEventListener('compositionend', act((movie, e) => { movie.textInput(e.data ?? ''); area.value = ''; }));
+  area.addEventListener('copy', act((movie, e) => { const text = movie.copySelection(); if (text !== null) { e.clipboardData.setData('text/plain', text); e.preventDefault(); } }));
+  area.addEventListener('cut', act((movie, e) => { const text = movie.cutSelection(); if (text !== null) { e.clipboardData.setData('text/plain', text); e.preventDefault(); } }));
+  area.addEventListener('paste', act((movie, e) => { movie.paste(e.clipboardData.getData('text/plain')); e.preventDefault(); }));
+  // ホイールは、1 目盛りを 3 行として、ポインタの下のフィールドを動かす（動かせなければ、ページのスクロールに任せる）。
+  canvas.addEventListener('wheel', act((movie, e) => { if (movie.mouseWheel(Math.sign(e.deltaY) * 3)) e.preventDefault(); }), { passive: false });
+  return area;
 }
 
 export class FlappPlayer extends HTMLElement {
@@ -140,7 +171,7 @@ export class FlappPlayer extends HTMLElement {
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
-    root.innerHTML = '<style>:host { display: inline-block; line-height: 0; } canvas { display: block; outline: none; }</style>';
+    root.innerHTML = '<style>:host { display: inline-block; line-height: 0; position: relative; } canvas { display: block; outline: none; }</style>';
     root.append(this.#canvas);
     const canvas = this.#canvas;
     // マウスとキーの入力をムービーへ伝える。キー入力は、要素をクリックして選んでいる間だけ受け取る。
@@ -159,8 +190,7 @@ export class FlappPlayer extends HTMLElement {
     canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
     canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
     window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
-    canvas.addEventListener('keydown', input(sendKey));
-    canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
+    attachInput(canvas, () => this.movie, () => { canvas.style.cursor = this.movie.avm && !this.movie.avm.mouseVisible ? 'none' : this.movie.hoverButton ? 'pointer' : ''; this.#draw(); });
     addEventListener('pagehide', () => this.movie?.saveSharedObjects()); // 実機も、閉じるときに保存する
   }
 

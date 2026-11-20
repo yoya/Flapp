@@ -36,8 +36,9 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
   クラスは、いつも読み込んだ側の子のドメインとして扱います）、AS1 / 2 で版の違う SWF を読み込んだときの、版ごとのスクリプトの規則
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
 - Nellymoser と Speex の音
-- テキストフィールドの入力のうち、IME（変換中の文字）、クリップボード（コピー・切り取り・貼り付け）、元に戻す、長い文章のスクロール、キャレットの点滅、
-  ダブルクリックでの単語の選択。クリックで決まるキャレットの位置は、端末のフォントの幅で測るので、実機と 1 文字ほどずれることがあります
+- テキストフィールドの入力のうち、右から左へ書く文字は、並べ替えて表示しますが、
+  1 行の中で書式が変わるところをまたいだ並べ替えと、キャレット・選択の位置（文字列の順のまま）は未対応です。クリックで決まる
+  キャレットの位置は、端末のフォントの幅で測るので、実機と 1 文字ほどずれることがあります
 - `<img>` タグのうち、ライブラリの書き出し名や SWF を指す `src`（JPEG・PNG・GIF の URL だけ、`network.load` で読んで描きます。`trust` が無いと読みません）、
   `align` の `left` と `right` 以外の指定、`getImageReference`
 - AS2 の `TextField.StyleSheet`（AS3 の `StyleSheet` は `TextField.styleSheet` に付けられます）と、`a:hover` などリンクの状態のスタイル
@@ -114,7 +115,9 @@ setInterval(() => {
 
 入力は `movie.mouseMove(x, y)`（twips）、`mouseDown()`、`mouseUp()`、`keyDown(code, ascii, { shift, ctrl, alt })`、`keyUp(code)` で伝えます。
 打ち込まれた文字は、キーが押されたこと（`keyDown`）とは別に `movie.textInput(text)` で渡します（フォーカスのある入力フィールドへ入ります。
-ブラウザでの使い方は [web/flapp.js](web/flapp.js) の `sendKey`）。クリックでフォーカスが移り、Tab で次の入力フィールドへ移ります。
+ブラウザでの使い方は [web/flapp.js](web/flapp.js) の `attachInput`）。クリックでフォーカスが移り、Tab で次の入力フィールドへ移ります。
+IME は変換中の文字列を `movie.compose(text)`、コピー・切り取り・貼り付けは `copySelection()` / `cutSelection()` / `paste(text)`、
+ホイールは `mouseWheel(lines)` で伝えます。キャレットの点滅とスクロール（`scrollV` / `scrollH`）はプレイヤーが持ちます。
 `Movie.load` のオプションは [src/player/movie.js](src/player/movie.js) の `load` の説明にあります。
 描画をしなければ Node.js だけでも動きます（テストはこの形で動かしています）。
 

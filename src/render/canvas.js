@@ -391,7 +391,7 @@ export class CanvasRenderer {
     let ops = this.compiled.get(paths);
     if (ops) return ops;
     ops = paths.map((op) => {
-      if (op.kind === 'text') return op;
+      if (op.kind === 'text' || op.kind === 'unclip') return op;
       const path = new Path2D();
       for (const cmd of op.path) {
         if (cmd[0] === 'M') path.moveTo(cmd[1], cmd[2]);
@@ -425,7 +425,7 @@ export class CanvasRenderer {
     if (cached?.key === key) return cached.paths;
     const point = (px, py) => [x(matrix.a * px + matrix.c * py + matrix.tx), y(matrix.b * px + matrix.d * py + matrix.ty)];
     const result = paths.map((op) => {
-      if (op.kind === 'text') return op;
+      if (op.kind === 'text' || op.kind === 'unclip') return op;
       const path = op.path.map((cmd) =>
         cmd[0] === 'M' || cmd[0] === 'L' ? [cmd[0], ...point(cmd[1], cmd[2])] : cmd[0] === 'Q' ? ['Q', ...point(cmd[1], cmd[2]), ...point(cmd[3], cmd[4])] : cmd);
       const stretch = (style) => (style.matrix ? { ...style, matrix: concat({ a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0 }, concat(matrix, style.matrix)) } : style);
@@ -438,7 +438,9 @@ export class CanvasRenderer {
 
   #drawShape(ctx, paths, m, cx, mask) {
     for (const op of this.#compile(paths)) {
-      if (op.kind === 'fill') this.#fill(ctx, op, m, cx);
+      if (op.kind === 'clip') { ctx.save(); ctx.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty); ctx.clip(op.path2d); } // clip 〜 unclip の間は、その範囲にだけ描く
+      else if (op.kind === 'unclip') ctx.restore();
+      else if (op.kind === 'fill') this.#fill(ctx, op, m, cx);
       else if (op.kind === 'text') this.#text(ctx, op, m, cx);
       else if (!mask) this.#stroke(ctx, op, m, cx); // マスクでは線は形に含めない
     }

@@ -1,0 +1,27 @@
+empty 1,1,1,1,0,0
+3 lines 3,1,1,3,0,0
+4 lines 4,1,1,4,0,0
+  scroll ev a 1 0
+10 lines 10,1,7,4,0,0
+  scroll ev a 3 0
+scrollV 3 10,3,7,6,0,0
+  scroll ev a 7 0
+scrollV 99 10,7,7,10,0,0
+  scroll ev a 1 0
+scrollV -5 10,1,7,4,0,0
+scrollV 0 10,1,7,4,0,0
+  scroll ev a 5 0
+  scroll ev a 1 0
+scrollV 2 then shorter 4,1,1,4,0,0
+scrollV same 4,1,1,4,0,0
+scrollH on wrap 4,1,1,4,0,0
+  scroll ev a 1 0
+  scroll ev a 4 0
+  scroll ev a 4 0
+append resets? 9,4,6,7,0,0
+  scroll ev a 1 0
+text resets 1,1,1,1,0,0
+scrollH nowrap short 1,1,1,1,0,0
+  scroll ev a 1 0
+  scroll ev a 4 0
+  scroll ev b 1 0

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Movie } from '../src/player/movie.js';
-import { restricts } from '../src/player/textedit.js';
+import { restricts, wordAt } from '../src/player/textedit.js';
 
 async function open() {
   const movie = await Movie.load(readFileSync(new URL('fixtures/as3x-textinput.swf', import.meta.url)), { now: () => 0 });
@@ -155,4 +155,105 @@ test('AS2: onChanged が届き、連動する変数が更新される。Selectio
   movie.keyDown(9, 0);
   assert.equal(movie.traces.at(-1), 'a.onSetFocus _level0.b');
   assert.equal(movie.focus, a);
+});
+
+test('キャレットは 500 ms ごとに点滅し、動かすと見える状態から数え直す', async () => {
+  let time = 0;
+  const movie = await Movie.load(readFileSync(new URL('fixtures/as3x-textinput.swf', import.meta.url)), { now: () => time });
+  movie.advance();
+  const a = [...movie.root.children.values()].find((c) => c.name === 'a');
+  movie.mouseMove(50 * 20, 12 * 20); movie.mouseDown(); movie.mouseUp();
+  assert.equal(a.caretOn, true);
+  const shown = () => a.paths().filter((op) => op.kind === 'fill' && op.style.color.r === 0).length;
+  const before = shown();
+  time = 500; movie.advance();
+  assert.equal(a.caretOn, false);
+  assert.equal(shown(), before - 1);
+  time = 1000; movie.advance();
+  assert.equal(a.caretOn, true);
+  time = 1400; movie.textInput('y'); // 打つと、見える状態から数え直す
+  time = 1800; movie.advance();
+  assert.equal(a.caretOn, true);
+  time = 1900; movie.advance();
+  assert.equal(a.caretOn, false);
+});
+
+test('はみ出す文字は、キャレットを追ってスクロールし、scroll が届く。ホイールでも動く', async () => {
+  const { movie, a, b, click } = await open();
+  click(50, 12);
+  movie.textInput('the quick brown fox jumps over the lazy dog and keeps running');
+  assert.ok(a.scrollH > 0);
+  const info = a.scrollInfo();
+  assert.equal(a.scrollH, info.maxH); // 末尾にキャレットがある
+  movie.keyDown(36); // Home
+  assert.equal(a.scrollH, 0);
+  click(50, 70); // b は複数行（高さ 60）
+  movie.textInput('1\n2\n3\n4\n5\n6\n7\n8\n9');
+  assert.equal(b.text.split('\r').length, 9);
+  assert.ok(b.scrollV > 1);
+  assert.equal(b.scrollInfo().maxV, b.scrollV); // 最後の行にキャレットがある
+  movie.mouseMove(50 * 20, 70 * 20);
+  assert.equal(movie.mouseWheel(-100), true);
+  assert.equal(b.scrollV, 1);
+  assert.equal(movie.mouseWheel(1), true);
+  assert.equal(b.scrollV, 2);
+  const ops = b.paths();
+  assert.equal(ops.filter((op) => op.kind === 'clip').length, 1); // スクロール中は、枠の中だけに見せる
+});
+
+test('IME: 変換中の文字列は重ねて描かれ、確定すると入る', async () => {
+  const { movie, a, click } = await open();
+  click(50, 12);
+  movie.textInput('ab');
+  movie.compose('にほん');
+  assert.equal(a.text, 'ab');
+  const underlined = () => a.paths().some((op) => op.kind === 'text' && op.runs?.some((r) => r.underline && r.text === 'にほん'));
+  assert.equal(underlined(), true);
+  movie.textInput('日本');
+  assert.equal(a.text, 'ab日本');
+  assert.equal(a.composition, null);
+  assert.equal(underlined(), false);
+});
+
+test('クリップボード: コピー・切り取り・貼り付け。パスワードのフィールドは何も渡さない', async () => {
+  const { movie, a, b, click } = await open();
+  click(50, 12);
+  assert.equal(movie.copySelection(), null);
+  movie.textInput('abcdef');
+  a.setSelection(1, 4);
+  assert.equal(movie.copySelection(), 'bcd');
+  assert.equal(movie.cutSelection(), 'bcd');
+  assert.equal(a.text, 'aef');
+  movie.paste('XY\nZ'); // 1 行のフィールドでは、改行は入らない
+  assert.equal(a.text, 'aXYZef');
+  click(50, 70);
+  movie.paste('l1\nl2');
+  assert.equal(b.text, 'l1\rl2');
+  assert.equal(movie.copySelection(), null);
+  b.setSelection(0, 5);
+  assert.equal(movie.copySelection(), 'l1\nl2');
+  b.password = true;
+  assert.equal(movie.copySelection(), null);
+});
+
+test('ダブルクリックで単語を選ぶ', async () => {
+  let time = 0;
+  const movie = await Movie.load(readFileSync(new URL('fixtures/as3x-textinput.swf', import.meta.url)), { now: () => time });
+  movie.advance();
+  const a = [...movie.root.children.values()].find((c) => c.name === 'a');
+  const click = (x) => { movie.mouseMove(x * 20, 12 * 20); movie.mouseDown(); movie.mouseUp(); };
+  click(10);
+  movie.textInput('hello world foo');
+  const x = (a.layout().lines[0].x[8] + a.box.xmin) / 20; // "world" の中
+  click(x);
+  time = 300;
+  click(x);
+  assert.deepEqual(a.selection, [6, 11]);
+  time = 1000;
+  click(x); // 時間が空けば、普通のクリック
+  assert.deepEqual(a.selection, [8, 8]);
+  assert.deepEqual(wordAt('ab  cd.,ef', 2), [2, 4]);
+  assert.deepEqual(wordAt('ab  cd.,ef', 6), [6, 8]);
+  assert.deepEqual(wordAt('ab', 2), [0, 2]);
+  assert.deepEqual(wordAt('ab\rcd', 2), [2, 2]);
 });

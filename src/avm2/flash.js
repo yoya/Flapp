@@ -265,6 +265,7 @@ export function installFlash(vm, movie, types) {
     return allowed;
   };
   display.change = (field) => send(display.wrap(field), c.Event, ['change', true]);
+  display.scroll = (field) => send(display.wrap(field), c.Event, ['scroll']);
   /** マウスが、手の形のカーソルを出すもの（buttonMode のスプライト）の上にあるか。 */
   display.handCursor = () => (!!over?.display?.buttonMode || (!!over?.display?.states && over.display.enabled !== false)) && over.display.useHandCursor !== false;
 

@@ -68,7 +68,12 @@ const PROPS = {
   // 文字の寸法は概算（端末のフォントの寸法は実機と同じにならない）。
   textWidth: { get: (f) => f.approxWidth() },
   textHeight: { get: (f) => f.approxHeight() },
-  scroll: fixed(1), maxscroll: fixed(1), bottomScroll: fixed(1), hscroll: fixed(0), maxhscroll: fixed(0),
+  // スクロールは、フィールドの配置（概算）から決まる。代入は範囲に収める。変わると onScroller が呼ばれる。
+  scroll: { get: (f) => { f.scrollInfo(); return f.scrollV; }, set: (f, v, vm) => { f.setScroll(toInt32(vm, v), undefined); } },
+  maxscroll: { get: (f) => f.scrollInfo().maxV },
+  bottomScroll: { get: (f) => f.scrollInfo().bottom },
+  hscroll: { get: (f) => { f.scrollInfo(); return f.scrollH; }, set: (f, v, vm) => { f.setScroll(undefined, toInt32(vm, v)); } },
+  maxhscroll: { get: (f) => f.scrollInfo().maxH },
   // 幅と高さの代入は、拡大率ではなく枠の大きさを変える。
   _width: {
     get: (f) => { const b = f.boundsInParent(); return (b.xmax - b.xmin) / 20; },

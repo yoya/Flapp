@@ -246,6 +246,13 @@ export class AVM1 {
     for (const listener of this.listeners.Selection.slice()) call(listener, 'onSetFocus', [before, after]);
   }
 
+  /** テキストフィールドのスクロールが変わったときの、field.onScroller(field)。 */
+  scrolled(field) {
+    const object = this.#scriptOf(field);
+    const fn = object?.get('onScroller');
+    if (fn instanceof AVMFunction) this.invoke(fn, object, [object]);
+  }
+
   /** 入力でテキストフィールドの文字列が変わったときの、field.onChanged(field)。 */
   textChanged(field) {
     const object = this.#scriptOf(field);

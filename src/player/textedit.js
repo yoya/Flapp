@@ -118,3 +118,29 @@ export function caretAt(layout, index) {
   const line = layout.lines[lineOf(layout, index)];
   return { x: line.x[Math.min(index, line.end) - line.start], y: line.y, height: line.height };
 }
+
+/** 描画命令 ops を (dx, dy)（twips）だけずらした、新しい配列。 */
+export function shiftOps(ops, dx, dy) {
+  return ops.map((op) => {
+    if (op.kind === 'text') return { ...op, x: op.x + dx, y: op.y + dy };
+    const path = op.path.map((cmd) => (cmd[0] === 'M' || cmd[0] === 'L' ? [cmd[0], cmd[1] + dx, cmd[2] + dy] : cmd[0] === 'Q' ? ['Q', cmd[1] + dx, cmd[2] + dy, cmd[3] + dx, cmd[4] + dy] : cmd));
+    const style = op.style?.matrix ? { ...op.style, matrix: { ...op.style.matrix, tx: op.style.matrix.tx + dx, ty: op.style.matrix.ty + dy } } : op.style;
+    return { ...op, path, style };
+  });
+}
+
+/**
+ * ダブルクリックで選ぶ範囲 [始まり, 終わり]: 位置 index の文字（末尾なら直前の文字）と同じ種類（字・数字・_ の続き、空白の続き、
+ * それ以外の記号の続き）が並ぶところ。改行はまたがない。
+ */
+export function wordAt(text, index) {
+  if (!text) return [0, 0];
+  const at = Math.min(index, text.length - 1);
+  const kind = (ch) => (/[\p{L}\p{N}\p{M}_]/u.test(ch) ? 'w' : ch === '\r' ? 'r' : /\s/u.test(ch) ? 's' : 'p');
+  const k = kind(text[at]);
+  if (k === 'r') return [at, at];
+  let a = at, b = at + 1;
+  while (a > 0 && kind(text[a - 1]) === k) a--;
+  while (b < text.length && kind(text[b]) === k) b++;
+  return [a, b];
+}
