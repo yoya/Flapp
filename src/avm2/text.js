@@ -3,7 +3,7 @@
 // 文字列や書式の状態は、プレイヤーのテキストフィールド（player/movie.js の TextField）が持つ。
 // 書式は文字ごとに持つ（player/richtext.js）。範囲ごとの書式と HTML の書式は、実機の読み書きに合わせてある。
 // 文字の寸法（textWidth など）は概算で、端末のフォントで決まる実機の値とは一致しない。
-import { cssPatch, mergeFormat } from '../player/richtext.js';
+import { cssPatch, mergeFormat, parseCSS } from '../player/richtext.js';
 import { deviceMetrics } from '../swf/text.js';
 import { ASArray, ASObject, publicKey } from './object.js';
 
@@ -54,7 +54,6 @@ export function installText(vm, movie) {
   // --- StyleSheet ---
   // セレクタは小文字にして持つ（実機で確認）。同じセレクタをもう一度書くと、重ねずに置き換わる。TextField.styleSheet に付けたフィールドは
   // fields に持ち、スタイルが変わったら、内容を読み直させる。
-  const camel = (name) => name.replace(/-(.)/g, (_, ch) => ch.toUpperCase());
   const plainStyle = (obj) => {
     const out = {};
     if (obj instanceof ASObject) for (const key of vm.enumerate(obj)) out[String(key)] = str(obj.values.get(publicKey(String(key))));
@@ -79,27 +78,8 @@ export function installText(vm, movie) {
       // 括弧など）が 1 か所でもあれば、その呼び出しで読んだものは全部捨てる。名前の前と値の前の空白は除くが、後ろの空白は残る（"color : x" の
       // 名前は "color "）。プロパティ名は - の次の 1 文字を大文字にして camelCase にする（小文字にはしない）。同じセレクタは、あとのもので置き換わる。
       parseCSS: (self, [css]) => {
-        const text = str(css).replace(/\/\*[\s\S]*?\*\//g, '');
-        const found = new Map();
-        let at = 0;
-        for (;;) {
-          while (/\s/.test(text[at] ?? '')) at++;
-          if (at >= text.length) break;
-          const open = text.indexOf('{', at), close = text.indexOf('}', open + 1);
-          if (open < 0 || close < 0 || text.slice(open + 1, close).includes('{')) return;
-          const selectors = text.slice(at, open).split(',').map((x) => x.trim());
-          if (selectors.some((x) => x === '' || /\s/.test(x))) return;
-          const style = new Map();
-          const pieces = text.slice(open + 1, close).split(';');
-          for (let i = 0; i < pieces.length; i++) {
-            const piece = pieces[i], colon = piece.indexOf(':');
-            if (i === pieces.length - 1 && piece.trim() === '') break; // 最後の ";" のあと
-            if (colon < 0) return;
-            style.set(camel(piece.slice(0, colon).trimStart()), piece.slice(colon + 1).trimStart());
-          }
-          for (const selector of selectors) found.set(selector.toLowerCase(), style);
-          at = close + 1;
-        }
+        const found = parseCSS(str(css)); // 書き間違いがあれば、何も足さない（player/richtext.js）
+        if (!found) return;
         for (const [key, style] of found) if (self.styles.size < 10000 || self.styles.has(key)) self.styles.set(key, style);
         changed(self);
       },

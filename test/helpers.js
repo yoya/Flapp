@@ -13,12 +13,15 @@ const WARNING_EN = [...'Warning: '].map((c) => c.charCodeAt(0));
 export function realTrace(bytes, encoding = 'utf-8') {
   const lines = [];
   let start = 0;
+  let warning = false; // 直前の行が警告（警告の続きの "-- …" の行も除く）
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] !== 0x0a) continue;
     const line = bytes.subarray(start, i);
     start = i + 1;
     const startsWith = (prefix) => prefix.every((b, k) => line[k] === b);
-    if (!startsWith(WARNING_SJIS) && !startsWith(WARNING_EN)) lines.push(new TextDecoder(encoding).decode(line));
+    if (startsWith(WARNING_SJIS) || startsWith(WARNING_EN) || (warning && startsWith([0x2d, 0x2d, 0x20]))) { warning = true; continue; }
+    warning = false;
+    lines.push(new TextDecoder(encoding).decode(line));
   }
   return lines;
 }

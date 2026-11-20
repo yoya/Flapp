@@ -3,8 +3,8 @@
 import { MAGIC } from './clip.js';
 import { toBool, toInt32, toNumber, toStr } from './convert.js';
 import { defineClass, defineMethods } from './globals.js';
-import { AVMFunction, AVMObject, NONE } from './object.js';
-import { mergeFormat } from '../player/richtext.js';
+import { AVMFunction, AVMObject, DONT_ENUM, NONE } from './object.js';
+import { cssPatch, mergeFormat, parseCSS } from '../player/richtext.js';
 
 const DEPTH_OFFSET = 16384; // スクリプトの深度 0 は、表示リストの深度 16384
 // TextFormat のプロパティ（コンストラクタの引数の順）と、それ以外。
@@ -19,14 +19,29 @@ const PROPS = {
   // 読むときに、連動する変数の値を反映する。数値や undefined も文字列にして入れる（undefined は "undefined"）。
   text: {
     get: (f) => { f.pull(); return f.text; },
-    set: (f, v, vm) => { f.htmlText = null; f.setText(v === undefined ? 'undefined' : v === null ? 'null' : toStr(vm, v), true); },
+    set: (f, v, vm) => {
+      const s = v === undefined ? 'undefined' : v === null ? 'null' : toStr(vm, v);
+      if (f.sheet) { f.setHtml(s, true); return; } // スタイルシートがあれば、text も HTML として読む（実機で確認）
+      f.htmlText = null;
+      f.setText(s, true);
+    },
+  },
+  // TextField.StyleSheet。付けると、内容を HTML として読み直し、スタイルを当てる（player/movie.js の setStyleSheet）。
+  styleSheet: {
+    get: (f) => f.styleSheetObject,
+    set: (f, v) => {
+      f.styleSheetObject?.cssFields.delete(f);
+      f.styleSheetObject = v?.css instanceof Map ? v : undefined;
+      f.styleSheetObject?.cssFields.add(f);
+      f.setStyleSheet(f.styleSheetObject ? { get: (selector) => { const style = v.css.get(selector); return style ? Object.fromEntries(style) : null; } } : null);
+    },
   },
   // html が偽なら text と同じ。真なら、読むと今の文字列と書式を実機と同じ形の HTML にしたもの、書くとタグを書式として読む。
   htmlText: {
-    get: (f) => { f.pull(); return f.html ? f.toHtml() : f.text; },
+    get: (f) => { f.pull(); return f.sheet ? f.htmlText ?? '' : f.html ? f.toHtml() : f.text; }, // スタイルシートがあれば、入れた HTML そのもの
     set: (f, v, vm) => {
       const s = toStr(vm, v);
-      if (f.html) f.setHtml(s, true);
+      if (f.html || f.sheet) f.setHtml(s, true);
       else f.setText(s, true);
     },
   },
@@ -201,7 +216,7 @@ export function installTextField(vm) {
     // setTextFormat(書式)、setTextFormat(位置, 書式)、setTextFormat(始まり, 終わり, 書式)。
     setTextFormat: (_, self, args) => {
       const f = fieldOf(self);
-      if (!f) return;
+      if (!f || f.sheet) return; // スタイルシートのあるフィールドでは何もしない（実機で確認）
       const [a, b] = rangeOf(f, args.slice(0, -1));
       f.setFormat(partialOf(args[args.length - 1]), a, b);
       if (!f.text.length) f.format = mergeFormat(f.format, partialOf(args[args.length - 1]));
@@ -219,5 +234,52 @@ export function installTextField(vm) {
     addListener: () => true,
     removeListener: () => false,
   });
-  defineClass(vm, 'TextField', proto, () => undefined, (_, __, to) => new AVMObject(vm, to));
+  const fieldClass = defineClass(vm, 'TextField', proto, () => undefined, (_, __, to) => new AVMObject(vm, to));
+
+  // --- TextField.StyleSheet（self.css は セレクタ → Map（プロパティ → 値）。AS2 はセレクタの大文字と小文字を区別する。実機で確認） ---
+  const sheetProto = new AVMObject(vm, vm.objectProto);
+  const css = (self) => (self?.css instanceof Map ? self.css : null);
+  const changed = (self) => { for (const f of self.cssFields) f.reapplySheet(); };
+  const styleObject = (style) => { const o = new AVMObject(vm, vm.objectProto); for (const [k, v] of style) o.set(k, v); return o; };
+  defineMethods(vm, sheetProto, {
+    // 書き間違いがあれば、何も足さずに false（実機で確認）。
+    parseCSS: (_, self, [text]) => {
+      const found = css(self) && parseCSS(toStr(vm, text), { lowerCase: false });
+      if (!found) return false;
+      for (const [k, v] of found) if (self.css.size < 10000 || self.css.has(k)) self.css.set(k, v);
+      changed(self);
+      return true;
+    },
+    getStyle: (_, self, [name]) => { const style = css(self)?.get(toStr(vm, name)); return style ? styleObject(style) : null; },
+    setStyle: (_, self, [name, style]) => {
+      if (!css(self)) return;
+      const key = toStr(vm, name);
+      if (!(style instanceof AVMObject)) self.css.delete(key);
+      else if (self.css.size < 10000 || self.css.has(key)) self.css.set(key, new Map(style.ownKeys().map((k) => [k, toStr(vm, style.get(k))])));
+      changed(self);
+    },
+    getStyleNames: (_, self) => vm.construct(vm.global.get('Array'), [...(css(self)?.keys() ?? [])]),
+    clear: (_, self) => { if (css(self)) { self.css.clear(); changed(self); } },
+    // スタイルのオブジェクトを TextFormat にする。
+    transform: (_, self, [style]) => {
+      if (!(style instanceof AVMObject)) return null;
+      const patch = cssPatch(Object.fromEntries(style.ownKeys().map((k) => [k, toStr(vm, style.get(k))])));
+      return newFormat(patch);
+    },
+    // CSS のファイルを読む（ホストの network.load）。読めたら parseCSS して、onLoad(読めたか)。
+    load: (_, self, [url]) => {
+      if (!css(self) || url === undefined) return false;
+      vm.loadText({ url: toStr(vm, url), method: '' }, (text) => {
+        const ok = text !== undefined && self.get('parseCSS') instanceof AVMFunction && vm.call(self.get('parseCSS'), self, [text]);
+        const onLoad = self.get('onLoad');
+        if (onLoad instanceof AVMFunction) vm.call(onLoad, self, [!!ok]);
+      });
+      return true;
+    },
+    onLoad: () => undefined,
+  });
+  const sheetClass = vm.native(() => undefined, () => Object.assign(new AVMObject(vm, sheetProto), { css: new Map(), cssFields: new Set() }));
+  sheetClass.define('prototype', sheetProto, DONT_ENUM);
+  sheetProto.define('constructor', sheetClass, DONT_ENUM);
+  fieldClass.define('StyleSheet', sheetClass, DONT_ENUM);
 }

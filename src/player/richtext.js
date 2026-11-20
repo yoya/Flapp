@@ -106,6 +106,38 @@ export function cssPatch(style) {
   return patch;
 }
 
+/**
+ * StyleSheet.parseCSS の読み方（実機で確認）: "selector { property: value; … }" の並び。書き間違い（セレクタの中の空白、":" の無い項目、
+ * 空の項目、閉じていない括弧など）が 1 か所でもあれば、全部を捨てて null を返す。名前の前と値の前の空白は除くが、後ろの空白は残る。
+ * プロパティ名は - の次の 1 文字を大文字にして camelCase にする。lowerCase が真なら、セレクタを小文字にする（AS3。AS2 はそのまま）。
+ * 戻り値は Map（セレクタ → Map（プロパティ → 値））。同じセレクタは、あとのもので置き換わる。
+ */
+export function parseCSS(css, { lowerCase = true } = {}) {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const camel = (name) => name.replace(/-(.)/g, (_, ch) => ch.toUpperCase());
+  const found = new Map();
+  let at = 0;
+  for (;;) {
+    while (/\s/.test(text[at] ?? '')) at++;
+    if (at >= text.length) break;
+    const open = text.indexOf('{', at), close = text.indexOf('}', open + 1);
+    if (open < 0 || close < 0 || text.slice(open + 1, close).includes('{')) return null;
+    const selectors = text.slice(at, open).split(',').map((x) => x.trim());
+    if (selectors.some((x) => x === '' || /\s/.test(x))) return null;
+    const style = new Map();
+    const pieces = text.slice(open + 1, close).split(';');
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i], colon = piece.indexOf(':');
+      if (i === pieces.length - 1 && piece.trim() === '') break; // 最後の ";" のあと
+      if (colon < 0) return null;
+      style.set(camel(piece.slice(0, colon).trimStart()), piece.slice(colon + 1).trimStart());
+    }
+    for (const selector of selectors) found.set(lowerCase ? selector.toLowerCase() : selector, style);
+    at = close + 1;
+  }
+  return found;
+}
+
 // スタイルシートがあるときの、タグごとの扱い（実機で確認）: タグ名のスタイルが効くのは p・li・a と、b i u font textformat span br img 以外のタグ
 // （div・em・h1 など。スタイルがあれば、終わりに改行が付く）。class の指定が効くのは span・p・li・a だけ。
 const BUILTIN_TAGS = new Set(['b', 'i', 'u', 'font', 'textformat', 'span', 'br', 'img', 'p', 'li', 'a']);

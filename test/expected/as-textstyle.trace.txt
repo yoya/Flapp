@@ -1,0 +1,26 @@
+typeof function object true
+parse ok true
+names .big,a:link,em,p,span
+getStyle p color=#ff0000;fontSize=20px;fontWeight=bold
+警告 : 宣言されていないプロパティを参照しています 'P'
+-- 大文字小文字が一致していない可能性があります。
+getStyle P null
+getStyle none null
+parse bad false
+names after bad .big,a:link,em,p,span
+警告 : 宣言されていないプロパティを参照しています 'q'
+-- 大文字小文字が一致していない可能性があります。
+setStyle .big,Q,a:link,em,p,span null
+transform true 16711680,20,true,center,5,_sans
+styleSheet default undefined
+styleSheet set true
+text [a\rbc]
+fmt p Times Roman/20/16711680/true/false/ | span Times Roman/30/0/false/false/ | a Times Roman/12/255/false/false/x
+htmlText <p>a</p><span class='big'>b</span><a href='x'>c</a>
+text assign [q\r] <p>q</p>
+em [e\rz] Times Roman/12/0/false/true/
+setTextFormat Times Roman/12/0/false/true/
+after setStyle Times Roman/12/10066329/false/false/
+clear 0 Times Roman/12/0/false/false/
+unset undefined <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">r</FONT></P>
+load function function

@@ -1580,6 +1580,7 @@ const rgbOf = (n) => ({ r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a:
 export class TextField extends DisplayObject {
   #object = null;
   #paths = null;
+  #synced; // 連動する変数と最後にやりとりした値
 
   constructor(movie, character, depth, desc, parent) {
     super(character, depth, desc, parent);
@@ -1654,7 +1655,7 @@ export class TextField extends DisplayObject {
     this.fmts = null;
     this.changed();
     this.#checkScroll();
-    if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text); // SWF 5 以前の変数はバイト列
+    if (fromScript && this.variable) this.#publish();
   }
 
   /** 変数 name と連動させる（null で解除）。initial が真（定義で指定された場合）なら、変数が未定義のときに今の文字列を変数へ入れる。 */
@@ -1665,7 +1666,7 @@ export class TextField extends DisplayObject {
       return;
     }
     this.movie.boundFields.add(this);
-    if (initial && this.#variable() === undefined) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
+    if (initial && this.#variable() === undefined) this.#publish();
     else this.pull();
   }
 
@@ -1674,13 +1675,21 @@ export class TextField extends DisplayObject {
     if (!this.variable) return;
     const value = this.#variable();
     if (value === undefined) return;
-    let text = toStr(this.movie.avm, value);
-    if (this.movie.legacy) text = this.movie.legacy.decode(text); // SWF 5 以前の変数はバイト列。表示は文字コードで直す
-    text = text.replace(/\r\n|\n/g, '\r');
-    if (text !== this.text) {
-      this.text = text;
-      this.changed();
-    }
+    const raw = toStr(this.movie.avm, value);
+    // 変数が、最後にやりとりした値から変わったときだけ読む（スクリプトが htmlText などで変えた中身は、変数が変わるまで残る）。
+    // HTML のフィールドは値を HTML として読み、そうでなければ書式を newFormat に戻す（実機で確認。test/as/htmlvar.as）。
+    if (raw === this.#synced) return;
+    this.#synced = raw;
+    const text = this.movie.legacy ? this.movie.legacy.decode(raw) : raw; // SWF 5 以前の変数はバイト列。表示は文字コードで直す
+    if (this.html) this.setHtml(text, false);
+    else this.setText(text, false);
+  }
+
+  // 今の中身を連動する変数へ書く。HTML のフィールドは HTML の形で書く（実機で確認。test/as/htmlvar.as）。
+  #publish() {
+    const text = this.html ? this.toHtml() : this.text;
+    this.#synced = this.movie.legacy ? this.movie.legacy.encode(text) : text; // SWF 5 以前の変数はバイト列
+    this.#variable(this.#synced);
   }
 
   // 連動する変数を読む（引数なし）か、書く。変数名は、フィールドを置いたクリップから見たパスでもよい。
@@ -1800,7 +1809,7 @@ export class TextField extends DisplayObject {
 
   /** 入力の結果（文字列が変わった）を、連動する変数とスクリプトへ伝える。 */
   #edited() {
-    if (this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
+    if (this.variable) this.#publish();
     this.changed();
     this.#touchCaret();
     this.#follow();
@@ -1951,8 +1960,8 @@ export class TextField extends DisplayObject {
     if (this.sheet && this.htmlText !== null) this.setHtml(this.htmlText, false);
   }
 
-  /** HTML を文字列と書式にして入れる。書式を指定しない文字は newFormat。 */
-  setHtml(html, fromScript, multiline = this.multiline) {
+  /** HTML を文字列と書式にして入れる。書式を指定しない文字は newFormat。連動する変数には書かない（実機で確認。test/as/htmlvar.as）。 */
+  setHtml(html, _fromScript, multiline = this.multiline) {
     const { text, fmts } = parseHtml(html, this.newFormat, { multiline, condenseWhite: this.condenseWhite === true, styles: this.sheet });
     this.text = text;
     this.fmts = fmts;
@@ -1960,7 +1969,6 @@ export class TextField extends DisplayObject {
     this.htmlText = html;
     this.#settle();
     this.#checkScroll();
-    if (fromScript && this.variable) this.#variable(this.movie.legacy ? this.movie.legacy.encode(this.text) : this.text);
   }
 
   // 文字の寸法の概算（端末のフォントの寸法は実機と同じにならない）: 1 文字 = 大きさの半分（幅）。行の高さは実機で測った式（deviceMetrics）。

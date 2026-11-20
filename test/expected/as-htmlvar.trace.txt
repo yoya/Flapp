@@ -1,0 +1,9 @@
+init [abc] 20/16711680/false
+html [xyzw] <P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><B>xy</B>zw</FONT></P>
+html fmt 12/0/true | 12/0/false
+plain [<b>xy</b>zw] 12/0/false
+html2 [plain1] 12/0/false
+v plain1
+after htmlText v=plain1 20/65280/false
+after text v=<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">r</FONT></P> 12/0/false
+later [s] 20/65280/false v=<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">r</FONT></P>
