@@ -4,6 +4,7 @@
 //   <flapp-player src="movie.swf"></flapp-player>
 //
 // 属性: src（SWF の URL）、trust（付けると、信用する SWF として動かす。付けなければ、通信もページの移動もしない）、
+//       allow-networking / allow-origins / credentials / allow-navigation（信用するときの通信の決まり。trustedHttp の policy）、
 //       encoding（SWF 5 以前の文字コード。既定はブラウザの言語から）、match-player（実機と同じに映さないものを映さない）。
 // プロパティ: movie（再生中の Movie）、メソッド: load(url か bytes, { label })、stop()。
 // イベント: trace（detail に文字列）、warning、error、loaded。画面の大きさは SWF のステージの大きさ（CSS で変えられる）。
@@ -13,17 +14,32 @@ import { CanvasRenderer, decodeImage } from '../src/render/canvas.js';
 import { WebAudioOutput } from '../src/audio/webaudio.js';
 import { WebCodecsVideo } from '../src/video/webcodecs.js';
 
+const STORAGE_LIMIT = 100 * 1024; // SWF ごとの保存の総量（文字数。実機の、サイトごとの既定の保存量）
+
 /**
  * SWF を信用するときの、SharedObject の保存先（Movie.load の storage オプション）。localStorage に、SWF ごと（?swf= で読んだときは
- * その URL、ファイルを選んだときはそのファイル名）に分けて書く。書けなければ（容量など）false。
+ * その URL、ファイルを選んだときはそのファイル名）に分けて書く。総量が上限を超える、または書けなければ（容量など）false
+ * （スクリプトには、保存できなかったと伝わる）。
  */
-export function trustedStorage(id) {
-  const key = (name) => `flapp:so:${id}:${name}`;
+export function trustedStorage(id, limit = STORAGE_LIMIT) {
+  const prefix = `flapp:so:${id}:`;
+  const key = (name) => prefix + name;
+  const used = (except) => {
+    let total = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith(prefix) && k !== except) total += localStorage.getItem(k)?.length ?? 0;
+      }
+    } catch { /* 読めない */ }
+    return total;
+  };
   return {
     load(name) { try { return localStorage.getItem(key(name)); } catch { return null; } },
     save(name, text) {
       try {
         if (text === null) localStorage.removeItem(key(name));
+        else if (used(key(name)) + text.length > limit) return false;
         else localStorage.setItem(key(name), text);
         return true;
       } catch { return false; }
@@ -31,27 +47,86 @@ export function trustedStorage(id) {
   };
 }
 
+// 実機が、スクリプトから足すことを許さないヘッダ（URLRequestHeader の説明にある一覧。小文字）。送る前に取り除く。
+const BLOCKED_HEADERS = new Set([
+  'accept-charset', 'accept-encoding', 'accept-ranges', 'age', 'allow', 'allowed', 'authorization', 'charge-to', 'connect', 'connection',
+  'content-length', 'content-location', 'content-range', 'cookie', 'date', 'delete', 'etag', 'expect', 'get', 'head', 'host', 'if-modified-since',
+  'keep-alive', 'last-modified', 'location', 'max-forwards', 'options', 'origin', 'post', 'proxy-authenticate', 'proxy-authorization',
+  'proxy-connection', 'public', 'put', 'range', 'referer', 'request-range', 'retry-after', 'server', 'te', 'trace', 'trailer',
+  'transfer-encoding', 'upgrade', 'uri', 'user-agent', 'vary', 'via', 'warning', 'www-authenticate', 'x-flash-version',
+]);
+const GESTURE_WINDOW = 1000; // 利用者の操作（クリック・キー）の後、ページの移動を許す時間（ms）
+
 /**
  * SWF を信用するときの、移動と読み込み（Movie.load の network オプション）と、NetStream.play のファイル（media オプション）。
  * 相対 URL は、?swf= で読んだときはその SWF の URL から、ファイルを選んだときはこのページの URL から解決する。
  * http / https 以外（javascript: や file: など）は、開きも読みもしない。
+ * policy（埋め込むページが SWF に許すこと）:
+ *   networking: 'all'（既定）| 'internal'（読み込みだけ。ページの移動はしない）| 'none'（どちらもしない）。実機の allowNetworking と同じ段階
+ *   origins: 通信してよいオリジンの並び（'https://a.example' など）。null（既定）なら、どこでもよい
+ *   credentials: fetch の credentials（'same-origin' が既定。'omit' にすると、クッキーなどを送らない）
+ *   navigation: 'gesture'（既定。このページそのものの移動は、利用者の操作の直後だけ）| 'always'
+ *   lastInput: () => 最後の利用者の操作の時刻（performance.now()）
+ *   redirect: null（既定）か、localhost（localhost・127.0.0.1・[::1]）の http の起点（'http://127.0.0.1:18124'）。
+ *             あると、読み込み・メディア・移動の宛先を、起点の /x/<元のホスト>/<パス>?<クエリ> に切り替える（試験用。
+ *             受信サーバで、SWF が何を送ったかを見る）。移動はページを動かさず、同じメソッドと中身を送るだけ。
+ *             切り替え先が localhost でなければ、通信はすべて止める。
  */
-export function trustedHttp(base, trace) {
+// 起点が localhost（localhost・127.0.0.1・[::1]）の http なら、その origin。そうでなければ null。
+export function loopbackOrigin(text) {
+  try {
+    const u = new URL(text);
+    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+export function trustedHttp(base, trace, { networking = 'all', origins = null, credentials = 'same-origin', navigation = 'gesture', lastInput = () => -Infinity, redirect = null } = {}) {
+  const local = redirect === null || redirect === undefined ? null : loopbackOrigin(redirect);
+  const refused = redirect !== null && redirect !== undefined && local === null; // 切り替え先が localhost でないときは、何もしない
+  const allowed = (url) => !origins || origins.includes(url.origin);
   const resolve = (url) => {
     try {
       const target = new URL(url, new URL(base ?? location.href, location.href));
-      if (target.protocol === 'http:' || target.protocol === 'https:') return target;
-    } catch { /* 解釈できない URL */ }
-    trace(`[blocked] ${url}（http / https 以外は、開きも読みもしません）`);
+      if (target.protocol !== 'http:' && target.protocol !== 'https:') trace(`[blocked] ${url}（http / https 以外は、開きも読みもしません）`);
+      else if (!allowed(target)) trace(`[blocked] ${target.href}（許されたオリジンではありません）`);
+      else if (refused) trace(`[blocked] ${target.href}（切り替え先が localhost ではありません）`);
+      else if (local) return new URL(`/x/${target.host}${target.pathname}${target.search}`, local);
+      else return target;
+    } catch {
+      trace(`[blocked] ${url}（解釈できない URL です）`);
+    }
     return null;
+  };
+  const headersOf = (data, contentType, headers) => {
+    const out = data && contentType ? { 'Content-Type': contentType } : {};
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      if (BLOCKED_HEADERS.has(name.toLowerCase()) || /^(sec-|proxy-)/i.test(name)) trace(`[blocked] header ${name}`);
+      else out[name] = value;
+    }
+    return out;
   };
   const network = {
     // 移動: target が空か _self / _parent / _top ならこのページを、それ以外の名前なら新しいタブ（そのウィンドウ名）を開く。
     // POST で送る中身があれば、フォームを作って送る。GET なら、中身を URL の後ろに付ける。
     navigate({ url, target, method, data }) {
+      if (networking !== 'all') { trace(`[blocked] ${url}（ページの移動は許されていません）`); return; }
       const to = resolve(url);
       if (!to) return;
+      if (local) {
+        // 切り替えたときは、ページを動かさず、同じメソッドと中身を切り替え先へ送る（応答は読まない）。
+        const post = method === 'POST';
+        const init = post ? { method: 'POST', body: new URLSearchParams(data ?? '').toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, mode: 'no-cors' } : { mode: 'no-cors' };
+        if (!post && data) for (const [name, value] of new URLSearchParams(data)) to.searchParams.append(name, value);
+        fetch(to, init).catch((e) => trace(`[navigate] ${to.href}: ${e.message}`));
+        return;
+      }
       const where = !target || /^_(self|parent|top)$/i.test(target) ? '_self' : target;
+      if (where === '_self' && navigation !== 'always' && performance.now() - lastInput() > GESTURE_WINDOW) {
+        trace(`[blocked] ${to.href}（このページの移動は、クリックやキーの直後だけです）`);
+        return;
+      }
       if (method === 'POST') {
         const form = Object.assign(document.createElement('form'), { method: 'post', action: to.href, target: where });
         for (const [name, value] of new URLSearchParams(data ?? '')) form.append(Object.assign(document.createElement('input'), { type: 'hidden', name, value }));
@@ -66,10 +141,11 @@ export function trustedHttp(base, trace) {
     },
     // 読み込み: 結果のバイト列を返す。読めなければ null（スクリプトには失敗として伝わる）。
     async load({ url, method, data, contentType, headers }) {
+      if (networking === 'none') return null;
       const from = resolve(url);
       if (!from) return null;
       try {
-        const res = await fetch(from, { method, body: data ?? undefined, headers: { ...(data && contentType ? { 'Content-Type': contentType } : {}), ...(headers ?? {}) } });
+        const res = await fetch(from, { method, body: data ?? undefined, headers: headersOf(data, contentType, headers), credentials });
         if (!res.ok) trace(`[load] ${from.href}: HTTP ${res.status}`);
         return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
       } catch (e) {
@@ -80,10 +156,11 @@ export function trustedHttp(base, trace) {
   };
   // NetStream.play(url): FLV のバイト列を返す。読めなければ null（見つからない扱い）。
   const media = async (url) => {
+    if (networking === 'none') return null;
     const from = resolve(url);
     if (!from) return null;
     try {
-      const res = await fetch(from);
+      const res = await fetch(from, { credentials });
       if (!res.ok) trace(`[play] ${from.href}: HTTP ${res.status}`);
       return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
     } catch (e) {
@@ -93,7 +170,6 @@ export function trustedHttp(base, trace) {
   };
   return { network, media };
 }
-
 
 // 音の出力は、ページに 1 つ。ブラウザは利用者の操作があるまで音を出さないので、最初のクリックやキー操作で有効にする。
 let sharedAudio = null;
@@ -160,12 +236,14 @@ export function attachInput(canvas, getMovie, after = () => {}) {
 }
 
 export class FlappPlayer extends HTMLElement {
-  static observedAttributes = ['src', 'trust', 'encoding', 'match-player'];
+  static observedAttributes = ['src', 'trust', 'encoding', 'match-player', 'allow-networking', 'allow-origins', 'credentials', 'allow-navigation', 'redirect-to'];
   #canvas = document.createElement('canvas');
   #renderer = new CanvasRenderer(this.#canvas);
   #timer = 0;
   #generation = 0; // load のたびに増やし、古い読み込みの続きを捨てる
   #source = null; // { bytes, label, base }（属性を変えたときに読み直す）
+  #lastInput = -Infinity; // 最後の利用者の操作（クリック・キー）の時刻
+  #visible = true; // 画面の中に見えているか（見えていなければ、1 秒に 2 回だけ進める）
   movie = null;
 
   constructor() {
@@ -186,6 +264,9 @@ export class FlappPlayer extends HTMLElement {
       movie.mouseMove(Math.round((e.clientX - rect.left) * 20), Math.round((e.clientY - rect.top) * 20));
     };
     canvas.tabIndex = 0;
+    for (const type of ['pointerdown', 'keydown']) this.addEventListener(type, () => { this.#lastInput = performance.now(); }, { capture: true });
+    // 画面の外にあるときは遅くする（実機のプラグインと同じく 1 秒に 2 回）。ページが隠れているときは、ブラウザがタイマーを止める。
+    if (typeof IntersectionObserver === 'function') new IntersectionObserver((entries) => { this.#visible = entries.at(-1).isIntersecting; }).observe(this);
     canvas.addEventListener('mousemove', input(moveTo));
     canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
     canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
@@ -224,7 +305,18 @@ export class FlappPlayer extends HTMLElement {
     const generation = ++this.#generation;
     this.#source = { bytes: source, label, base };
     const trace = (text) => { this.dispatchEvent(new CustomEvent('trace', { detail: text })); };
-    const http = this.hasAttribute('trust') && this.getAttribute('trust') !== '0' ? trustedHttp(base, trace) : null;
+    // 信用するときの通信の決まり（属性）。allow-networking: all | internal | none、allow-origins: 許すオリジンを空白で区切って並べる
+    // （* か省略なら、どこでも）、credentials: same-origin | omit | include、allow-navigation: gesture | always。
+    const word = (name, values, otherwise) => (values.includes(this.getAttribute(name)) ? this.getAttribute(name) : otherwise);
+    const origins = (this.getAttribute('allow-origins') ?? '*').trim();
+    const http = this.hasAttribute('trust') && this.getAttribute('trust') !== '0' ? trustedHttp(base, trace, {
+      networking: word('allow-networking', ['all', 'internal', 'none'], 'all'),
+      origins: origins === '*' || origins === '' ? null : origins.split(/\s+/).map((o) => { try { return new URL(o).origin; } catch { return o; } }),
+      credentials: word('credentials', ['same-origin', 'omit', 'include'], 'same-origin'),
+      navigation: word('allow-navigation', ['gesture', 'always'], 'gesture'),
+      lastInput: () => this.#lastInput,
+      redirect: this.getAttribute('redirect-to'), // 試験用: 宛先を localhost に切り替える（trustedHttp の redirect）
+    }) : null;
     // 信用しないときは、URL から読んだ SWF の NetStream.play のファイルだけ、同じサーバから渡す。
     const media = http ? http.media : base && (async (url) => {
       const target = new URL(url, base);
@@ -255,7 +347,7 @@ export class FlappPlayer extends HTMLElement {
       movie.advance();
       this.#draw();
       if (movie.warnings.length) { for (const w of movie.warnings.splice(0)) this.dispatchEvent(new CustomEvent('warning', { detail: w })); }
-      this.#timer = setTimeout(tick, movie.frameRate > 0 ? 1000 / movie.frameRate : 100);
+      this.#timer = setTimeout(tick, this.#visible ? (movie.frameRate > 0 ? 1000 / movie.frameRate : 100) : 500);
     };
     this.#timer = setTimeout(tick, movie.frameRate > 0 ? 1000 / movie.frameRate : 100);
   }

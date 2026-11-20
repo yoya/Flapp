@@ -126,6 +126,8 @@
   canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
   window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
   // キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡す。
+  let lastInput = -Infinity; // 最後の利用者の操作の時刻（信用する SWF が、このページを移動させてよいか）
+  for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, () => { lastInput = performance.now(); }, { capture: true });
   attachInput(canvas, () => current, () => { canvas.style.cursor = current.avm && !current.avm.mouseVisible ? 'none' : current.hoverButton ? 'pointer' : ''; redraw(); });
 
   // base は、?swf= で読んだときの SWF の URL。信用しないときは、そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。
@@ -159,7 +161,7 @@
     // （NetStream.play のファイルだけは、?swf= で読んだときに同じサーバから渡す）。
     const onRequest = ({ kind, url, target, method }) => trace(`[${kind}${method ? ' ' + method : ''}] ${url}${target ? ' → ' + target : ''}`
       + (trust.checked ? '' : kind === 'play' ? (base ? '（同じサーバから読みます）' : '（読みません）') : '（信用していないので、開きも読みもしません）'));
-    const http = trust.checked ? trustedHttp(base, trace) : null;
+    const http = trust.checked ? trustedHttp(base, trace, { lastInput: () => lastInput }) : null; // このページの移動は、操作の直後だけ
     const network = http?.network;
     const media = http ? http.media : base && (async (url) => {
       const target = new URL(url, new URL(base, location.href));
