@@ -1,4 +1,4 @@
-// 表示オブジェクトのフィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み）。
+// 表示オブジェクトのフィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み・変位マップ）。
 // DOM に依存しない画素演算。ベベル系とグラデーション光彩の向きと合成は、実機の画面から求めた規則による。
 
 /**
@@ -7,9 +7,10 @@
  * @param {number} height
  * @param {object[]} filters        parsePlaceObject の filters
  * @param {number} scale            ステージ 1px あたりのデバイスピクセル数（ぼかし量と距離に掛かる）
+ * @param {object} [area]           フィルタを掛ける表示オブジェクトの外接矩形 { x0, y0, x1, y1 }（デバイスピクセル。変位マップが使う）
  * @returns {{ rgba: Uint8ClampedArray, unsupported: string[] }}
  */
-export function applyFilters(rgba, width, height, filters, scale) {
+export function applyFilters(rgba, width, height, filters, scale, area = null) {
   const n = width * height;
   // 計算は乗算済みアルファの浮動小数で行う。
   let px = new Float32Array(n * 4);
@@ -33,6 +34,8 @@ export function applyFilters(rgba, width, height, filters, scale) {
       colorMatrix(px, f.matrix);
     } else if (f.type === 'convolution') {
       px = convolution(px, width, height, f);
+    } else if (f.type === 'displacement') {
+      px = displacement(px, width, height, f, scale, area);
     } else {
       unsupported.push(f.type);
     }
@@ -260,6 +263,49 @@ function convolution(px, width, height, f) {
 }
 
 // 色行列（4 行 5 列）。乗算前の RGBA に対して計算する。
+// 変位マップ（実機の画面から求めた規則。test/as3/displace.as）:
+//  - 地図の画素は、表示オブジェクトの外接矩形の左上から mapPoint だけずれたところに、ステージの 1px = 地図の 1 画素で重なる
+//    （オブジェクトの拡大縮小は関係ない）。地図の外は動かさない。
+//  - 各画素は、地図の成分の値 c から (c - 128) × scale / 256（ステージの px）だけ離れた画素の色になる。
+//  - 外接矩形の外を指したとき: wrap は反対側から、clamp は縁の画素、ignore は動かさない、color は color / alpha の色。
+//  - color のときだけ、外接矩形の周りに |scale| / 2 ずつ広げて描く（広げたところは color になる）。
+function displacement(px, width, height, f, scale, area) {
+  const map = f.map;
+  if (!map?.rgba || !area) return px;
+  const out = new Float32Array(px);
+  const channel = { 1: 0, 2: 1, 4: 2, 8: 3 };
+  const cx = channel[f.componentX] ?? -1, cy = channel[f.componentY] ?? -1;
+  const [x0, y0, x1, y1] = [Math.round(area.x0), Math.round(area.y0), Math.round(area.x1), Math.round(area.y1)];
+  const bw = x1 - x0, bh = y1 - y0;
+  if (bw <= 0 || bh <= 0) return px;
+  const grow = f.mode === 'color';
+  const gx = grow ? Math.round((Math.abs(f.scaleX) / 2) * scale) : 0, gy = grow ? Math.round((Math.abs(f.scaleY) / 2) * scale) : 0;
+  const a = f.color.a;
+  const color = [f.color.r * (a / 255), f.color.g * (a / 255), f.color.b * (a / 255), a];
+  for (let y = Math.max(0, y0 - gy); y < Math.min(height, y1 + gy); y++) {
+    for (let x = Math.max(0, x0 - gx); x < Math.min(width, x1 + gx); x++) {
+      const mx = Math.floor((x - area.x0 + 0.5) / scale - f.point.x), my = Math.floor((y - area.y0 + 0.5) / scale - f.point.y);
+      let dx = 0, dy = 0;
+      if (mx >= 0 && my >= 0 && mx < map.width && my < map.height) {
+        const i = (my * map.width + mx) * 4;
+        if (cx >= 0) dx = ((map.rgba[i + cx] - 128) * f.scaleX) / 256;
+        if (cy >= 0) dy = ((map.rgba[i + cy] - 128) * f.scaleY) / 256;
+      }
+      let sx = x + Math.round(dx) * scale, sy = y + Math.round(dy) * scale;
+      const o = (y * width + x) * 4;
+      if (sx < x0 || sx >= x1 || sy < y0 || sy >= y1) {
+        if (f.mode === 'ignore') continue;
+        if (f.mode === 'color') { out.set(color, o); continue; }
+        if (f.mode === 'clamp') { sx = Math.min(Math.max(sx, x0), x1 - 1); sy = Math.min(Math.max(sy, y0), y1 - 1); } else { sx = x0 + ((((sx - x0) % bw) + bw) % bw); sy = y0 + ((((sy - y0) % bh) + bh) % bh); }
+      }
+      if (sx < 0 || sy < 0 || sx >= width || sy >= height) { out.fill(0, o, o + 4); continue; }
+      const s = (Math.round(sy) * width + Math.round(sx)) * 4;
+      out[o] = px[s]; out[o + 1] = px[s + 1]; out[o + 2] = px[s + 2]; out[o + 3] = px[s + 3];
+    }
+  }
+  return out;
+}
+
 function colorMatrix(px, m) {
   for (let i = 0; i < px.length; i += 4) {
     const a = px[i + 3];

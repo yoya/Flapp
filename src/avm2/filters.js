@@ -4,7 +4,7 @@
 // 表示オブジェクトのフィルタ（desc）に写す。あとでオブジェクトのプロパティを変えても、表示は変わらない（実機と同じ）。
 // filters を読むと、そのたびに新しいオブジェクトの配列を返す。
 import { FILTER_CLASS, FILTER_SPECS, coerceProp } from '../player/filterspec.js';
-import { ASArray, ASObject } from './object.js';
+import { ASArray, ASObject, publicKey } from './object.js';
 
 const MAX_FILTERS = 64; // filters に入れられる数の上限
 
@@ -17,13 +17,26 @@ export function installFilters(vm) {
   // スクリプトの値を、プロパティの型に合わせた JS の値にする。
   const fromScript = (spec, v) => {
     switch (spec.kind) {
+      case 'any': return v instanceof ASObject ? v : null;
+      case 'point': return v instanceof ASObject ? { x: Math.trunc(num(v.values.get(publicKey('x')))) || 0, y: Math.trunc(num(v.values.get(publicKey('y')))) || 0 } : { x: 0, y: 0 }; // 整数に切り捨てる（実機で確認）
+      case 'mode': {
+        const s = vm.toStr(v);
+        if (!spec.values.includes(s)) vm.throwError('ArgumentError', 2008, 'Parameter mode must be one of the accepted values.');
+        return s;
+      }
       case 'list': return v instanceof ASArray ? v.items.map((x) => num(x)) : [];
       case 'type': return v === undefined || v === null ? spec.def : vm.toStr(v);
       case 'bool': return vm.toBoolean(v);
       default: return num(v);
     }
   };
-  const toScript = (spec, v) => (spec.kind === 'list' ? new ASArray(vm, [...v]) : v);
+  // 読むと、点は新しい Point、ビットマップは複製（どちらも、持っているものとは別のオブジェクト。実機で確認）。
+  const toScript = (spec, v) => {
+    if (spec.kind === 'list') return new ASArray(vm, [...v]);
+    if (spec.kind === 'point') return vm.construct(c.Point, [v.x, v.y]);
+    if (spec.kind === 'any' && v?.bitmap) return Object.assign(new ASObject(v.klass), { bitmap: { ...v.bitmap, rgba: v.bitmap.rgba && new Uint8ClampedArray(v.bitmap.rgba), version: 0 } });
+    return v;
+  };
   // グラデーションの alphas と ratios は、色の数までしか読めず、alpha は 1/255 刻み（実機で確認）。
   const read = (spec, props, key) => {
     const v = props[key];
@@ -39,7 +52,7 @@ export function installFilters(vm) {
       getters[key] = (self) => read(spec, self.fprops, key);
       setters[key] = (self, v) => {
         // null は代入できない（種類と配列。実機は TypeError #2007）。
-        if ((v === null || v === undefined) && ['list', 'type'].includes(spec.props[key].kind)) vm.throwError('TypeError', 2007, `Parameter ${key} must be non-null.`);
+        if ((v === null || v === undefined) && ['list', 'type', 'mode'].includes(spec.props[key].kind)) vm.throwError('TypeError', 2007, `Parameter ${key} must be non-null.`);
         self.fprops[key] = coerceProp(spec.props[key], fromScript(spec.props[key], v));
         spec.fix?.(self.fprops);
       };
@@ -50,7 +63,7 @@ export function installFilters(vm) {
         const p = spec.props[key];
         const v = args[i];
         const none = v === undefined || v === null; // コンストラクタの null は、省略と同じ
-        self.fprops[key] = none ? (Array.isArray(p.def) ? [...p.def] : p.def) : coerceProp(p, fromScript(p, v));
+        self.fprops[key] = none ? (Array.isArray(p.def) ? [...p.def] : p.def && typeof p.def === 'object' ? { ...p.def } : p.def) : coerceProp(p, fromScript(p, v));
       });
       spec.fix?.(self.fprops);
     };
@@ -62,6 +75,8 @@ export function installFilters(vm) {
       methods: { clone: (self) => vm.construct(classes.get(name), names.map((key) => read(spec, self.fprops, key))) },
     }));
   }
+
+  vm.defineClass({ name: 'flash.filters::DisplacementMapFilterMode', final: true, staticValues: { WRAP: 'wrap', CLAMP: 'clamp', IGNORE: 'ignore', COLOR: 'color' } });
 
   const specOf = (obj) => {
     for (const [name, klass] of classes) if (obj instanceof ASObject && obj.klass === klass) return FILTER_SPECS[name];

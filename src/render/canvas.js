@@ -286,7 +286,8 @@ export class CanvasRenderer {
     if (filters?.length) {
       const { width, height } = layer.canvas;
       const image = layer.ctx.getImageData(0, 0, width, height);
-      const result = applyFilters(image.data, width, height, filters, this.scale);
+      const b = filters.some((f) => f.type === 'displacement') ? child.bounds(m) : null; // 変位マップは、外接矩形を基準にする
+      const result = applyFilters(image.data, width, height, filters, this.scale, b && { x0: b.xmin, y0: b.ymin, x1: b.xmax, y1: b.ymax });
       layer.ctx.putImageData(new ImageData(result.rgba, width, height), 0, 0);
       for (const type of result.unsupported) {
         if (!this.movie.warnings.includes(`filter ${type} is not supported`)) this.movie.warn(`filter ${type} is not supported`);

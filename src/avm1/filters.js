@@ -34,6 +34,7 @@ export function installFilters(vm) {
   };
 
   for (const [name, spec] of Object.entries(FILTER_SPECS)) {
+    if (spec.as3Only) continue; // AS2 には BitmapData が無いので、変位マップは作らない
     const names = Object.keys(spec.props);
     const proto = new AVMObject(vm, vm.objectProto);
     protos.set(name, proto);

@@ -1,0 +1,11 @@
+defaults |(x=0, y=0)|0|0|0|0|wrap|0|0
+values 3|(x=1, y=-2)|3|8|1000|-65535|clamp|1193046|0.2980392156862745
+mode bad ERR 2008
+mode null ERR 2007
+alpha range 1,0
+color 1193046
+mapPoint copy 1,false
+mapBitmap same false
+clone 2|(x=3, y=4)|1|2|5|6|color|255|0.4980392156862745
+filters roundtrip 2|(x=3, y=4)|1|2|5|6|ignore|255|0.4980392156862745
+constants wrap,clamp,ignore,color,1,2,4,8

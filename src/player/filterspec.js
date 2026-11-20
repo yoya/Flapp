@@ -20,6 +20,10 @@ const bool = (def) => ({ def, kind: 'bool' });
 const uint = (def) => ({ def, kind: 'uint' });
 const kind = (def = 'inner') => ({ def, kind: 'type' });
 const list = (def = []) => ({ def, kind: 'list' });
+const any = (def = null) => ({ def, kind: 'any' }); // スクリプトの値のまま（ビットマップ）
+const point = () => ({ def: { x: 0, y: 0 }, kind: 'point' }); // { x, y }
+const u32 = (def) => ({ def, kind: 'u32' });
+const mode = (def) => ({ def, kind: 'mode', values: ['wrap', 'clamp', 'ignore', 'color'] }); // 決まった名前（ほかは呼ぶ側が #2008）
 
 const rgba = (color, alpha) => ({ r: (color >> 16) & 0xff, g: (color >> 8) & 0xff, b: color & 0xff, a: Math.round(Math.min(Math.max(alpha, 0), 1) * 255) });
 const rgb = (c) => (c.r << 16) | (c.g << 8) | c.b;
@@ -71,6 +75,14 @@ export const FILTER_SPECS = {
     },
     fromDesc: (d) => ({ matrixX: d.matrixX, matrixY: d.matrixY, matrix: d.matrix, divisor: d.divisor, bias: d.bias, preserveAlpha: d.preserveAlpha, clamp: d.clamp, color: rgb(d.defaultColor), alpha: alpha(d.defaultColor) }),
   },
+  // 変位マップ（AS3 だけ）。mapBitmap はスクリプトの BitmapData（描くときは、その画素 .bitmap を参照で使う）。
+  // scaleX / scaleY は ±65535 に収める。値は実機で確認（test/as3/displace.as）。
+  DisplacementMapFilter: {
+    as3Only: true,
+    props: { mapBitmap: any(), mapPoint: point(), componentX: u32(0), componentY: u32(0), scaleX: num(0, -65535, 65535), scaleY: num(0, -65535, 65535), mode: mode('wrap'), color: uint(0), alpha: alphaOf(0) },
+    toDesc: (p) => ({ type: 'displacement', mapObject: p.mapBitmap, map: p.mapBitmap?.bitmap ?? null, point: { ...p.mapPoint }, componentX: p.componentX, componentY: p.componentY, scaleX: p.scaleX, scaleY: p.scaleY, mode: p.mode, color: rgba(p.color, p.alpha) }),
+    fromDesc: (d) => ({ mapBitmap: d.mapObject, mapPoint: { ...d.point }, componentX: d.componentX, componentY: d.componentY, scaleX: d.scaleX, scaleY: d.scaleY, mode: d.mode, color: rgb(d.color), alpha: alpha(d.color) }),
+  },
 };
 
 function gradient(type) {
@@ -87,7 +99,7 @@ function gradient(type) {
 }
 
 /** フィルタの形式の type から、スクリプトのクラス名へ。 */
-export const FILTER_CLASS = { blur: 'BlurFilter', dropShadow: 'DropShadowFilter', glow: 'GlowFilter', bevel: 'BevelFilter', gradientGlow: 'GradientGlowFilter', gradientBevel: 'GradientBevelFilter', colorMatrix: 'ColorMatrixFilter', convolution: 'ConvolutionFilter' };
+export const FILTER_CLASS = { blur: 'BlurFilter', dropShadow: 'DropShadowFilter', glow: 'GlowFilter', bevel: 'BevelFilter', gradientGlow: 'GradientGlowFilter', gradientBevel: 'GradientBevelFilter', colorMatrix: 'ColorMatrixFilter', convolution: 'ConvolutionFilter', displacement: 'DisplacementMapFilter' };
 
 /**
  * プロパティの値を、型に合わせて収める。value はスクリプトの値を JS の値にしたもの（数・真偽値・文字列・数の配列）。
@@ -106,6 +118,7 @@ export function coerceProp(spec, value) {
     case 'uint': return Number(value) >>> 0 & 0xffffff;
     case 'bool': return !!value;
     case 'type': return value === 'inner' || value === 'outer' ? value : 'full';
+    case 'u32': return Number(value) >>> 0;
     default: return value;
   }
 }
