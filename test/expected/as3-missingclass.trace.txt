@@ -1,0 +1,3 @@
+start
+caught ReferenceError 1065
+end
