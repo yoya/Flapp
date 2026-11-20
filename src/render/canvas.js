@@ -80,6 +80,14 @@ function deviceFont(r) {
   return `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}${r.size}px ${family}`;
 }
 
+// 段落の向き: 最初の強い文字（字）が右から左へ書く文字（ヘブライ・アラビアなど）なら rtl（Unicode の双方向の規則 P2。実機の画面で確認）。
+// 文字の並べ替えは、ブラウザの fillText が同じ規則で行う。
+const RTL = /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
+function directionOf(text) {
+  const strong = /\p{L}/u.exec(text);
+  return strong && RTL.test(strong[0]) ? 'rtl' : 'ltr';
+}
+
 const resetTransform = (ctx) => ctx.setTransform(1, 0, 0, 1, 0, 0);
 
 export class CanvasRenderer {
@@ -664,12 +672,14 @@ export class CanvasRenderer {
   #text(ctx, op, m, cx) {
     ctx.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
     ctx.textBaseline = 'top';
+    if ('direction' in ctx) ctx.direction = directionOf(op.runs ? op.runs.map((r) => r.text).join('') : op.text);
     if (!op.runs) {
       ctx.font = deviceFont(op);
       ctx.textAlign = op.align === 'right' || op.align === 'center' ? op.align : 'left';
       ctx.fillStyle = css(op.color, cx);
       const x = op.align === 'right' ? op.x + op.width : op.align === 'center' ? op.x + op.width / 2 : op.x;
       ctx.fillText(op.text, x, op.y);
+      if ('direction' in ctx) ctx.direction = 'ltr';
       return;
     }
     ctx.textAlign = 'left';
@@ -690,6 +700,7 @@ export class CanvasRenderer {
       x += widths[i];
     });
     if (spaced) ctx.letterSpacing = '0px';
+    if ('direction' in ctx) ctx.direction = 'ltr';
   }
 
   // --- ビットマップ ---
