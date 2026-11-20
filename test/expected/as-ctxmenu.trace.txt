@@ -1,0 +1,19 @@
+typeof function object true
+builtIn forward_back=true,loop=true,play=true,print=true,quality=true,rewind=true,save=true,zoom=true
+custom 0 true
+onSelect undefined
+onSelect2 true
+hidden forward_back=false,loop=false,play=false,print=false,quality=false,rewind=false,save=false,zoom=false
+item Hello,true,false,true,true
+item2 X,true,false,false
+copy 1,Hello,false,forward_back=false,loop=false,play=false,print=false,quality=false,rewind=false,save=false,zoom=false,true
+itemcopy Hello,false,true
+menu undefined undefined
+menu set true
+tf menu undefined
+Stage.showMenu true
+Stage.showMenu2 false
+EI function false
+EI call null
+EI addCallback false
+ContextMenu enum 
