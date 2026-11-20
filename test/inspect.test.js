@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { inspectSWF } from '../www/inspect.js';
+import { inspectSWF } from '../web/inspect.js';
 
 const fixture = (name) => readFileSync(new URL(`fixtures/${name}.swf`, import.meta.url));
 
