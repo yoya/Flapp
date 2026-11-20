@@ -1,0 +1,46 @@
+div mid xa\rz | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false | Times Roman/12/65280/false/false/false//left/0/0/0/0/false/0/false | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+div twice a\rb\r | Times Roman/12/65280/false/false/false//left/0/0/0/0/false/0/false | Times Roman/12/65280/false/false/false//left/0/0/0/0/false/0/false
+div empty x\rz
+div in p ab\rcd | Times Roman/20/16711680/false/false/false//left/0/0/0/0/false/0/false | Times Roman/20/65280/false/false/false//left/0/0/0/0/false/0/false | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+em in div ERR 2006
+h1 a\rz | Times Roman/30/0/false/false/false//left/0/0/0/0/false/0/false | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+h2 unstyled az
+class on a az | Times Roman/40/3355443/false/false/false/u/left/0/0/0/0/false/0/false
+class on div a\rz | Times Roman/12/65280/false/false/false//left/0/0/0/0/false/0/false
+class on li a\rz | Times Roman/40/8947848/false/false/false//left/0/0/0/0/true/0/false
+class on font Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+class on i Times Roman/12/0/false/true/false//left/0/0/0/0/false/0/false
+class on u Times Roman/12/0/false/false/true//left/0/0/0/0/false/0/false
+class on textformat Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+class on em a\rz | Times Roman/12/0/false/true/false//left/0/0/0/0/false/0/false
+class on unstyled tag az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+class on br a\rz | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+p tag+class Times Roman/40/16711680/false/false/false//left/0/0/0/0/false/0/false
+font-family monospace monospace/12/0/false/false/false//left/0/0/0/0/false/0/false
+font-family sans-serif _sans/12/0/false/false/false//left/0/0/0/0/false/0/false
+font-family serif _serif/12/0/false/false/false//left/0/0/0/0/false/0/false
+font-family list Arial,Helvetica/12/0/false/false/false//left/0/0/0/0/false/0/false
+font-family quoted 'Times New Roman'/12/0/false/false/false//left/0/0/0/0/false/0/false
+bold italic underline Times Roman/12/0/true/true/true//left/0/0/0/0/false/0/false
+normal after b Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+normal in p Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+justify Times Roman/20/16711680/false/false/false//justify/0/0/0/0/false/0/false
+center on span Times Roman/12/0/false/false/false//center/0/0/0/0/false/0/false
+neg margin Times Roman/12/0/false/false/false//left/-5/0/0/0/false/0/false
+frac size Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+big size Times Roman/1000/0/false/false/false//left/0/0/0/0/false/0/false
+zero size Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+bad color Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+empty color Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+important Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false
+font tag in css span Times Roman/9/0/false/false/false//left/0/0/0/0/false/0/false
+css span in font Times Roman/40/65280/false/false/false//left/0/0/0/0/false/0/false
+replaceSelectedText ERR 2009
+defaultTextFormat set ERR 2009
+defaultTextFormat get 12
+setTextFormat whole ERR 2009
+getTextFormat ok Times Roman/20/16711680/false/false/false//left/0/0/0/0/false/0/false
+text getter hi | <b>hi</b> | 2
+input Times Roman/20/16711680/false/false/false//left/0/0/0/0/false/0/false
+autoSize true,true,3
+numLines 2,ab\rc

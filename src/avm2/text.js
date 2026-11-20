@@ -3,7 +3,7 @@
 // 文字列や書式の状態は、プレイヤーのテキストフィールド（player/movie.js の TextField）が持つ。
 // 書式は文字ごとに持つ（player/richtext.js）。範囲ごとの書式と HTML の書式は、実機の読み書きに合わせてある。
 // 文字の寸法（textWidth など）は概算で、端末のフォントで決まる実機の値とは一致しない。
-import { mergeFormat } from '../player/richtext.js';
+import { cssPatch, mergeFormat } from '../player/richtext.js';
 import { ASArray, ASObject, publicKey } from './object.js';
 
 // TextFormat の項目。[名前, getTextFormat が返す既定値]
@@ -50,6 +50,71 @@ export function installText(vm, movie) {
       });
     },
   });
+  // --- StyleSheet ---
+  // セレクタは小文字にして持つ（実機で確認）。同じセレクタをもう一度書くと、重ねずに置き換わる。TextField.styleSheet に付けたフィールドは
+  // fields に持ち、スタイルが変わったら、内容を読み直させる。
+  const camel = (name) => name.replace(/-(.)/g, (_, ch) => ch.toUpperCase());
+  const plainStyle = (obj) => {
+    const out = {};
+    if (obj instanceof ASObject) for (const key of vm.enumerate(obj)) out[String(key)] = str(obj.values.get(publicKey(String(key))));
+    return out;
+  };
+  const copyStyle = (style) => { const out = new ASObject(c.Object); for (const [k, v] of style) out.values.set(publicKey(k), v); return out; };
+  const changed = (self) => { for (const f of self.fields) f.reapplySheet(); };
+  c.StyleSheet = vm.defineClass({
+    name: 'flash.text::StyleSheet', base: c.EventDispatcher,
+    allocate: (klass) => Object.assign(new ASObject(klass), { styles: new Map(), fields: new Set() }),
+    construct: () => {},
+    getters: { styleNames: (self) => new ASArray(vm, [...self.styles.keys()]) },
+    methods: {
+      setStyle: (self, [name, style]) => {
+        const key = str(name).toLowerCase();
+        if (self.styles.size < 10000 || self.styles.has(key)) self.styles.set(key, new Map(Object.entries(plainStyle(style))));
+        changed(self);
+      },
+      getStyle: (self, [name]) => copyStyle(self.styles.get(str(name).toLowerCase()) ?? new Map()),
+      clear: (self) => { self.styles.clear(); changed(self); },
+      // "selector { property: value; … }" の並び。実機で確かめた読み方: 書き間違い（セレクタの中の空白、":" の無い項目、空の項目、閉じていない
+      // 括弧など）が 1 か所でもあれば、その呼び出しで読んだものは全部捨てる。名前の前と値の前の空白は除くが、後ろの空白は残る（"color : x" の
+      // 名前は "color "）。プロパティ名は - の次の 1 文字を大文字にして camelCase にする（小文字にはしない）。同じセレクタは、あとのもので置き換わる。
+      parseCSS: (self, [css]) => {
+        const text = str(css).replace(/\/\*[\s\S]*?\*\//g, '');
+        const found = new Map();
+        let at = 0;
+        for (;;) {
+          while (/\s/.test(text[at] ?? '')) at++;
+          if (at >= text.length) break;
+          const open = text.indexOf('{', at), close = text.indexOf('}', open + 1);
+          if (open < 0 || close < 0 || text.slice(open + 1, close).includes('{')) return;
+          const selectors = text.slice(at, open).split(',').map((x) => x.trim());
+          if (selectors.some((x) => x === '' || /\s/.test(x))) return;
+          const style = new Map();
+          const pieces = text.slice(open + 1, close).split(';');
+          for (let i = 0; i < pieces.length; i++) {
+            const piece = pieces[i], colon = piece.indexOf(':');
+            if (i === pieces.length - 1 && piece.trim() === '') break; // 最後の ";" のあと
+            if (colon < 0) return;
+            style.set(camel(piece.slice(0, colon).trimStart()), piece.slice(colon + 1).trimStart());
+          }
+          for (const selector of selectors) found.set(selector.toLowerCase(), style);
+          at = close + 1;
+        }
+        for (const [key, style] of found) if (self.styles.size < 10000 || self.styles.has(key)) self.styles.set(key, style);
+        changed(self);
+      },
+      // スタイルのオブジェクトを TextFormat にする（読めない項目は null のまま）。
+      transform: (self, [style]) => {
+        if (style === null || style === undefined) return null;
+        const plain = plainStyle(style), patch = cssPatch(plain), format = vm.construct(c.TextFormat, []);
+        for (const [key, v] of Object.entries(patch)) format.values.set(publicKey(key), v);
+        if (plain.display !== undefined) format.values.set(publicKey('display'), plain.display);
+        return format;
+      },
+    },
+  });
+  /** スタイルシートのオブジェクトを、プレイヤーのフィールドへ渡す形（{ get(セレクタ) → スタイル | null }）にする。 */
+  const sheetOf = (obj) => ({ get: (selector) => { const style = obj.styles.get(selector); return style ? Object.fromEntries(style) : null; } });
+
   // プレイヤー側の書式 { font, size, ... } を TextFormat にする。
   const formatObject = (format) => {
     const obj = vm.construct(c.TextFormat, []);
@@ -104,6 +169,8 @@ export function installText(vm, movie) {
   // 改行は CR で持つ。LF は CR に、CR LF は CR 2 つになる（実機で確認）。
   const setText = (f, text) => { f.setText(text.replace(/\n/g, '\r'), false); fit(f); };
 
+  // スタイルシートのあるフィールドでは、書式や文字列を直接変える API は使えない（実機は #2009）。
+  const noSheet = (self) => { if (F(self).sheet) vm.throwError('Error', 2009, 'This method cannot be used on a text field with a style sheet.'); };
   const flag = (name) => [(self) => F(self)[name], (self, v) => { F(self)[name] = bool(v); F(self).changed(); }];
   const color = (name) => [(self) => F(self)[name], (self, v) => { F(self)[name] = vm.toUint32(v) & 0xffffff; F(self).changed(); }];
   // 値を覚えておくだけの項目（見た目には反映しない）。
@@ -123,12 +190,14 @@ export function installText(vm, movie) {
   const props = {
     text: [(self) => F(self).text, (self, v) => {
       if (v === null || v === undefined) vm.throwError('TypeError', 2007, 'Parameter text must be non-null.');
+      // スタイルシートがあるときは、text に代入した文字列も HTML として読む（実機で確認）。
+      if (F(self).sheet) { F(self).setHtml(str(v), true); fit(F(self)); return; }
       F(self).htmlText = null;
       setText(F(self), str(v));
     }],
     // 読むと、今の文字列と書式を実機と同じ形の HTML にしたものが返る。書くと、タグを書式として読む（複数行でないフィールドでは、<br> や
     // 段落の切れ目は改行にならない。実機で確認）。
-    htmlText: [(self) => F(self).toHtml(), (self, v) => {
+    htmlText: [(self) => (F(self).sheet ? F(self).htmlText ?? '' : F(self).toHtml()), (self, v) => { // スタイルシートがあるときは、代入した文字列そのものが返る（実機で確認）
       if (v === null || v === undefined) vm.throwError('TypeError', 2007, 'Parameter text must be non-null.');
       F(self).setHtml(str(v), true);
       fit(F(self));
@@ -147,12 +216,19 @@ export function installText(vm, movie) {
     // 知らない値を代入しても、誤りにはならない（無視する）。
     antiAliasType: [(self) => F(self).antiAliasType ?? 'normal', (self, v) => { if (['normal', 'advanced'].includes(str(v))) F(self).antiAliasType = str(v); }],
     gridFitType: [(self) => F(self).gridFitType ?? 'pixel', (self, v) => { if (['none', 'pixel', 'subpixel'].includes(str(v))) F(self).gridFitType = str(v); }],
-    sharpness: stored('sharpness', 0, num), thickness: stored('thickness', 0, num), styleSheet: stored('styleSheet', null, (v) => v ?? null),
+    sharpness: stored('sharpness', 0, num), thickness: stored('thickness', 0, num), styleSheet: [(self) => F(self).styleSheetObject ?? null, (self, v) => {
+      const f = F(self), old = f.styleSheetObject;
+      old?.fields.delete(f);
+      f.styleSheetObject = v instanceof ASObject && v.styles ? v : null;
+      f.styleSheetObject?.fields.add(f);
+      f.setStyleSheet(f.styleSheetObject ? sheetOf(f.styleSheetObject) : null);
+      fit(f);
+    }],
     scrollH: stored('scrollH', 0, (v) => vm.toInt32(v)), scrollV: stored('scrollV', 1, (v) => Math.max(1, vm.toInt32(v))),
     maxScrollH: fixed(0), maxScrollV: fixed(1), bottomScrollV: fixed(1),
-    selectionBeginIndex: [(self) => F(self).selection?.[0] ?? 0, null], selectionEndIndex: [(self) => F(self).selection?.[1] ?? 0, null],
-    caretIndex: [(self) => F(self).selection?.[1] ?? 0, null],
-    selectedText: [(self) => { const f = F(self); const [a, b] = f.selection ?? [0, 0]; return f.text.slice(a, b); }, null],
+    selectionBeginIndex: [(self) => F(self).selection[0], null], selectionEndIndex: [(self) => F(self).selection[1], null],
+    caretIndex: [(self) => F(self).caret, null],
+    selectedText: [(self) => { const f = F(self); const [a, b] = f.selection; return f.text.slice(a, b); }, null],
     numLines: [(self) => lines(F(self)).length, null],
     textWidth: [(self) => textWidth(F(self)), null], textHeight: [(self) => textHeight(F(self)), null],
     // 幅と高さは枠の大きさ。代入は、拡大率ではなく枠を変える。代入した値がそのまま枠の大きさになるので、
@@ -166,7 +242,7 @@ export function installText(vm, movie) {
       if (num(v) >= 0) { f.box.ymax = f.box.ymin + Math.round(num(v) * 20); f.changed(); }
     }],
     // 代入した書式の null でない項目が、これから入る文字の書式に重なる（実機で確認）。
-    defaultTextFormat: [(self) => formatObject(F(self).newFormat), (self, v) => { F(self).newFormat = mergeFormat(F(self).newFormat, partialOf(v)); }],
+    defaultTextFormat: [(self) => formatObject(F(self).newFormat), (self, v) => { noSheet(self); F(self).newFormat = mergeFormat(F(self).newFormat, partialOf(v)); }],
   };
   c.TextField = vm.defineClass({
     name: 'flash.text::TextField', base: c.InteractiveObject,
@@ -182,6 +258,7 @@ export function installText(vm, movie) {
     methods: {
       // 足した文字は、最後の文字の書式になり、これから入る文字の書式もそれになる（実機で確認）。
       appendText: (self, [v]) => {
+        noSheet(self);
         const f = F(self), last = f.text.length ? f.formatAt(f.text.length - 1) : null;
         f.replace(f.text.length, f.text.length, str(v));
         if (last) f.newFormat = { ...last };
@@ -190,17 +267,19 @@ export function installText(vm, movie) {
       // 範囲は文字列の長さに収める。始まりが負か、終わりが始まりより前なら、何もしない（実機で確認）。
       // 入る文字の書式は、置き換える範囲の最後の文字のもの（f.replace）。
       replaceText: (self, [begin, end, v]) => {
+        noSheet(self);
         const f = F(self);
         const a = Math.min(vm.toInt32(begin), f.text.length), b = Math.min(vm.toInt32(end), f.text.length);
         if (a >= 0 && b >= a) { f.replace(a, b, str(v)); fit(f); }
       },
       replaceSelectedText: (self, [v]) => {
-        const f = F(self), [a, b] = f.selection ?? [0, 0];
+        noSheet(self);
+        const f = F(self), [a, b] = f.selection;
         f.replace(a, b, str(v));
-        f.selection = [a + str(v).length, a + str(v).length];
+        f.setSelection(a + str(v).length, a + str(v).length);
         fit(f);
       },
-      setSelection: (self, [begin, end]) => { const f = F(self); const clamp = (v) => Math.min(Math.max(vm.toInt32(v), 0), f.text.length); f.selection = [clamp(begin), clamp(end)].sort((x, y) => x - y); },
+      setSelection: (self, [begin, end]) => { F(self).setSelection(vm.toInt32(begin), vm.toInt32(end)); },
       // 範囲（begin〜end。end は含まない）の書式。範囲の中で違う項目は null。begin だけなら、その 1 文字。
       // begin が文字の数以上、end が文字の数より後ろなら RangeError #2006。end が begin 以下なら、項目がすべて null（実機で確認）。
       getTextFormat: (self, [begin = -1, end = -1]) => {
@@ -216,6 +295,7 @@ export function installText(vm, movie) {
       },
       // 範囲を省くと、全体に重なる（これから入る文字の書式 defaultTextFormat は変わらない。実機で確認）。
       setTextFormat: (self, [format, begin = -1, end = -1]) => {
+        noSheet(self);
         const f = F(self), len = f.text.length;
         const partial = partialOf(format);
         let a = vm.toInt32(begin), b = vm.toInt32(end);

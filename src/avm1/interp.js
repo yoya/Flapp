@@ -68,15 +68,17 @@ export class AVM1 {
    *   request: ({ kind, url, target, method }) => void   getURL / loadMovie / loadVariables の要求の通知先。
    *            通知するだけで、移動も読み込みもしない
    *   navigate: ({ url, target, method, data }) => void   移動を、ホストに任せるための関数（既定は何もしない）
+   *   focus: { get, set }   キーボードのフォーカスの読み書き（プレイヤーの movie.focus）
    *   load: (要求, done, { sync }) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で
    *            呼ぶ（sync なら、ホストがその場で返したときはその場で呼ぶ）。既定は、読めなかった扱い（null）
    */
-  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, storage = null, stage = { width: 550, height: 400 }, language = 'en' } = {}) {
+  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, storage = null, stage = { width: 550, height: 400 }, language = 'en', focus = null } = {}) {
     this.request = request;
+    this.focus = focus ?? { get: () => null, set: () => {} }; // キーボードのフォーカス: { get() → 表示オブジェクト | null, set(表示オブジェクト | null) }（Selection 用）
     this.navigate = navigate;
     this.storage = storage; // SharedObject の保存先（player/sharedstore.js の説明）。無ければ、再生中だけ値を持つ
     this.load = load ?? ((req, done, { sync = false } = {}) => (sync ? done(null) : this.later(() => done(null))));
-    this.listeners = { Mouse: [], Key: [], Stage: [] }; // addListener で登録されたオブジェクト
+    this.listeners = { Mouse: [], Key: [], Stage: [], Selection: [] }; // addListener で登録されたオブジェクト
     this.currentTarget = null;
     this.pending = []; // later() で予約した処理（読み込み失敗の通知など）。プレイヤーが次のフレームの後で実行する
     this.environment = { width: stage.width, height: stage.height, language };
@@ -225,6 +227,30 @@ export class AVM1 {
       const fn = listener.get(method);
       if (fn instanceof AVMFunction) this.invoke(fn, listener, []);
     }
+  }
+
+  // 表示オブジェクト（テキストフィールドかクリップ）から、スクリプトのオブジェクトへ。無ければ null。
+  #scriptOf(display) {
+    return display?.scriptObject?.() ?? null;
+  }
+
+  /**
+   * フォーカスの移動を伝える。順序は、古いものの onKillFocus（引数は新しいもの）→ 新しいものの onSetFocus（引数は古いもの）→
+   * Selection のリスナーの onSetFocus（古いもの、新しいもの）。
+   */
+  focusChange(old, now) {
+    const [before, after] = [this.#scriptOf(old), this.#scriptOf(now)];
+    const call = (object, method, args) => { const fn = object?.get(method); if (fn instanceof AVMFunction) this.invoke(fn, object, args); };
+    call(before, 'onKillFocus', [after]);
+    call(after, 'onSetFocus', [before]);
+    for (const listener of this.listeners.Selection.slice()) call(listener, 'onSetFocus', [before, after]);
+  }
+
+  /** 入力でテキストフィールドの文字列が変わったときの、field.onChanged(field)。 */
+  textChanged(field) {
+    const object = this.#scriptOf(field);
+    const fn = object?.get('onChanged');
+    if (fn instanceof AVMFunction) this.invoke(fn, object, [object]);
   }
 
   /** 名前の照合用の小文字化。SWF 5 以前は英字だけを対象にする（2 バイト文字を壊さない）。 */

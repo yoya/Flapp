@@ -1,0 +1,24 @@
+len=5 [ab cd]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">ab<FONT SIZE="2"><IMG SRC="pic.png" WIDTH="40" HEIGHT="30" ID="im1"> </FONT>cd</FONT></P>
+fmt: Times Roman/2/0/false/
+fmt: Times Roman/12/0/false/
+len=7 [x y z w]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">x<FONT SIZE="2"><IMG SRC="sym" WIDTH="20" HEIGHT="20" ID="s1"> </FONT>y<FONT SIZE="2"><IMG SRC="sym" ALIGN="left" VSPACE="5" HSPACE="10"> </FONT>z<FONT SIZE="2"><IMG SRC="missing.png" WIDTH="10" HEIGHT="10"> </FONT>w</FONT></P>
+len=9 [ | | | | ]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="2" COLOR="#000000" LETTERSPACING="0" KERNING="0"><IMG SRC="pic.gif"> <FONT SIZE="12">|<FONT SIZE="2"><IMG SRC="pic.jpg"> </FONT>|<FONT SIZE="2"><IMG SRC="pic.png" WIDTH="12"> </FONT>|<FONT SIZE="2"><IMG SRC="pic.png" HEIGHT="12"> </FONT>|<FONT SIZE="2"><IMG SRC="pic.png"> </FONT></FONT></FONT></P>
+len=9 [bold bold]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0"><B>bold</B><FONT SIZE="2"><IMG SRC="a.png" WIDTH="5" HEIGHT="5"><B> </B></FONT><B>bold</B></FONT></P>
+len=1 [ ]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="2" COLOR="#000000" LETTERSPACING="0" KERNING="0"><A HREF="u" TARGET=""><IMG SRC="a.png"> </A></FONT></P>
+len=3 [r \r]
+<P ALIGN="RIGHT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">r<FONT SIZE="2"><IMG SRC="a.png" ALIGN="left" VSPACE="4" HSPACE="3"> </FONT></FONT></P>
+len=0 []
+
+len=1 [ ]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="2" COLOR="#000000" LETTERSPACING="0" KERNING="0"><IMG SRC=""> </FONT></P>
+len=3 [a b]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">a<FONT SIZE="2"><IMG SRC="A.png" WIDTH="5" HEIGHT="6"> </FONT>b</FONT></P>
+len=9 [big after]
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="20" COLOR="#000000" LETTERSPACING="0" KERNING="0">big<FONT SIZE="2"><IMG SRC="a.png"> <FONT SIZE="12">after</FONT></FONT></FONT></P>
+<P ALIGN="LEFT"><FONT FACE="Times Roman" SIZE="12" COLOR="#000000" LETTERSPACING="0" KERNING="0">aZZcd</FONT></P>
+5

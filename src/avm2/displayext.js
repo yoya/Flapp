@@ -80,7 +80,7 @@ export function installDisplayExtras(vm, { movie, display, D }) {
     if (n < -1) vm.throwError('RangeError', 2027, `Parameter tabIndex must be a non-negative number; got ${n}.`);
     X(self).tabIndex = n;
   });
-  accessor(IO, 'tabEnabled', (self) => X(self).tabEnabled ?? false, (self, v) => { X(self).tabEnabled = bool(v); });
+  accessor(IO, 'tabEnabled', (self) => X(self).tabEnabled ?? D(self).type === 'input', (self, v) => { X(self).tabEnabled = bool(v); });
   accessor(IO, 'focusRect', (self) => (X(self).focusRect === undefined ? null : X(self).focusRect), (self, v) => { X(self).focusRect = v === undefined ? null : v; });
   accessor(IO, 'contextMenu', (self) => X(self).contextMenu ?? null, (self, v) => { X(self).contextMenu = v ?? null; });
   const DOC = c.DisplayObjectContainer;
@@ -122,7 +122,7 @@ export function installDisplayExtras(vm, { movie, display, D }) {
 
   // --- Stage ---
   const ST = c.Stage;
-  const state = (display.stageState = { quality: 'HIGH', focus: null, scaleMode: 'showAll', align: '' });
+  const state = (display.stageState = { quality: 'HIGH', scaleMode: 'showAll', align: '' });
   const stageW = () => (movie.frameSize.xmax - movie.frameSize.xmin) / 20;
   const stageH = () => (movie.frameSize.ymax - movie.frameSize.ymin) / 20;
   // 品質は、大文字で返る（実機で確認）。知らない名前は無視される。
@@ -148,6 +148,6 @@ export function installDisplayExtras(vm, { movie, display, D }) {
   });
   accessor(ST, 'align', () => state.align, (_, v) => { state.align = v === null || v === undefined ? '' : str(v); });
   accessor(ST, 'frameRate', () => movie.frameRate, (_, v) => { const n = num(v); if (n > 0) movie.frameRate = Math.min(n, 1000); });
-  accessor(ST, 'focus', () => state.focus, (_, v) => { state.focus = v instanceof ASObject && v.klass?.isSubclassOf(c.InteractiveObject) ? v : null; });
+  accessor(ST, 'focus', () => (movie.focus ? display.wrap(movie.focus) : null), (_, v) => { movie.setFocus(v instanceof ASObject && v.klass?.isSubclassOf(c.InteractiveObject) ? v.display : null); });
   method(ST, 'invalidate', () => {});
 }

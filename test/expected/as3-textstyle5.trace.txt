@@ -1,0 +1,36 @@
+0 p{color=#ff0000}
+1 p{color=#ff0000}
+2 p{color =#ff0000}
+3 p{color=#ff0000 }
+4 p{color =#ff0000 }
+5 
+6 a:hover{color=#ff0000}
+7 
+8 p{color=#ff0000}
+9 .k{color=#0000ff} .l{color=#0000ff}
+10 .k{color=#0000ff} .l{color=#0000ff}
+11 
+12 
+13 
+14 
+15 p{=x;fontSize=9px }
+16 p{a=;fontSize=9px }
+17 p{fontSize=9px } q{}
+18 
+19 
+20 
+21 p{fontSize=9px} q{fontSize=8px}
+22 p{color=#123456;fontSize=9px}
+23 .a{color=#123456} p{fontSize=9px}
+24 p{FONTSIZE=9px;FontWeight=bold }
+25 p{fontSize=10px }
+26 p{color=#FF0000}
+27 p{fontFamily=Arial, sans-serif}
+28 p{fontFamily="A b"}
+29 p{color=#ff0000 !important}
+30 p{fontSize=9px } q{fontSize=9px }
+31 
+32 p.x{fontSize=9px }
+33 #id{fontSize=9px }
+34 *{fontSize=9px }
+35 p{color=#123456 }

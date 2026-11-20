@@ -1,0 +1,41 @@
+// size: 320x200
+// 入力フィールドのフォーカス・選択・キャレットの、スクリプトから見える動きと画面。実機の値を測る
+var kept:Array = [];
+var t:Function = function(name:String, f:Function):void { try { trace(name, f()); } catch (e:Error) { trace(name, "ERR", e.errorID); } };
+var mk:Function = function(n:String, y:int, ty:String):TextField { var f:TextField = new TextField(); f.name = n; f.type = ty; f.text = "Hello world"; f.border = true; f.x = 10; f.y = y; f.width = 200; f.height = 24; addChild(f); return f; };
+var a:TextField = mk("a", 10, "input");
+var b:TextField = mk("b", 50, "input");
+var c:TextField = mk("c", 90, "dynamic");
+var d:TextField = mk("d", 130, "dynamic");
+d.selectable = false;
+var nm:Function = function(o:Object):String { return o == null ? "null" : (o is Stage ? "stage" : o.name); };
+var log:Function = function(e:Event):void { kept.push(e); var r:String = e is FocusEvent ? " rel=" + nm((e as FocusEvent).relatedObject) : ""; trace("  ev", e.type, "target=" + nm(e.target), "cur=" + nm(e.currentTarget), "phase=" + e.eventPhase + r); };
+for each (var o:Object in [a, b, c, d, stage]) { for each (var ty:String in ["focusIn", "focusOut", "change", "textInput", "scroll"]) o.addEventListener(ty, log); }
+var sel:Function = function(f:TextField):String { return [f.selectionBeginIndex, f.selectionEndIndex, f.caretIndex].join(","); };
+t("initial", function():* { return [sel(a), sel(b), sel(c), nm(stage.focus)].join(" | "); });
+t("focus a", function():* { stage.focus = a; return [sel(a), nm(stage.focus)].join(" | "); });
+t("setSelection 2,5", function():* { a.setSelection(2, 5); return [sel(a), a.selectedText].join(" | "); });
+t("setSelection 5,2", function():* { a.setSelection(5, 2); return [sel(a), a.selectedText].join(" | "); });
+t("setSelection 3,3", function():* { a.setSelection(3, 3); return sel(a); });
+t("setSelection out", function():* { a.setSelection(-3, 99); return sel(a); });
+t("text assign", function():* { a.setSelection(2, 5); a.text = "abc"; return sel(a); });
+t("append", function():* { a.setSelection(1, 2); a.appendText("xy"); return sel(a); });
+t("replaceText before caret", function():* { a.text = "abcdef"; a.setSelection(4, 4); a.replaceText(0, 2, "XYZ"); return sel(a); });
+t("replaceSelectedText", function():* { a.text = "abcdef"; a.setSelection(1, 3); a.replaceSelectedText("Q"); return [a.text, sel(a)].join(" | "); });
+t("replaceSelectedText caret", function():* { a.setSelection(2, 2); a.replaceSelectedText("WW"); return [a.text, sel(a)].join(" | "); });
+t("focus b", function():* { stage.focus = b; return [nm(stage.focus), sel(a), sel(b)].join(" | "); });
+t("focus b again", function():* { stage.focus = b; return nm(stage.focus); });
+t("focus c (dynamic selectable)", function():* { stage.focus = c; return [nm(stage.focus), sel(c)].join(" | "); });
+t("focus d (not selectable)", function():* { stage.focus = d; return [nm(stage.focus), sel(d)].join(" | "); });
+t("focus null", function():* { stage.focus = null; return nm(stage.focus); });
+t("focus sprite", function():* { var s:Sprite = new Sprite(); s.name = "sp"; for each (var ty2:String in ["focusIn", "focusOut"]) s.addEventListener(ty2, log); addChild(s); stage.focus = s; return nm(stage.focus); });
+t("focus invisible", function():* { b.visible = false; stage.focus = b; var r:String = nm(stage.focus); b.visible = true; return r; });
+t("focus then type change", function():* { b.type = "dynamic"; stage.focus = b; var r:String = nm(stage.focus); b.type = "input"; return r; });
+t("select all via setSelection", function():* { stage.focus = a; a.text = "Hello world"; a.setSelection(0, a.length); return sel(a); });
+t("maxChars", function():* { a.maxChars = 3; a.text = "abcdef"; var r:String = a.text; a.maxChars = 0; return r; });
+t("restrict", function():* { a.restrict = "a-c"; a.text = "abcdef"; var r:String = a.text; a.restrict = null; return r; });
+t("tf type input mouseEnabled", function():* { return [a.mouseEnabled, a.tabEnabled, b.tabEnabled, c.tabEnabled, a.tabIndex].join(","); });
+a.text = "Hello world"; b.text = "Hello world"; c.text = "Hello world";
+stage.focus = a; a.setSelection(2, 5);
+b.setSelection(3, 3);
+c.setSelection(1, 4);

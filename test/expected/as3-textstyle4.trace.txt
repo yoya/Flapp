@@ -1,0 +1,11 @@
+merge fontSize=12px
+setStyle upper p,q | color=#111111 | color=#111111
+setStyle replace x=1
+setStyle hyphen font-size=10px;fontWeight=bold
+getStyle copy font-size=10px;fontWeight=bold
+setStyle null h,n,p,q | 
+getStyle none [object Object]
+parse twice p,q
+transform plain 16711680,20,5,3,2,none,center,true,1,_sans
+transform empty fmt
+transform null null

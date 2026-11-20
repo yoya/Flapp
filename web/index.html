@@ -37,7 +37,7 @@
   import { FlvPlayback } from '../src/player/video.js';
   import { parseFLV } from '../src/video/flv.js';
   import { WebCodecsVideo } from '../src/video/webcodecs.js';
-  import { trustedHttp, trustedStorage } from './flapp.js'; // 信用する SWF の通信と保存（埋め込み用の <flapp-player> と共通）
+  import { sendKey, trustedHttp, trustedStorage } from './flapp.js'; // 信用する SWF の通信と保存（埋め込み用の <flapp-player> と共通）
 
   const canvas = document.getElementById('stage');
   const renderer = new CanvasRenderer(canvas);
@@ -126,11 +126,7 @@
   canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
   window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
   // キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡す。
-  canvas.addEventListener('keydown', input((movie, e) => {
-    if (!e.keyCode || e.metaKey) return;
-    e.preventDefault();
-    movie.keyDown(e.keyCode, e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : e.key === 'Enter' ? 13 : 0);
-  }));
+  canvas.addEventListener('keydown', input(sendKey));
   canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
 
   // base は、?swf= で読んだときの SWF の URL。信用しないときは、そのときだけ、NetStream.play が求めたファイルを同じサーバの中から渡す。

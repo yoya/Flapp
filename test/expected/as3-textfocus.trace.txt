@@ -1,0 +1,49 @@
+initial 0,0,0 | 0,0,0 | 0,0,0 | null
+  ev focusIn target=a cur=a phase=2 rel=null
+  ev focusIn target=a cur=stage phase=3 rel=null
+focus a 0,0,0 | a
+setSelection 2,5 2,5,5 | llo
+setSelection 5,2 2,5,2 | llo
+setSelection 3,3 3,3,3
+setSelection out 0,11,11
+text assign 2,3,3
+append 1,2,2
+replaceText before caret 4,4,4
+replaceSelectedText aQdef | 2,2,2
+replaceSelectedText caret aQWWdef | 4,4,4
+  ev focusOut target=a cur=a phase=2 rel=b
+  ev focusOut target=a cur=stage phase=3 rel=b
+  ev focusIn target=b cur=b phase=2 rel=a
+  ev focusIn target=b cur=stage phase=3 rel=a
+focus b b | 4,4,4 | 0,0,0
+focus b again b
+  ev focusOut target=b cur=b phase=2 rel=c
+  ev focusOut target=b cur=stage phase=3 rel=c
+  ev focusIn target=c cur=c phase=2 rel=b
+  ev focusIn target=c cur=stage phase=3 rel=b
+focus c (dynamic selectable) c | 0,0,0
+  ev focusOut target=c cur=c phase=2 rel=d
+  ev focusOut target=c cur=stage phase=3 rel=d
+  ev focusIn target=d cur=d phase=2 rel=c
+  ev focusIn target=d cur=stage phase=3 rel=c
+focus d (not selectable) d | 0,0,0
+  ev focusOut target=d cur=d phase=2 rel=null
+  ev focusOut target=d cur=stage phase=3 rel=null
+focus null null
+  ev focusIn target=sp cur=sp phase=2 rel=null
+  ev focusIn target=sp cur=stage phase=3 rel=null
+focus sprite sp
+  ev focusOut target=sp cur=sp phase=2 rel=b
+  ev focusOut target=sp cur=stage phase=3 rel=b
+  ev focusIn target=b cur=b phase=2 rel=sp
+  ev focusIn target=b cur=stage phase=3 rel=sp
+focus invisible b
+focus then type change b
+  ev focusOut target=b cur=b phase=2 rel=a
+  ev focusOut target=b cur=stage phase=3 rel=a
+  ev focusIn target=a cur=a phase=2 rel=b
+  ev focusIn target=a cur=stage phase=3 rel=b
+select all via setSelection 0,11,11
+maxChars abcdef
+restrict abcdef
+tf type input mouseEnabled true,true,true,false,-1

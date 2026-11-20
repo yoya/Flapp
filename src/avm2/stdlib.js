@@ -88,33 +88,6 @@ export function installStdlib(vm) {
     staticValues: { isSupported: true },
   });
 
-  // --- StyleSheet（CSS の読み込みと、スタイルの出し入れ。TextField.styleSheet へのつながりは無い）---
-  const camel = (name) => name.replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
-  const copyObject = (src) => { const out = new ASObject(c.Object); if (src instanceof ASObject) for (const key of vm.enumerate(src)) out.values.set(publicKey(String(key)), src.values.get(publicKey(String(key)))); return out; };
-  c.StyleSheet = vm.defineClass({
-    name: 'flash.text::StyleSheet', base: c.EventDispatcher,
-    allocate: (klass) => Object.assign(new ASObject(klass), { styles: new Map() }),
-    construct: () => {},
-    getters: { styleNames: (self) => new ASArray(vm, [...self.styles.keys()]) },
-    methods: {
-      setStyle: (self, [name, style]) => { if (self.styles.size < 10000) self.styles.set(str(name).toLowerCase() === str(name) ? str(name) : str(name), copyObject(style)); },
-      getStyle: (self, [name]) => { const v = self.styles.get(str(name)); return v ? copyObject(v) : null; },
-      clear: (self) => { self.styles.clear(); },
-      // "selector { property: value; … }" の並び。プロパティ名の - は、続く文字を大文字にして camelCase にする。
-      parseCSS: (self, [css]) => {
-        const text = str(css).replace(/\/\*[\s\S]*?\*\//g, '');
-        for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-          const style = new ASObject(c.Object);
-          for (const decl of m[2].split(';')) {
-            const at = decl.indexOf(':');
-            if (at > 0) style.values.set(publicKey(camel(decl.slice(0, at).trim())), decl.slice(at + 1).trim());
-          }
-          for (const selector of m[1].split(',')) if (selector.trim() && self.styles.size < 10000) self.styles.set(selector.trim(), style);
-        }
-      },
-    },
-  });
-
   // --- LocalConnection（別の SWF とのやり取りは無いので、何も届かない）---
   const connections = new Set();
   c.LocalConnection = vm.defineClass({

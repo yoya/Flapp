@@ -248,8 +248,23 @@ export function installFlash(vm, movie, types) {
     // 状態の表示オブジェクトが、ほかのところ（addChild された先）にあるなら、取り戻さない（そのボタンには何も表示されない。実機で確認）。
     if (want && !want.parent) d.insertChild(want);
   };
-  /** キーの押し下げ・解放を伝える。フォーカスを持つものが無いので、ステージが相手になる。 */
-  display.key = (type, keyCode, charCode) => send(display.stage, c.KeyboardEvent, [type, true, false, charCode, keyCode]);
+  /** キーの押し下げ・解放を伝える。相手はフォーカスを持つもの（無ければステージ）。mods は { shift, ctrl, alt }。 */
+  display.key = (type, keyCode, charCode, mods = {}) => send(movie.focus ? display.wrap(movie.focus) : display.stage, c.KeyboardEvent, [type, true, false, charCode, keyCode, 0, !!mods.ctrl, !!mods.alt, !!mods.shift]);
+  /** フォーカスの移動。順序は focusOut（相手は新しいもの）→ focusIn（相手は古いもの）。どちらも親へ伝わる（実機で確認）。 */
+  display.focusChange = (old, now) => {
+    if (old) send(display.wrap(old), c.FocusEvent, ['focusOut', true, false, now ? display.wrap(now) : null]);
+    if (now) send(display.wrap(now), c.FocusEvent, ['focusIn', true, false, old ? display.wrap(old) : null]);
+  };
+  /** テキストフィールドへ文字が入る直前の textInput（取り消せる）。取り消されなければ true。 */
+  display.textInput = (field, text) => {
+    let allowed = true;
+    vm.run(() => {
+      const event = vm.construct(c.TextEvent, ['textInput', true, true, text]);
+      allowed = dispatch(display.wrap(field), event);
+    }, report);
+    return allowed;
+  };
+  display.change = (field) => send(display.wrap(field), c.Event, ['change', true]);
   /** マウスが、手の形のカーソルを出すもの（buttonMode のスプライト）の上にあるか。 */
   display.handCursor = () => (!!over?.display?.buttonMode || (!!over?.display?.states && over.display.enabled !== false)) && over.display.useHandCursor !== false;
 

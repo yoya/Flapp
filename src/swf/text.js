@@ -194,7 +194,7 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
   const base = edit.runs[0]?.fmt;
   const chars = [];
   let at = 0;
-  for (const run of edit.runs) for (const unit of run.text) { chars.push({ ch: content[at] ?? unit, f: run.fmt }); at += unit.length; }
+  for (const run of edit.runs) for (const unit of run.text) { chars.push({ ch: content[at] ?? unit, f: run.fmt, i: at }); at += unit.length; }
   const paragraphs = [[]];
   for (const c of chars) {
     if (c.ch === '\r' || c.ch === '\n') paragraphs.push([]);
@@ -208,6 +208,34 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
     const measured = edit.measure?.(c.ch, c.f);
     return (measured ?? (c.ch.codePointAt(0) >= 0x2e80 ? sizeOf(c) : sizeOf(c) * 0.5)) + c.f.letterSpacing * 20;
   };
+  const heightOf = (line, pf) => {
+    const size = line.length ? Math.max(...line.map(sizeOf)) : sizeOf({ f: pf });
+    return [size, (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : size * 1.15) + pf.leading * 20];
+  };
+  // 画像（<img>）は、それがある行の下に置かれ、あとの行の文章は、画像の横へ回り込む。位置は実機で測った（左右の端から hspace、
+  // 行の下から vspace。いずれも余白の 2 倍ぶん内側）。images は { index, bitmap, width, height, align, hspace, vspace }（twips でなく px）。
+  const imageAt = new Map((edit.images ?? []).map((im) => [im.index, im]));
+  const floats = []; // 画像の占める帯 { side, y0, y1, width }
+  const bandAt = (top, height) => {
+    let left = 0, right = 0;
+    for (const fl of floats) if (top < fl.y1 && top + height > fl.y0) { if (fl.side === 'left') left = Math.max(left, fl.width); else right = Math.max(right, fl.width); }
+    return [left, right];
+  };
+  const imageOps = []; // 画像は、文字より上に描く
+  const place = (line, lineTop, height) => {
+    for (const c of line) {
+      const im = imageAt.get(c.i);
+      if (!im?.bitmap) continue;
+      const [w, h] = [im.width * 20, im.height * 20];
+      const [hspace, vspace] = [im.hspace * 20, im.vspace * 20];
+      const top = lineTop + height - 2 * GUTTER + vspace;
+      const onRight = im.align === 'right';
+      const x = onRight ? xmax - 2 * GUTTER - hspace - w : xmin + hspace;
+      floats.push({ side: onRight ? 'right' : 'left', y0: top, y1: top + h, width: w + 2 * hspace });
+      const matrix = { a: w / im.bitmap.width, b: 0, c: 0, d: h / im.bitmap.height, tx: x, ty: top };
+      imageOps.push({ kind: 'fill', style: { type: 'bitmap', bitmap: im.bitmap, matrix, repeat: false, smooth: true }, evenOdd: true, path: [['M', x, top], ['L', x + w, top], ['L', x + w, top + h], ['L', x, top + h], ['Z']] });
+    }
+  };
   let y = ymin + GUTTER;
   paragraphs.forEach((par, n) => {
     if (!edit.multiline && n > 0) return;
@@ -215,14 +243,22 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
     // 箇条書きの点は左端から大きさの約 1.7 倍、文字は約 3 倍のところから始まる（実機の画面から）。
     const left = xmin + GUTTER + (pf.leftMargin + pf.blockIndent) * 20 + (pf.bullet ? sizeOf({ f: pf }) * 3 : 0);
     const right = xmax - GUTTER - pf.rightMargin * 20;
-    // 行に分ける。
+    // 行に分ける（画像の帯に重なる行は、狭くする）。
     const lines = [];
-    let line = [], width = 0, lastSpace = -1;
-    const limit = () => right - left - (lines.length === 0 ? pf.indent * 20 : 0);
+    const tops = []; // 行ごとの { top, band }
+    let line = [], width = 0, lastSpace = -1, top = y;
+    const startLine = () => { tops.push({ top, band: bandAt(top, heightOf(line, pf)[1] || 1) }); };
+    startLine();
+    const limit = () => right - left - tops[tops.length - 1].band[0] - tops[tops.length - 1].band[1] - (lines.length === 0 ? pf.indent * 20 : 0);
+    const endLine = () => { lines.push(line); const height = heightOf(line, pf)[1]; place(line, top, height); top += height; };
     for (const c of par) {
       const w = widthOf(c);
       if (edit.wordWrap && line.length && width + w > limit() && c.ch !== ' ') {
-        if (lastSpace >= 0) { const rest = line.splice(lastSpace + 1); lines.push(line); line = rest; } else { lines.push(line); line = []; }
+        let rest = [];
+        if (lastSpace >= 0) rest = line.splice(lastSpace + 1);
+        endLine();
+        line = rest;
+        startLine();
         width = line.reduce((sum, x) => sum + widthOf(x), 0);
         lastSpace = -1;
       }
@@ -230,17 +266,19 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
       width += w;
       if (c.ch === ' ') lastSpace = line.length - 1;
     }
+    place(line, top, heightOf(line, pf)[1]);
     lines.push(line);
     lines.forEach((chars2, row) => {
-      const size = chars2.length ? Math.max(...chars2.map(sizeOf)) : sizeOf({ f: pf });
-      const height = (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : size * 1.15) + pf.leading * 20;
-      const x0 = left + (row === 0 ? pf.indent * 20 : 0);
+      const [size, height] = heightOf(chars2, pf);
+      const [shiftLeft, shiftRight] = tops[row].band;
+      const x0 = left + shiftLeft + (row === 0 ? pf.indent * 20 : 0);
+      const right2 = right - shiftRight;
       if (pf.bullet && row === 0 && par.length) {
         ops.push({ kind: 'text', text: '•', x: left - sizeOf({ f: pf }) * 1.3, y, width: sizeOf({ f: pf }), align: 'left', size: sizeOf({ f: pf }), family: pf.font, bold: pf.bold, italic: pf.italic, color: rgb(pf.color) });
       }
       if (outlines) {
         const total = chars2.reduce((sum, c) => sum + widthOf(c), 0);
-        const extra = right - x0 - total;
+        const extra = right2 - x0 - total;
         let x = x0 + (pf.align === 'right' ? extra : pf.align === 'center' ? extra / 2 : 0);
         const ascent = (font.ascent / unitsPerEm) * size;
         for (const c of chars2) {
@@ -258,13 +296,14 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
           else runs.push({ text: c.ch, f: c.f });
         }
         ops.push({
-          kind: 'text', x: x0, y, width: right - x0, align: pf.align, size,
+          kind: 'text', x: x0, y, width: right2 - x0, align: pf.align, size,
           runs: runs.map((r) => ({ text: r.text, size: r.f.size * 20, family: r.f.font, bold: r.f.bold, italic: r.f.italic, underline: r.f.underline, color: rgb(r.f.color), letterSpacing: r.f.letterSpacing * 20 })),
         });
       }
       y += height;
     });
   });
+  ops.push(...imageOps);
   return ops;
 }
 

@@ -1,0 +1,29 @@
+get styleSheet null
+names .big,a:hover,a:link,b,body,em,li,p
+getStyle p color=#ff0000;fontFamily=Arial;fontSize=20px;fontWeight=bold;leading=3px;letterSpacing=2px;marginLeft=10px;marginRight=6px;textAlign=center;textIndent=5px
+getStyle .big color=#00ff00;fontSize=30px
+getStyle a:link color=#0000ff
+set true
+p a\rb | Arial/20/16711680/true/false/false///center/10/6/5/3/0/false/2/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+p out <p>a</p>b
+class ab | Times Roman/30/65280/false/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+class out <span class='big'>a</span>b
+link ab | Times Roman/12/255/false/false/false/http://x.example///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+link out <a href='http://x.example/'>a</a>b
+em Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/true/false///left/0/0/0/0/0/false/0/false/block
+b Times Roman/12/0/true/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+li a\rb | Times Roman/12/8947848/false/false/false///left/0/0/0/0/0/true/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+font tag Times Roman/30/16711935/false/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+body Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+text assign plain x | plain <b>x</b> | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+text after html q | q
+append ERR 2009
+setTextFormat ERR 2009
+defaultTextFormat ERR 2009
+unset  | ab\r | <TEXTFORMAT LEFTMARGIN="10" RIGHTMARGIN="6" INDENT="5" LEADING="3"><P ALIGN="CENTER"><FONT FACE="Arial" SIZE="20" COLOR="#FF0000" LETTERSPACING="2" KERNING="0"><B>ab</B></FONT></P></TEXTFORMAT>
+after unset Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+selectable true,dynamic,true
+type input input,true
+set null css a\r | Times Roman/12/0/false/false/false///left/0/0/0/0/0/false/0/false/block
+setStyle later Times Roman/22/11259375/true/false/false///left/0/0/0/0/0/false/0/false/block
+transform Arial/20/16711680/true/true/true/center/10/2/block

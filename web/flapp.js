@@ -115,6 +115,19 @@ const defaultEncoding = () => {
   return language.startsWith('ja') ? 'shift_jis' : language.startsWith('ko') ? 'euc-kr' : /^zh-(tw|hk|hant)/.test(language) ? 'big5' : language.startsWith('zh') ? 'gbk' : 'windows-1252';
 };
 
+/**
+ * keydown をムービーへ伝える。キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡し、打ち込まれた文字
+ * （1 文字のキー）は、フォーカスのある入力フィールドへ入れる（textInput）。⌘ はコピーや貼り付けなどのためにブラウザへ返す（⌘ + A だけ全選択）。
+ * Tab は、入力フィールドにフォーカスがあるときだけ、ブラウザの移動に使わせない。IME の変換中の入力は扱わない。
+ */
+export function sendKey(movie, e) {
+  if (!e.keyCode || e.isComposing || (e.metaKey && e.key !== 'a')) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  movie.keyDown(e.keyCode, e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : e.key === 'Enter' ? 13 : 0, { shift: e.shiftKey, ctrl, alt: e.altKey });
+  if (e.key.length === 1 && !ctrl) movie.textInput(e.key);
+  if (e.keyCode !== 9 || movie.focus) e.preventDefault();
+}
+
 export class FlappPlayer extends HTMLElement {
   static observedAttributes = ['src', 'trust', 'encoding', 'match-player'];
   #canvas = document.createElement('canvas');
@@ -146,11 +159,7 @@ export class FlappPlayer extends HTMLElement {
     canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
     canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
     window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
-    canvas.addEventListener('keydown', input((movie, e) => {
-      if (!e.keyCode || e.metaKey) return;
-      e.preventDefault();
-      movie.keyDown(e.keyCode, e.key.length === 1 && e.key >= ' ' && e.key <= '~' ? e.key.charCodeAt(0) : e.key === 'Enter' ? 13 : 0);
-    }));
+    canvas.addEventListener('keydown', input(sendKey));
     canvas.addEventListener('keyup', input((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
     addEventListener('pagehide', () => this.movie?.saveSharedObjects()); // 実機も、閉じるときに保存する
   }

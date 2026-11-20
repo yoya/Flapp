@@ -1,0 +1,32 @@
+initial null -1,-1,-1
+a.onSetFocus null
+sel.onSetFocus null _level0.a
+setFocus a: true _level0.a 0,11,11
+setSelection: 0,11,11
+2,5 2,5,5
+5,2 2,5,2
+out 0,11,11
+text assign 0,3,3
+a.onKillFocus _level0.b
+b.onSetFocus _level0.a
+sel.onSetFocus _level0.a _level0.b
+setFocus b obj: true _level0.b 0,11,11
+setFocus b again: true
+setFocus nope: false _level0.b
+sel.onSetFocus _level0.b _level0.c
+setFocus c: true _level0.c
+sel.onSetFocus _level0.c _level0.d
+setFocus d: true _level0.d
+setFocus mc: false _level0.d
+sel.onSetFocus _level0.d null
+setFocus null: true null -1,-1,-1
+setFocus undefined: true null
+a.onSetFocus null
+sel.onSetFocus null _level0.a
+setFocus _level0.a: true _level0.a
+a.onKillFocus _level0.b
+b.onSetFocus _level0.a
+setFocus b: true
+typeof Selection: object true
+a.onSetFocus _level0.b
+data: abc 1,3,3

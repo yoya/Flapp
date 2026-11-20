@@ -324,6 +324,44 @@ export function installGlobals(vm) {
     });
     g.define(name, object, DONT_ENUM);
   }
+  // --- Selection: キーボードのフォーカスと、テキストの選択 ---
+  // getFocus は、フォーカスのあるもののパス（無ければ null）。setFocus は、パスの文字列かオブジェクトで指して、移せたかを返す。
+  // getBeginIndex / getEndIndex / getCaretIndex は、フォーカスがなければ -1。
+  {
+    const selection = new AVMObject(vm, vm.objectProto);
+    const list = vm.listeners.Selection;
+    const focusField = () => (vm.focus.get()?.scriptObject?.()?.isTextField ? vm.focus.get() : null);
+    defineMethods(vm, selection, {
+      addListener: (_, __, [listener]) => {
+        if (!(listener instanceof AVMObject)) return false;
+        if (!list.includes(listener) && list.length < 1000) list.push(listener);
+        return true;
+      },
+      removeListener: (_, __, [listener]) => {
+        const at = list.indexOf(listener);
+        if (at >= 0) list.splice(at, 1);
+        return at >= 0;
+      },
+      getFocus: () => { const f = vm.focus.get(); return f && !f.removed ? (f.dotPath?.() ?? null) : null; },
+      setFocus: (_, __, [target]) => {
+        if (target === null || target === undefined) { vm.focus.set(null); return true; }
+        const base = vm.currentTarget;
+        const object = target instanceof AVMObject ? target : base ? vm.resolvePath({ target: base, scopes: [{ object: base }], thisValue: base }, str(target)) : undefined;
+        const display = object?.field ?? object?.clip;
+        // テキストフィールドなら、選べなくても移せる（実機で確認）。移ると、全部が選ばれる。クリップは移せない（ボタンのように反応するものは未確認）。
+        if (!display || display.removed || !object.isTextField) return false;
+        const changed = vm.focus.get() !== display;
+        vm.focus.set(display);
+        if (changed) display.setSelection(0, display.text.length);
+        return true;
+      },
+      getBeginIndex: () => focusField()?.selection[0] ?? -1,
+      getEndIndex: () => focusField()?.selection[1] ?? -1,
+      getCaretIndex: () => focusField()?.caret ?? -1,
+      setSelection: (_, __, [begin, end]) => { focusField()?.setSelection(toInt32(vm, begin), toInt32(vm, end)); },
+    });
+    g.define('Selection', selection, DONT_ENUM);
+  }
   // hide / show は、呼ぶ前にカーソルが見えていたかを 1 / 0 で返す（実機で確認）。
   const cursor = (visible) => () => {
     const before = vm.mouseVisible ? 1 : 0;

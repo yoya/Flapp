@@ -1,0 +1,59 @@
+tag em a\rz | Times Roman/12/0/false/true/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag strong a\rz | Times Roman/12/0/true/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag span az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag div a\rz | Times Roman/12/65280/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag i az | Times Roman/12/0/false/true/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag b az | Times Roman/12/0/true/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag u az | Times Roman/12/0/false/false/true//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag font az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag a az | Times Roman/12/3355443/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag ul a\rz | Times Roman/12/4473924/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag textformat az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag p a\rz | Times Roman/12/0/false/false/false//left/8/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag unknown az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag li a\rz | Times Roman/12/0/false/false/false//left/0/0/0/0/true/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+tag br a\rz | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class x az | Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class y az | Times Roman/12/16711935/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class none z | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | 
+class inl az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class blk az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class und az | Times Roman/12/0/false/false/true//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class ls az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/3/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class kern az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/true/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class ind az | Times Roman/12/0/false/false/false//left/0/0/12/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class fs az | Courier/18/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class fw az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class fm az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class al az | Times Roman/12/0/false/false/false//right/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class ml az | Times Roman/12/0/false/false/false//left/4/7/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class pc az | Times Roman/150/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class col3 az | Times Roman/12/3855/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class col4 az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class upper az | Times Roman/12/11259375/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class missing az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class on p a\rz | Times Roman/40/0/false/false/false//left/8/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class on b az | Times Roman/12/0/true/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class case az | Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class two az | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+class double quote az | Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+nested Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/40/16711935/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+nested b in span Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/40/0/true/false/false//left/0/0/0/0/false/0/false/block | Times Roman/40/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+p then plain a\rbc\r | Times Roman/12/0/false/false/false//left/8/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block | Times Roman/12/0/false/false/false//left/8/0/0/0/false/0/false/block
+p default in sheet Times Roman/12/0/false/false/false//left/8/0/0/0/false/0/false/block
+html out <p>ab</p>
+link states Times Roman/12/255/false/false/false/x/left/0/0/0/0/false/0/false/block
+link no a Times Roman/12/0/false/false/false/x/left/0/0/0/0/false/0/false/block
+re-sheet change Times Roman/12/1118481/false/false/false//left/0/0/0/0/false/0/false/block -> Times Roman/12/10066329/false/false/false//left/0/0/0/0/false/0/false/block
+re-sheet clear Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block
+sheet swap Times Roman/12/0/false/false/false//left/0/0/0/0/false/0/false/block -> Times Roman/12/2236962/false/false/false//left/0/0/0/0/false/0/false/block <p>a</p>
+text with p q\rr | <p>q</p>r | Times Roman/12/2236962/false/false/false//left/0/0/0/0/false/0/false/block
+text with entity a & b | a &amp; b
+text plain lt 1  | 1 < 2
+empty  |  | 0
+replaceText ERR 2009
+getTextFormat nothing Times Roman/12/2236962/false/false/false//left/0/0/0/0/false/0/false/block
+set type input Times Roman/12/2236962/false/false/false//left/0/0/0/0/false/0/false/block
+restrict a-z
+htmlText getter plain plain
+css parse .a-b,h1,h2,p 12px  #070809
