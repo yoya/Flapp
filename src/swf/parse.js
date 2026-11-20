@@ -32,8 +32,9 @@ export async function parseSWF(input, { maxLength = 256 * 1024 * 1024 } = {}) {
   if (compression === 'none') {
     body = file.subarray(8, fileLength);
   } else if (compression === 'zlib') {
-    const { bytes, truncated } = await inflate(file.subarray(8), bodyLength);
-    if (truncated) warnings.push('decompressed data exceeds FileLength; the rest is ignored');
+    const { bytes, truncated, damaged } = await inflate(file.subarray(8), bodyLength, { partial: true });
+    if (damaged) warnings.push(`zlib data is damaged (${damaged}); the decoded part is used`);
+    else if (truncated) warnings.push('decompressed data exceeds FileLength; the rest is ignored');
     body = bytes;
   } else {
     // ZWS: 圧縮データ長 (UI32)、LZMA プロパティ 5 バイト、LZMA データ。

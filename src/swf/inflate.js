@@ -6,7 +6,7 @@ import { SWFError } from './reader.js';
  * @param {number} limit     出力の上限バイト数
  * @returns {Promise<{ bytes: Uint8Array, truncated: boolean }>} truncated は上限で打ち切ったかどうか
  */
-export async function inflate(data, limit) {
+export async function inflate(data, limit, { partial = false } = {}) {
   const stream = new DecompressionStream('deflate');
   const writer = stream.writable.getWriter();
   // 書き込み側の失敗は読み取り側のエラーとして現れるので、ここでは握りつぶす。
@@ -17,6 +17,7 @@ export async function inflate(data, limit) {
   const chunks = [];
   let total = 0;
   let truncated = false;
+  let damaged = null;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -32,7 +33,22 @@ export async function inflate(data, limit) {
       total += value.length;
     }
   } catch (e) {
-    throw new SWFError(`zlib: ${e.message}`);
+    // partial: 壊れた圧縮データ（末尾の検査の誤りなど）は、そこまでに展開できた分を返す。実機は、読めた分だけを使って描く。
+    if (!partial) throw new SWFError(`zlib: ${e.message}`);
+    if (total === 0) {
+      // 末尾の検査だけが誤っていると、ストリームの方は何も返さないことがある。頭（CMF と FLG）が正しいときだけ、
+      // 同期版の展開器で、検査を見ずに読み直す。
+      const cmf = data[0], flg = data[1];
+      const headOk = data.length >= 2 && (cmf & 0x0f) === 8 && ((cmf << 8) | flg) % 31 === 0;
+      let bytesSync = null;
+      if (headOk) {
+        try { bytesSync = inflateSync(data, 2, limit); } catch { bytesSync = null; }
+      }
+      if (!bytesSync) throw new SWFError(`zlib: ${e.message}`);
+      return { bytes: bytesSync, truncated: false, damaged: e.message };
+    }
+    truncated = true;
+    damaged = e.message;
   }
 
   const bytes = new Uint8Array(total);
@@ -41,7 +57,7 @@ export async function inflate(data, limit) {
     bytes.set(c, pos);
     pos += c.length;
   }
-  return { bytes, truncated };
+  return { bytes, truncated, damaged };
 }
 
 // --- 同期版の展開（RFC 1951 の deflate）。ByteArray.uncompress や Screen Video のように、その場で結果が要るところで使う。 ---

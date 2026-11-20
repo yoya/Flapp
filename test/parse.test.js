@@ -170,3 +170,18 @@ test('lzmaDecode は終端マーカーで止まる', () => {
   const out = lzmaDecode(zws.subarray(12, 17), zws.subarray(17), 5000);
   assert.deepEqual(out, fixtures['lzma-src'].subarray(8));
 });
+
+test('zlib: 末尾の検査（Adler-32）だけが誤っていても、展開した中身は読める', async () => {
+  const good = await parseSWF(readFileSync(new URL('fixtures/cws-hello.swf', import.meta.url)));
+  const bad = Uint8Array.from(readFileSync(new URL('fixtures/cws-hello.swf', import.meta.url)));
+  bad[bad.length - 1] ^= 0xff; // Adler-32 の最後の 1 バイト
+  const movie = await parseSWF(bad);
+  assert.equal(movie.tags.length, good.tags.length);
+  assert.equal(movie.frameCount, good.frameCount);
+});
+
+test('zlib: 圧縮データそのものが壊れていれば、これまでどおり SWFError', async () => {
+  const bad = Uint8Array.from(readFileSync(new URL('fixtures/cws-hello.swf', import.meta.url)));
+  bad.fill(0xff, 10); // deflate のブロックの種類が無効になる
+  await assert.rejects(parseSWF(bad), SWFError);
+});
