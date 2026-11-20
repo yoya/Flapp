@@ -9,6 +9,7 @@ import { installXML } from './xml.js';
 import { installSound } from './sound.js';
 import { installVideo } from './video.js';
 import { installMenu } from './menu.js';
+import { installGeom } from './geom.js';
 import { numberToString, toBool, toInt32, toNumber, toStr } from './convert.js';
 import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM, MAX_ARRAY_LENGTH, READ_ONLY } from './object.js';
 
@@ -422,6 +423,7 @@ export function installGlobals(vm) {
 
   installMovieClip(vm);
   installFilters(vm);
+  installGeom(vm);
   installStage(vm);
   installTextField(vm);
   installNet(vm);

@@ -415,7 +415,10 @@ function gradientFill(vm, { type, colors, alphas, ratios, matrix, spread, interp
   const n = (o, name) => toNumber(vm, o.get(name));
   if (!(matrix instanceof AVMObject)) return null;
   let m;
-  if (word(matrix.get('matrixType')) === 'box') {
+  if (matrix.get('tx') !== undefined && matrix.get('g') === undefined) {
+    // flash.geom.Matrix（SWF 8）: a〜d は 1638.4 px 四方の基準の箱を移す倍率、tx・ty は中心の位置（AS3 と同じ）。
+    m = { a: n(matrix, 'a'), b: n(matrix, 'b'), c: n(matrix, 'c'), d: n(matrix, 'd'), tx: n(matrix, 'tx') * 20, ty: n(matrix, 'ty') * 20 };
+  } else if (word(matrix.get('matrixType')) === 'box') {
     const [w, h, r] = [n(matrix, 'w') / 1638.4, n(matrix, 'h') / 1638.4, n(matrix, 'r')];
     m = { a: w * Math.cos(r), b: w * Math.sin(r), c: -h * Math.sin(r), d: h * Math.cos(r), tx: (n(matrix, 'x') + n(matrix, 'w') / 2) * 20, ty: (n(matrix, 'y') + n(matrix, 'h') / 2) * 20 };
   } else {

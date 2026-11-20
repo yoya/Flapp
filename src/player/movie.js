@@ -617,6 +617,17 @@ export class Movie {
     return entry;
   }
 
+  /** AS2: 書き出し名 name の付いたビットマップの定義（無ければ null。名前の大文字と小文字は区別しない）。 */
+  exportedBitmap(name) {
+    const want = this.lower(name);
+    for (const [key, id] of this.library.exports) {
+      if (this.lower(key) !== want) continue;
+      const def = this.library.dictionary.get(id);
+      return def?.type === 'bitmap' ? def : null;
+    }
+    return null;
+  }
+
   /**
    * 3D の表示オブジェクト d の透視投影 { center, focal }（px）。親をたどって、PerspectiveProjection を持つもの（AS3 の
    * transform.perspectiveProjection を代入したもの）の値、無ければルートのもの（既定は視野角 55 度、中心はステージの中央。
@@ -1407,6 +1418,8 @@ export class Movie {
       try {
         Object.assign(def, await parseBitmap(tag, lib.jpegTables, this.#bitmapPixelBudget));
         this.#bitmapPixelBudget -= def.width * def.height;
+        // AS3 のクラスに結び付いたものと、書き出し名の付いたもの（AS2 の BitmapData.loadBitmap）は、BitmapData として画素を読まれる。
+        if (lib.symbolClasses?.has(def.id) || [...lib.exports.values()].includes(def.id)) await this.#pixelsOf(def);
       } catch (e) {
         if (e.name !== 'SWFError') throw e;
         this.warn(`tag ${tag.name} at offset ${tag.offset}: ${e.message}`);

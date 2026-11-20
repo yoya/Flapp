@@ -1,0 +1,10 @@
+threshold == 16 -ff0100,-1000000
+threshold copy 47 -10000,-7fcb9967,-ffff01
+threshold bad 0
+merge -810000,-7fe5e567,0
+paletteMap -ff0100,-7fff9967
+compare same 0 size -3 notbd -2
+compare diff -ff00,0
+applyFilter cm 0 -ffff01,-7f6699cc
+applyFilter bad -5
+generateFilterRect (x=-2, y=-2, w=12, h=12)

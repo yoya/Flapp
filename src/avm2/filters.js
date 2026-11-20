@@ -83,6 +83,9 @@ export function installFilters(vm) {
     return null;
   };
 
+  // BitmapData.applyFilter が使う: フィルタのオブジェクトを desc にする（フィルタでなければ null）。
+  vm.filterDesc = (obj) => { const spec = specOf(obj); return spec ? spec.toDesc(obj.fprops) : null; };
+
   return {
     /** 表示オブジェクトのフィルタ（desc の配列）から、新しいオブジェクトの配列を作る。 */
     read(descs) {

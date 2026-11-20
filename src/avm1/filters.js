@@ -72,6 +72,8 @@ export function installFilters(vm) {
     for (const [name, proto] of protos) if (obj.proto === proto) return FILTER_SPECS[name];
     return null;
   };
+  // BitmapData.applyFilter が使う: フィルタのオブジェクトを desc にする（フィルタでなければ null）。
+  vm.filterDesc = (obj) => { const spec = specOf(obj); return spec ? spec.toDesc(obj.fprops) : null; };
 
   // MovieClip.filters（SWF 8 から）。配列の要素にフィルタでないものがあれば、その要素は読み飛ばす。
   vm.movieClipProto.defineAccessor('filters', vm.native((_, self) => {

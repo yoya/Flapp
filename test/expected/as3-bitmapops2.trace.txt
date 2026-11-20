@@ -1,0 +1,18 @@
+threshold == 16 ff00ff00,ff000000,ff000000
+threshold copy 47 ffff0000,80346699,ff0000ff
+threshold mask 16 ffffff00,ff000000,ff000000
+threshold ops <48 <=64 >0 >=16 ==16 !=48
+threshold bad op ERR 2005
+merge ff7f0000,801a1a99,0
+paletteMap ff00ff00,80006699,0
+compare same 0
+compare size -3
+compare diff ffff0100,0 true
+compare alpha 7fffffff
+generateFilterRect blur (x=-2, y=-2, w=12, h=12)
+generateFilterRect cm (x=0, y=0, w=8, h=8)
+applyFilter cm ff0000ff,80996634
+applyFilter blur ffff0000,8fff0000,0
+applyFilter offset ffff0000,ffff0000,0
+applyFilter glow ffff0000,0
+applyFilter null ERR 2007

@@ -1,0 +1,41 @@
+point (x=3, y=4) 5 add,clone,equals,length,normalize,offset,subtract,toString,x,y
+point ops (x=4, y=5) (x=2, y=3) (x=3, y=4) true 5 (x=7.5, y=7.5) (x=2, y=0)
+normalize (x=6, y=8)
+offset (x=7, y=10)
+point empty (x=0, y=0) (x=a, y=null)
+rect (x=1, y=2, w=10, h=20) bottom,bottomRight,clone,contains,containsPoint,containsRectangle,equals,height,inflate,inflatePoint,intersection,intersects,isEmpty,left,offset,offsetPoint,right,setEmpty,size,toString,top,topLeft,union,width,x,y
+rect props 1 11 2 22 (x=1, y=2) (x=11, y=22) (x=10, y=20)
+rect ops true false true true (x=5, y=5, w=6, h=17) (x=0, y=0, w=11, h=22) false (x=1, y=2, w=10, h=20) true
+inflate (x=0, y=0, w=12, h=24)
+roffset (x=5, y=5, w=12, h=24)
+setEmpty (x=0, y=0, w=0, h=0) true
+rect empty (x=0, y=0, w=0, h=0)
+matrix (a=1, b=0, c=0, d=1, tx=0, ty=0) a,b,c,clone,concat,createBox,createGradientBox,d,deltaTransformPoint,identity,invert,rotate,scale,toString,transformPoint,translate,tx,ty
+ms (a=2, b=0, c=0, d=3, tx=20, ty=60)
+mr (a=1.22464679914735e-16, b=2, c=-3, d=1.83697019872103e-16, tx=-60, ty=20)
+inv (a=-2, b=1, c=1.5, d=-0.5, tx=1, ty=-2)
+tp (x=12, y=12) (x=2, y=2)
+box (a=2, b=0, c=0, d=3, tx=5, ty=6)
+gbox (a=0.06103515625, b=0, c=0, d=0.030517578125, tx=60, ty=45)
+concat (a=2, b=0, c=0, d=2, tx=10, ty=0)
+identity (a=1, b=0, c=0, d=1, tx=0, ty=0)
+ct (redMultiplier=1, greenMultiplier=1, blueMultiplier=1, alphaMultiplier=1, redOffset=0, greenOffset=0, blueOffset=0, alphaOffset=0) alphaMultiplier,alphaOffset,blueMultiplier,blueOffset,concat,greenMultiplier,greenOffset,redMultiplier,redOffset,rgb,toString
+ct rgb (redMultiplier=0, greenMultiplier=0, blueMultiplier=0, alphaMultiplier=1, redOffset=255, greenOffset=128, blueOffset=0, alphaOffset=0) 16744448
+ct concat (redMultiplier=1, greenMultiplier=1, blueMultiplier=1, alphaMultiplier=1, redOffset=10, greenOffset=5, blueOffset=0, alphaOffset=0)
+transform true (a=2, b=0, c=0, d=1, tx=10, ty=20) (redMultiplier=1, greenMultiplier=1, blueMultiplier=1, alphaMultiplier=1, redOffset=0, greenOffset=0, blueOffset=0, alphaOffset=0) (a=2, b=0, c=0, d=1, tx=10, ty=20) (x=10, y=20, w=20, h=10)
+tr set 50 60 200
+ct set 50
+bd 10 8 true undefined -7f010000 ff0000 applyFilter,clone,colorTransform,compare,copyChannel,copyPixels,dispose,draw,fillRect,floodFill,generateFilterRect,getColorBoundsRect,getPixel,getPixel32,height,hitTest,merge,noise,paletteMap,perlinNoise,pixelDissolve,rectangle,scroll,setPixel,setPixel32,threshold,transparent,width
+set -ff0100 -7fffff01 0
+fill -edcbaa
+clone -edcbaa false
+copy -ff0100 -8081
+defaults -1 true
+bad size undefined undefined 2880
+disposed -1 -1
+loadBitmap undefined
+attach 20 20
+filler 40
+hit true
+flood ffff00
+bounds (x=0, y=0, w=20, h=20)
