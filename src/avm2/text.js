@@ -300,14 +300,15 @@ export function installText(vm, movie) {
       getLineIndexAtPoint: () => -1,
       // 寸法は概算（textWidth と同じ、1 文字 = 文字の大きさの半分、行の高さ・上下は実機で測った式）。
       getLineMetrics: (self, [i]) => {
-        const f = F(self), [list, at] = lineAt(f, i), size = f.format.size;
-        return vm.construct(c.TextLineMetrics, [2, Math.round(list[at].length * size * 0.5), deviceMetrics(size).height, deviceMetrics(size).ascent, deviceMetrics(size).descent, f.format.leading ?? 0]);
+        const f = F(self), [list, at] = lineAt(f, i), size = f.format.size, m = deviceMetrics(size, f.format.font);
+        return vm.construct(c.TextLineMetrics, [2, Math.round(list[at].length * size * 0.5), m.height, m.ascent, m.descent, f.format.leading ?? 0]);
       },
       getCharBoundaries: (self, [i]) => {
         const f = F(self), n = vm.toInt32(i);
         if (n < 0 || n >= f.text.length) return null;
         const row = f.text.slice(0, n).split('\r').length - 1, col = n - f.text.slice(0, n).lastIndexOf('\r') - 1, size = f.format.size;
-        return vm.construct(c.Rectangle, [2 + col * size * 0.5, 2 + row * deviceMetrics(size).height, size * 0.5, deviceMetrics(size).height]);
+        const height = deviceMetrics(size, f.format.font).height;
+        return vm.construct(c.Rectangle, [2 + col * size * 0.5, 2 + row * height, size * 0.5, height]);
       },
       // 段落は CR で区切られる。長さは、区切りの CR を含む。
       getFirstCharInParagraph: (self, [i]) => { const f = F(self); return f.text.lastIndexOf('\r', index(f, i, 'charIndex') - 1) + 1; },

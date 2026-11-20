@@ -41,9 +41,9 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 - テキストフィールドの入力のうち、右から左へ書く文字は、並べ替えて表示しますが、
   1 行の中で書式が変わるところをまたいだ並べ替えと、キャレット・選択の位置（文字列の順のまま）は未対応です。クリックで決まる
   キャレットの位置は、端末のフォントの幅で測るので、実機と 1 文字ほどずれることがあります
-- `<img>` タグのうち、ライブラリの書き出し名や SWF を指す `src`（JPEG・PNG・GIF の URL だけ、`network.load` で読んで描きます。`trust` が無いと読みません）、
-  `align` の `left` と `right` 以外の指定、`getImageReference`
-- AS2 の `TextField.StyleSheet`（AS3 の `StyleSheet` は `TextField.styleSheet` に付けられます）と、`a:hover` などリンクの状態のスタイル
+- `<img>` タグのうち、ライブラリのクリップや SWF を指す `src`（JPEG・PNG・GIF の URL は `network.load` で読み、ライブラリのビットマップは
+  書き出し名・クラス名で描きます）、`align` の `left` と `right` 以外の指定、`getImageReference`
+- `a:hover` などリンクの状態のスタイル（`StyleSheet` は AS2・AS3 とも `TextField.styleSheet` に付けられます）
 - 3D 変形のうち、3D の部分木の中でのフィルタ・ブレンド・マスク・`scrollRect`・9 分割拡大、3D のものの `getBounds`、`Matrix3D.pointAt`
   （実機と同じ値にならない）
 - `ShaderFilter`、描画 API の `drawTriangles`、`BitmapData` の `perlinNoise`・`pixelDissolve`（`applyFilter` のぼかし系は、縁の外の半透明の値が
@@ -141,7 +141,9 @@ SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
   取り直す (`npm run oracle`) には、macOS と実機が要ります。
 - テスト用の SWF も `test/fixtures/` にコミットしてあります。作り直すには、`npm run fixtures` のほかに、
   ActionScript をコンパイルする `tools/mkas.js` / `tools/mkas3.js` 用の Java と FFDec が要ります。
-- 端末のフォントで決まる文字の寸法など、実機と同じにならないところがあります。
+- 端末のフォントで決まる文字の寸法など、実機と同じにならないところがあります。行の高さと基準線の位置は、実機（mac の日本語の環境）で
+  フォントの名前ごとに測った値を使い、`_sans`・`_serif`・`_typewriter` は Helvetica・Times・Courier で描きます（文字の幅は、ブラウザの
+  フォントで測ります）。
 - VP6 には公開された仕様が無いので、VP6 の復号（[src/video/vp6.js](src/video/vp6.js)）だけは、FFmpeg の復号器を JavaScript に移したものです。
   このファイルと、それに寄りかかるテスト用の素材の生成（[tools/mkvp6.js](tools/mkvp6.js)）は、FFmpeg と同じ LGPL 2.1 以降
   （[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）で、著作権の表示は vp6.js の冒頭にあります。

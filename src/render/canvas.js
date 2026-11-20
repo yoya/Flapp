@@ -74,9 +74,12 @@ function css(color, cx) {
 
 // 端末のフォントの指定（CSS の font）。端末にある名前とは限らないので、名前から見当をつけた系統を後ろに付ける（実機の既定の
 // "Times Roman" は明朝系）。r は { family, bold, italic, size }（size は描く単位の数）。
+// 汎用の名前は、実機（mac）が使うフォントを先に挙げる。ブラウザの serif / sans-serif は、日本語の環境ではヒラギノになり、
+// 字形も幅も実機と違う（実機の _sans の幅は Helvetica と同じ。test/as/textclip.as の画面で確認）。
+const SANS = 'Helvetica, Arial, sans-serif', SERIF = 'Times, "Times New Roman", serif', MONO = 'Courier, "Courier New", monospace';
 function deviceFont(r) {
-  const generic = { _sans: 'sans-serif', _serif: 'serif', _typewriter: 'monospace' }[r.family];
-  const fallback = /times|serif|georgia|garamond|palatino|book|mincho|明朝/i.test(r.family) ? 'serif' : /courier|mono|consolas|typewriter/i.test(r.family) ? 'monospace' : 'sans-serif';
+  const generic = { _sans: SANS, _serif: SERIF, _typewriter: MONO, _ゴシック: SANS, _明朝: SERIF, _等幅: MONO, '_\x83S\x83V\x83b\x83N': 'Osaka, sans-serif' }[r.family];
+  const fallback = /times|serif|georgia|garamond|palatino|book|mincho|明朝/i.test(r.family) ? SERIF : /courier|mono|consolas|typewriter/i.test(r.family) ? MONO : SANS;
   const family = generic ?? (r.family ? `"${r.family.replace(/["\\]/g, '')}", ${fallback}` : 'sans-serif');
   return `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}${r.size}px ${family}`;
 }
@@ -143,8 +146,8 @@ export class CanvasRenderer {
     // テキストの折り返しのために、端末のフォントでの文字の幅（twips）を測る関数を渡す。
     const probe = new OffscreenCanvas(1, 1).getContext('2d');
     const widths = new Map();
-    movie.measureText = (ch, f) => {
-      const font = deviceFont({ family: f.font, bold: f.bold, italic: f.italic, size: f.size * 20 });
+    movie.measureText = (ch, f, family = f.font) => {
+      const font = deviceFont({ family, bold: f.bold, italic: f.italic, size: f.size * 20 });
       const key = `${font}|${ch}`;
       let w = widths.get(key);
       if (w === undefined) {
@@ -796,34 +799,45 @@ export class CanvasRenderer {
 
   // 埋め込みの字形が無いテキストを、端末のフォントで描く（実機と同じ見た目にはならない）。op.runs があれば、書式の違う文字の
   // まとまり（色・大きさ・太字・斜体・下線・字間）を、1 行に順に並べる。位置揃えは、測った幅の合計で決める。
+  // op.ascent（行の上端から基準線まで）があれば、文字の基準線をそこにそろえる（実機と同じ。寸法は swf/text.js の deviceMetrics）。
+  // 文字の大きさは、画面の画素で整数に丸めて描く（ちょうど半分なら偶数へ）。実機の BitmapData.draw で、縮めて描いた文字の幅が、丸めた大きさの幅と一致した
+  // （18px を 0.8 倍 → 14px、0.75 倍 → 14px、1.25 倍 → 22px、1.37 倍 → 25px）。
   #text(ctx, op, m, cx) {
     ctx.setTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
-    ctx.textBaseline = 'top';
+    const scale = Math.hypot(m.c, m.d);
+    const font = (r) => {
+      const px = r.size * scale, low = Math.floor(px);
+      const snapped = Math.abs(px - low - 0.5) < 1e-6 ? low + (low % 2) : Math.round(px);
+      return deviceFont(scale > 0 ? { ...r, size: Math.max(1, snapped) / scale } : r);
+    };
+    const based = op.ascent !== undefined, y = based ? op.y + op.ascent : op.y;
+    ctx.textBaseline = based ? 'alphabetic' : 'top';
     if ('direction' in ctx) ctx.direction = directionOf(op.runs ? op.runs.map((r) => r.text).join('') : op.text);
     if (!op.runs) {
-      ctx.font = deviceFont(op);
-      ctx.textAlign = op.align === 'right' || op.align === 'center' ? op.align : 'left';
+      ctx.font = font(op);
+      ctx.textAlign = 'left';
       ctx.fillStyle = css(op.color, cx);
-      const x = op.align === 'right' ? op.x + op.width : op.align === 'center' ? op.x + op.width / 2 : op.x;
-      ctx.fillText(op.text, x, op.y);
+      const extra = Math.max(0, op.width - ctx.measureText(op.text).width); // 枠より広い行は、揃え方によらず左端から並べる（実機で確認。test/as/textclip.as）
+      ctx.fillText(op.text, op.x + (op.align === 'right' ? extra : op.align === 'center' ? extra / 2 : 0), y);
       if ('direction' in ctx) ctx.direction = 'ltr';
       return;
     }
     ctx.textAlign = 'left';
     const spaced = 'letterSpacing' in ctx;
     const widths = op.runs.map((r) => {
-      ctx.font = deviceFont(r);
+      ctx.font = font(r);
       if (spaced) ctx.letterSpacing = `${r.letterSpacing}px`;
       return ctx.measureText(r.text).width;
     });
     const total = widths.reduce((sum, w) => sum + w, 0);
-    let x = op.x + (op.align === 'right' ? op.width - total : op.align === 'center' ? (op.width - total) / 2 : 0);
+    const extra = Math.max(0, op.width - total); // 枠より広い行は、揃え方によらず左端から並べる（実機で確認。test/as/textclip.as）
+    let x = op.x + (op.align === 'right' ? extra : op.align === 'center' ? extra / 2 : 0);
     op.runs.forEach((r, i) => {
-      ctx.font = deviceFont(r);
+      ctx.font = font(r);
       if (spaced) ctx.letterSpacing = `${r.letterSpacing}px`;
       ctx.fillStyle = css(r.color, cx);
-      ctx.fillText(r.text, x, op.y);
-      if (r.underline) ctx.fillRect(x, op.y + r.size * 1.02, widths[i], Math.max(r.size / 16, 20));
+      ctx.fillText(r.text, x, y);
+      if (r.underline) ctx.fillRect(x, based ? y + r.size * 0.27 : op.y + r.size * 1.02, widths[i], Math.max(r.size / 16, 20));
       x += widths[i];
     });
     if (spaced) ctx.letterSpacing = '0px';

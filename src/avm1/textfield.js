@@ -82,7 +82,7 @@ const PROPS = {
   variable: { get: (f) => f.variable, set: (f, v, vm) => { f.bind(v === undefined || v === null ? null : toStr(vm, v)); } },
   // 文字の寸法は概算（端末のフォントの寸法は実機と同じにならない）。
   textWidth: { get: (f) => f.approxWidth() },
-  textHeight: { get: (f) => f.approxHeight() },
+  textHeight: { get: (f) => Math.floor(f.approxHeight()) }, // AS2 は整数に切り捨てる（実機で確認: 22.5 → 22、46.5 → 46）
   // スクロールは、フィールドの配置（概算）から決まる。代入は範囲に収める。変わると onScroller が呼ばれる。
   scroll: { get: (f) => { f.scrollInfo(); return f.scrollV; }, set: (f, v, vm) => { f.setScroll(toInt32(vm, v), undefined); } },
   maxscroll: { get: (f) => f.scrollInfo().maxV },

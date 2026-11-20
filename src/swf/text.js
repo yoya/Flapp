@@ -8,6 +8,15 @@ import { shapeRecords } from './shape.js';
  * DefineFont (10) / DefineFont2 (48) / DefineFont3 (75)。
  * グリフは数が多いことがあるので、輪郭は使うときに初めて読む。
  */
+// フォントの名前。UTF-8 として読めなければ、1 バイトを 1 文字として読む（SWF 6 の実機の getTextFormat().font で確認。Shift-JIS の名前など）。
+function fontName(bytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/\0+$/, '');
+  } catch {
+    return String.fromCharCode(...bytes).replace(/\0+$/, '');
+  }
+}
+
 export function parseDefineFont(tag) {
   const r = new Reader(tag.body);
   const font = {
@@ -23,9 +32,12 @@ export function parseDefineFont(tag) {
   let tableStart;
   if (tag.code === 10) {
     tableStart = r.pos;
-    const first = r.u16();
-    offsets = [first];
-    for (let i = 1; i < first / 2; i++) offsets.push(r.u16());
+    offsets = [];
+    if (r.pos < tag.body.length) { // 字形の無いフォント（id だけ）もある。名前は DefineFontInfo で付き、端末のフォントで描く
+      const first = r.u16();
+      offsets.push(first);
+      for (let i = 1; i < first / 2; i++) offsets.push(r.u16());
+    }
   } else if (tag.code === 48 || tag.code === 75) {
     const flags = r.u8();
     const hasLayout = (flags & 0x80) !== 0;
@@ -34,7 +46,7 @@ export function parseDefineFont(tag) {
     font.italic = (flags & 0x02) !== 0;
     font.bold = (flags & 0x01) !== 0;
     r.u8(); // LanguageCode
-    font.name = new TextDecoder().decode(r.bytesView(r.u8())).replace(/\0+$/, '');
+    font.name = fontName(r.bytesView(r.u8()));
     const count = r.u16();
     tableStart = r.pos;
     offsets = [];
@@ -74,6 +86,22 @@ export function parseDefineFont(tag) {
     return path;
   };
   return font;
+}
+
+/**
+ * DefineFontInfo (13) / DefineFontInfo2 (62)。DefineFont（字形だけ）に付ける名前・太字・斜体と、グリフ番号 → 文字コード。
+ * glyphCount は、そのフォントのグリフの数。
+ */
+export function parseDefineFontInfo(tag, glyphCount) {
+  const r = new Reader(tag.body);
+  const id = r.u16();
+  const name = fontName(r.bytesView(r.u8()));
+  const flags = r.u8();
+  if (tag.code === 62) r.u8(); // LanguageCode
+  const wide = (flags & 0x01) !== 0;
+  const codes = [];
+  while (codes.length < glyphCount && r.pos + (wide ? 2 : 1) <= tag.body.length) codes.push(wide ? r.u16() : r.u8());
+  return { id, name, bold: (flags & 0x02) !== 0, italic: (flags & 0x04) !== 0, codes };
 }
 
 /** DefineText (11) / DefineText2 (33)。 */
@@ -175,13 +203,49 @@ export function textToPaths(text, getFont) {
 const IDENTITY = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
 const GUTTER = 40; // テキストフィールドの内側の余白（2px）
 
+// 端末のフォントの行の寸法。実機（mac の日本語の環境）の getLineMetrics で測った（test/as3/textlineheight.as・textmetrics.as・
+// textmetrics2.as）。多くは、大きさにフォントごとの比を掛けて 0.5 px の単位に丸めたもの。名前を知らないフォントは Helvetica と同じ。
+// 汎用の名前（_sans など）は大きさごとに不規則なので、測った値の表を使い、表に無い大きさは前後の比を直線でつなぐ。
+const DEVICE_RATIOS = [
+  [/^(_ゴシック|_明朝)$/, 0.88, 0.12], // ヒラギノ
+  [/^(osaka|_\x83S\x83V\x83b\x83N)$/i, 1, 0.25], // 後者は Shift-JIS の「_ゴシック」を 1 バイトずつ読んだ名前。実機は Osaka で描く
+  [/^arial$/i, 0.905, 0.212],
+];
+const DEVICE_TABLES = Object.fromEntries(Object.entries({
+  _sans: '8:9/2 9:8/2 10:8.5/2.5 11:11.5/2.5 12:12.5/3 13:13/3 14:13/3 16:15.5/3.5 18:17/4 20:19.5/4.5 24:21.5/5.5 28:25/6.5 30:27/7 36:32.5/8.5 48:43.5/11 72:65.5/16.5',
+  _serif: '8:8/2 9:9/2.5 10:8.5/2.5 11:11.5/3 12:12/3 13:12/3.5 14:12.5/3.5 16:15/4 18:15.5/4.5 20:17.5/5 24:20.5/6 28:24/7 30:26/7.5 36:32.5/9 48:43/12 72:63.5/18',
+  _typewriter: '8:6/2 9:8/2 10:7.5/2.5 11:11.5/2.5 12:12/3 13:12/3 14:12.5/3.5 16:14.5/4 18:14.5/4.5 20:17/5 24:20/6 28:23.5/7 30:25/7.5 36:27.5/9 48:37/12 72:57/17.5',
+  _等幅: '8:7/1.5 9:7.5/1.5 10:8.5/2 11:9.5/2 12:10.5/2.5 13:11/2.5 14:12/2.5 16:13.5/3 18:15.5/3.5 20:17/4 24:20.5/4.5 28:24/5.5 36:31/7 48:41/9 72:61.5/14',
+}).map(([name, table]) => [name, table.split(' ').map((item) => item.split(/[:/]/).map(Number))]));
+
 /**
- * 端末のフォント（実機の既定の「Times Roman」）の、大きさ size（px）の行の寸法（px）。実機で測った: 上端から文字の基準線まで（ascent）は
- * 大きさの 3/4、下（descent）は 1/4 を、それぞれ 0.5 px の単位に切り上げたもので、行の高さはその和（leading が 0 のとき）。
+ * 端末のフォント family の、大きさ size（px）の行の寸法（px）: 上端から文字の基準線まで（ascent）、その下（descent）、行の高さ（その和。
+ * leading が 0 のとき）。既定のフォント（Times Roman）と Times・Courier は、大きさの 3/4 と 1/4 を 0.5 px の単位に切り上げたもの。
  */
-export function deviceMetrics(size) {
-  const ceil2 = (v) => Math.ceil(v * 2 - 1e-9) / 2;
-  const ascent = ceil2(size * 0.75), descent = ceil2(size * 0.25);
+export function deviceMetrics(size, family = 'Times Roman') {
+  const half = (v) => Math.round(v * 2) / 2;
+  const name = family || 'Times Roman';
+  let ascent, descent;
+  const table = DEVICE_TABLES[name];
+  if (table) {
+    const exact = table.find(([at]) => at === size);
+    if (exact) [, ascent, descent] = exact;
+    else {
+      const i = table.findIndex(([at]) => at > size);
+      const [a, b] = i < 0 ? [table[table.length - 1], table[table.length - 1]] : i === 0 ? [table[0], table[0]] : [table[i - 1], table[i]];
+      const t = b[0] === a[0] ? 0 : (size - a[0]) / (b[0] - a[0]);
+      ascent = half(size * (a[1] / a[0] + t * (b[1] / b[0] - a[1] / a[0])));
+      descent = half(size * (a[2] / a[0] + t * (b[2] / b[0] - a[2] / a[0])));
+    }
+  } else if (/^(times( roman)?|courier)$/i.test(name)) {
+    const ceil2 = (v) => Math.ceil(v * 2 - 1e-9) / 2;
+    ascent = ceil2(size * 0.75);
+    descent = ceil2(size * 0.25);
+  } else {
+    const [, a, d] = DEVICE_RATIOS.find(([re]) => re.test(name)) ?? [null, 0.77, 0.23];
+    ascent = half(size * a);
+    descent = half(size * d);
+  }
   return { ascent, descent, height: ascent + descent };
 }
 const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
@@ -215,12 +279,17 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
   const widthOf = (c) => {
     if (outlines) return (font.advances[glyphOf.get(c.ch.codePointAt(0))] * sizeOf(c)) / unitsPerEm + c.f.letterSpacing * 20;
     // edit.measure は、描く側が測った文字の幅（twips）。無ければ概算（半角は大きさの半分、全角は 1 倍）。
-    const measured = edit.measure?.(c.ch, c.f);
+    const measured = edit.measure?.(c.ch, c.f, edit.deviceFont);
     return (measured ?? (c.ch.codePointAt(0) >= 0x2e80 ? sizeOf(c) : sizeOf(c) * 0.5)) + c.f.letterSpacing * 20;
   };
+  // 行の [いちばん大きな文字の大きさ, 行の高さ, 上端から基準線まで]（twips）。端末のフォントは、文字ごとの ascent と descent の
+  // それぞれの最大（フォントごとの寸法は deviceMetrics）。
   const heightOf = (line, pf) => {
     const size = line.length ? Math.max(...line.map(sizeOf)) : sizeOf({ f: pf });
-    return [size, (outlines ? size * ((font.ascent + font.descent) / unitsPerEm) : deviceMetrics(size / 20).height * 20) + pf.leading * 20];
+    if (outlines) return [size, size * ((font.ascent + font.descent) / unitsPerEm) + pf.leading * 20, (font.ascent / unitsPerEm) * size];
+    const list = (line.length ? line : [{ f: pf }]).map((c) => deviceMetrics(c.f.size, edit.deviceFont ?? c.f.font));
+    const ascent = Math.max(...list.map((m) => m.ascent)) * 20, descent = Math.max(...list.map((m) => m.descent)) * 20;
+    return [size, ascent + descent + pf.leading * 20, ascent];
   };
   // 画像（<img>）は、それがある行の下に置かれ、あとの行の文章は、画像の横へ回り込む。位置は実機で測った（左右の端から hspace、
   // 行の下から vspace。いずれも余白の 2 倍ぶん内側）。images は { index, bitmap, width, height, align, hspace, vspace }（twips でなく px）。
@@ -279,16 +348,16 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
     place(line, top, heightOf(line, pf)[1]);
     lines.push(line);
     lines.forEach((chars2, row) => {
-      const [size, height] = heightOf(chars2, pf);
+      const [size, height, baseline] = heightOf(chars2, pf);
       const [shiftLeft, shiftRight] = tops[row].band;
       const x0 = left + shiftLeft + (row === 0 ? pf.indent * 20 : 0);
       const right2 = right - shiftRight;
       if (pf.bullet && row === 0 && par.length) {
-        ops.push({ kind: 'text', text: '•', x: left - sizeOf({ f: pf }) * 1.3, y, width: sizeOf({ f: pf }), align: 'left', size: sizeOf({ f: pf }), family: pf.font, bold: pf.bold, italic: pf.italic, color: rgb(pf.color) });
+        ops.push({ kind: 'text', text: '•', x: left - sizeOf({ f: pf }) * 1.3, y, ascent: baseline, width: sizeOf({ f: pf }), align: 'left', size: sizeOf({ f: pf }), family: edit.deviceFont ?? pf.font, bold: pf.bold, italic: pf.italic, color: rgb(pf.color) });
       }
       if (outlines) {
         const total = chars2.reduce((sum, c) => sum + widthOf(c), 0);
-        const extra = right2 - x0 - total;
+        const extra = Math.max(0, right2 - x0 - total); // 枠より広い行は、揃え方によらず左端から並べる（実機で確認。test/as/textclip.as）
         let x = x0 + (pf.align === 'right' ? extra : pf.align === 'center' ? extra / 2 : 0);
         const ascent = (font.ascent / unitsPerEm) * size;
         for (const c of chars2) {
@@ -306,8 +375,8 @@ function richText(edit, ops, content, font, glyphOf, outlines) {
           else runs.push({ text: c.ch, f: c.f });
         }
         ops.push({
-          kind: 'text', x: x0, y, width: right2 - x0, align: pf.align, size,
-          runs: runs.map((r) => ({ text: r.text, size: r.f.size * 20, family: r.f.font, bold: r.f.bold, italic: r.f.italic, underline: r.f.underline, color: rgb(r.f.color), letterSpacing: r.f.letterSpacing * 20 })),
+          kind: 'text', x: x0, y, ascent: baseline, width: right2 - x0, align: pf.align, size,
+          runs: runs.map((r) => ({ text: r.text, size: r.f.size * 20, family: edit.deviceFont ?? r.f.font, bold: r.f.bold, italic: r.f.italic, underline: r.f.underline, color: rgb(r.f.color), letterSpacing: r.f.letterSpacing * 20 })),
         });
       }
       y += height;
@@ -347,8 +416,9 @@ export function editTextToPaths(edit, getFont) {
   const outlines = edit.useOutlines && font?.advances && [...content].every((ch) => /[\r\n]/.test(ch) || glyphOf.has(ch.codePointAt(0)));
   if (edit.runs) return richText(edit, ops, content, font, glyphOf, outlines);
   const scale = font ? edit.height / font.unitsPerEm : 0;
-  const ascent = outlines ? font.ascent * scale : deviceMetrics(edit.height / 20).ascent * 20;
-  const lineHeight = (outlines ? (font.ascent + font.descent) * scale : deviceMetrics(edit.height / 20).height * 20) + edit.leading;
+  const family = edit.deviceFont ?? font?.name ?? edit.fontName ?? '';
+  const ascent = outlines ? font.ascent * scale : deviceMetrics(edit.height / 20, family).ascent * 20;
+  const lineHeight = (outlines ? (font.ascent + font.descent) * scale : deviceMetrics(edit.height / 20, family).height * 20) + edit.leading;
   const widthOf = (s) => [...s].reduce((w, ch) => w + font.advances[glyphOf.get(ch.codePointAt(0))] * scale, 0);
 
   const left = xmin + GUTTER + edit.leftMargin;
@@ -378,12 +448,12 @@ export function editTextToPaths(edit, getFont) {
     const start = left + (n === 0 ? edit.indent : 0);
     if (!outlines) {
       ops.push({
-        kind: 'text', text: line, x: start, y: top, width: right - start, align: edit.align, size: edit.height,
-        family: font?.name ?? edit.fontName ?? '', bold: edit.bold ?? font?.bold ?? false, italic: edit.italic ?? font?.italic ?? false, color: edit.color,
+        kind: 'text', text: line, x: start, y: top, ascent, width: right - start, align: edit.align, size: edit.height,
+        family, bold: edit.bold ?? font?.bold ?? false, italic: edit.italic ?? font?.italic ?? false, color: edit.color,
       });
       return;
     }
-    const extra = right - start - widthOf(line);
+    const extra = Math.max(0, right - start - widthOf(line)); // 枠より広い行は、揃え方によらず左端から並べる（実機で確認。test/as/textclip.as）
     let x = start + (edit.align === 'right' ? extra : edit.align === 'center' ? extra / 2 : 0);
     for (const ch of line) {
       const index = glyphOf.get(ch.codePointAt(0));

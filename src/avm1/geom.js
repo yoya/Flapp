@@ -231,16 +231,17 @@ export function installGeom(vm) {
       return ops.hitPoint(b, ox, oy, limit - 1, Math.round(p.x), Math.round(p.y)); // AS2 の点との判定は「しきい値以上」（AS3 は「より大きい」。実機で確認）
     }),
     noise: each((b, [seed, low = 0, high = 255, channels = 7, gray = false]) => { ops.noise(b, int(seed), int(low), int(high), int(channels), toBool(vm, gray)); }),
-    // draw(元, 行列, 色変換, ブレンド, 切り抜く矩形): 元はクリップか BitmapData。クリップは、描画側があるときだけ描ける。
+    // draw(元, 行列, 色変換, ブレンド, 切り抜く矩形): 元はクリップ・テキストフィールド（実機で確認）か BitmapData。クリップと
+    // テキストフィールドは、描画側があるときだけ描ける。
     draw: each((b, [source, m, ct, , clipRect]) => {
       const mm = m instanceof AVMObject ? M(m) : { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
       const clip = clipRect instanceof AVMObject ? intRect(b, clipRect) : ops.whole(b);
       const cx = ct instanceof AVMObject ? (() => { const v = CTv(ct); return [0, 1, 2, 3].map((i) => [v[i], v[i + 4]]); })() : null;
       let image = null;
       if (B(source)) image = ops.transformed(b, B(source), mm, clip);
-      else if (source?.isMovieClip) {
-        const movie = source.clip.movie;
-        image = movie.rasterize?.(source.clip, mm, b.width, b.height) ?? null;
+      else if (source?.isMovieClip || (source?.isTextField && !source.field.removed)) {
+        const display = source.isMovieClip ? source.clip : source.field, movie = display.movie;
+        image = movie.rasterize?.(display, mm, b.width, b.height) ?? null;
         if (!image) movie.warn('BitmapData.draw of a movie clip needs a renderer');
       }
       if (image) ops.drawImage(b, image, clip, cx);

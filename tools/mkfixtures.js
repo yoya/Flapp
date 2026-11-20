@@ -1737,6 +1737,29 @@ fixtures['import-main'] = swf({
   ],
 });
 
+// SWF 6 のフォントの名前（字形の無い DefineFont2）。UTF-8 として読めない名前は、1 バイトを 1 文字として読む。Shift-JIS の「_ゴシック」は
+// Osaka の寸法（行の高さ 25）、名前を知らないフォントは Helvetica の寸法（20）になる。
+const nameOnlyFont = (id, name) => tag(48, [...u16(id), 0, 0, name.length, ...name, ...u16(0)]);
+const fontOf = (field) => [PushString('0'), PushString(field), GetVariable, PushString('getTextFormat'), [0x52], PushString('font'), [0x4e]];
+fixtures['as-swf6-fontname'] = swf({
+  version: 6, frames: 1,
+  tags: [
+    nameOnlyFont(10, [0x5f, 0x83, 0x53, 0x83, 0x56, 0x83, 0x62, 0x83, 0x4e]),
+    nameOnlyFont(11, [...new TextEncoder().encode('_sans')]),
+    nameOnlyFont(12, [...new TextEncoder().encode('NoSuch')]),
+    ...[10, 11, 12].flatMap((fontId, i) => [
+      DefineEditText({ id: 20 + i, bounds: [0, 4400, 0, 560], fontId, height: 400, color: [0, 0, 0, 255], text: 'Combo' }),
+      PlaceObject2({ depth: i + 1, id: 20 + i, name: `t${i}`, matrix: { tx: 200, ty: 100 + i * 600 } }),
+    ]),
+    DoAction([0, 1, 2].flatMap((i) => [
+      ...fontOf(`t${i}`), Trace(),
+      ...fontOf(`t${i}`), PushString('length'), [0x4e], Trace(),
+      PushString(`t${i}`), GetVariable, PushString('textHeight'), [0x4e], Trace(),
+    ])),
+    ShowFrame(), End(),
+  ],
+});
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = new URL('../test/fixtures/', import.meta.url);
   mkdirSync(dir, { recursive: true });

@@ -42,7 +42,7 @@ export function layoutOf(field) {
   const fmtAt = (i) => field.formatAt(i);
   const widthOf = (i) => {
     const f = fmtAt(i), size = f.size * 20, ch = shown[i];
-    return (measure?.(ch, f) ?? (ch.codePointAt(0) >= 0x2e80 ? size : size * 0.5)) + (f.letterSpacing ?? 0) * 20;
+    return (measure?.(ch, f, field.deviceFont) ?? (ch.codePointAt(0) >= 0x2e80 ? size : size * 0.5)) + (f.letterSpacing ?? 0) * 20;
   };
   const lines = [];
   let y = GUTTER;
@@ -77,15 +77,19 @@ export function layoutOf(field) {
       const widths = [];
       let total = 0;
       for (let i = a; i < b; i++) { widths.push(widthOf(i)); total += widths[widths.length - 1]; }
-      const extra = right - x0 - total;
+      const extra = Math.max(0, right - x0 - total); // 枠より広い行は、揃え方によらず左端から並べる（実機で確認。test/as/textclip.as）
       let x = x0 + (pf.align === 'right' ? extra : pf.align === 'center' ? extra / 2 : 0);
       const xs = [x];
       for (const w of widths) xs.push((x += w));
-      let size = 0;
-      for (let i = a; i < b; i++) size = Math.max(size, fmtAt(i).size * 20);
-      if (!size) size = (pf.size ?? 12) * 20;
-      const height = deviceMetrics(size / 20).height * 20 + (pf.leading ?? 0) * 20;
-      lines.push({ start: a, end: b, x: xs, y, height });
+      // 行の高さは、文字ごとの ascent と descent のそれぞれの最大の和（swf/text.js の描画と同じ）。
+      let ascent = 0, descent = 0;
+      for (let i = a; i < (b > a ? b : a + 1); i++) {
+        const f = i < b ? fmtAt(i) : pf, m = deviceMetrics(f.size ?? 12, field.deviceFont ?? f.font);
+        ascent = Math.max(ascent, m.ascent);
+        descent = Math.max(descent, m.descent);
+      }
+      const height = (ascent + descent) * 20 + (pf.leading ?? 0) * 20;
+      lines.push({ start: a, end: b, x: xs, y, height, ascent: ascent * 20 });
       y += height;
     });
     at = start + par.length + 1;
@@ -116,7 +120,7 @@ export function indexAt(layout, x, y) {
 /** 位置 index のキャレットの座標（twips、フィールドの左上が原点）と行の高さ。 */
 export function caretAt(layout, index) {
   const line = layout.lines[lineOf(layout, index)];
-  return { x: line.x[Math.min(index, line.end) - line.start], y: line.y, height: line.height };
+  return { x: line.x[Math.min(index, line.end) - line.start], y: line.y, height: line.height, ascent: line.ascent };
 }
 
 /** 描画命令 ops を (dx, dy)（twips）だけずらした、新しい配列。 */

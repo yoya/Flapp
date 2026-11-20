@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Movie } from '../src/player/movie.js';
 import { parseSWF } from '../src/swf/parse.js';
-import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, textToPaths } from '../src/swf/text.js';
+import { editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineFontInfo, parseDefineText, textToPaths } from '../src/swf/text.js';
 import { fixtures } from '../tools/mkfixtures.js';
 
 const text = (path) => path.map((c) => c.join(' ')).join(' ');
@@ -119,7 +119,7 @@ test('テキストは置ける。フォントは置けない', async () => {
   assert.deepEqual(movie.warnings, []);
   // 静的テキストは図形、テキストフィールドは内容を変えられる表示オブジェクトになる。
   assert.deepEqual(movie.root.sortedChildren().map((c) => [c.character.id, c.character.type, (c.character.paths ?? c.paths()).length]), [
-    [10, 'shape', 5], [11, 'shape', 4], [12, 'shape', 3], [13, 'edittext', 7],
+    [10, 'shape', 5], [11, 'shape', 4], [12, 'shape', 3], [13, 'edittext', 9], // 文字は枠の内側で切る（clip と unclip の 2 つ）
   ]);
   assert.equal(movie.dictionary.get(1).type, 'font');
 });
@@ -131,4 +131,40 @@ test('SWF 4 の変数連動テキスト: 変数のバイト列を、指定の文
   const walk = (c) => { if (c.variable) shown.push(c.text); for (const [, child] of c.children ?? []) walk(child); };
   walk(movie.root);
   assert.deepEqual(shown, ['あい', 'アヂ']); // 実機の画面と同じ（定義の初期値も、スクリプトが入れた値も）
+});
+
+test('字形の無い DefineFont に、DefineFontInfo で名前と文字コードが付く', () => {
+  const font = parseDefineFont({ code: 10, body: new Uint8Array([7, 0]) }); // id だけ（実機は受け付ける）
+  assert.equal(font.glyphCount, 0);
+  const name = [...new TextEncoder().encode('_sans')];
+  assert.deepEqual(parseDefineFontInfo({ code: 13, body: new Uint8Array([7, 0, name.length, ...name, 0x04 | 0x02]) }, 0), { id: 7, name: '_sans', bold: true, italic: true, codes: [] });
+  // DefineFontInfo2 は言語コードの後に文字コードの表が続く（WideCodes なら 2 バイトずつ）。
+  assert.deepEqual(parseDefineFontInfo({ code: 62, body: new Uint8Array([7, 0, 1, 0x41, 0x01, 1, 0x42, 0x30, 0x41, 0]) }, 2).codes, [0x3042, 0x41]);
+});
+
+test('SWF 5 以前の端末のフォントの文字は、フォントの名前によらず Times で描く', async () => {
+  // 実機の画面で確かめた（DefineFont2・DefineFontInfo の名前が _sans でも、SWF 4・5 は Times、SWF 6 は名前どおり）。
+  const movie = await Movie.load(fixtures['as-swf4-edittext-sjis'], { encoding: 'shift_jis' });
+  movie.advance();
+  const families = [...movie.root.children.values()].flatMap((c) => c.paths().filter((op) => op.kind === 'text').map((op) => op.family));
+  assert.deepEqual(families, ['Times Roman', 'Times Roman']);
+});
+
+test('<img> の src がライブラリのビットマップの書き出し名なら、それを描く', async () => {
+  const { DefineBitsLossless, End, ShowFrame, swf, tag, u16 } = await import('../tools/mkfixtures.js');
+  const bytes = swf({
+    version: 8,
+    tags: [
+      DefineBitsLossless({ id: 1, format: 5, width: 2, height: 2, pixel: () => [0, 255, 0, 0] }),
+      tag(56, [...u16(1), ...u16(1), ...new TextEncoder().encode('pic'), 0]),
+      ShowFrame(), End(),
+    ],
+  });
+  const movie = await Movie.load(bytes);
+  const field = movie.root.createTextField('tf', 1, 0, 0, 4000, 2000);
+  field.multiline = true;
+  field.setHtml('a<img src="pic" width="20" height="20">b', true);
+  const op = field.paths().find((o) => o.kind === 'fill' && o.style.type === 'bitmap');
+  assert.equal(op?.style.bitmap, movie.dictionary.get(1));
+  assert.equal(op.style.matrix.a, (20 * 20) / 2); // 2 px の画像を 20 px に
 });

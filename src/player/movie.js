@@ -23,7 +23,7 @@ import { caretAt, indexAt, layoutOf, lineOf, restricts, shiftOps, wordAt } from 
 import { compose, focalLength, lift, multiply as multiply3D, project, transform as transform3D } from './matrix3d.js';
 import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
-import { deviceMetrics, editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
+import { deviceMetrics, editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineFontInfo, parseDefineText, plainText, textToPaths } from '../swf/text.js';
 import { shapeToPaths } from '../shape/paths.js';
 
 const IDENTITY = Object.freeze({ a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 });
@@ -213,7 +213,7 @@ export class Movie {
     this.decodeImage = decodeImage ?? null;
     this.network = network ?? null;
     this.storage = storage ?? null;
-    this.measureText = null; // (文字, 書式) => 幅（twips）。描く側（render/canvas.js の prepare）が、端末のフォントで測る関数を入れる
+    this.measureText = null; // (文字, 書式, フォント名の代わり) => 幅（twips）。描く側（render/canvas.js の prepare）が、端末のフォントで測る関数を入れる
     this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
@@ -595,10 +595,17 @@ export class Movie {
 
  /**
    * テキストフィールドの <img src> の画像（JPEG・PNG・GIF）。ホストの network.load で読み、読めたら、使っているフィールドを描き直させる。
-   * 戻り値は { bitmap（読めるまでは null）, failed }。ライブラリの書き出し名や SWF を指す src は、読み込まない（描かない）。
+   * 戻り値は { bitmap（読めるまでは null）, failed }。ライブラリのビットマップの書き出し名（AS3 はクラス名）なら、それを描く。
+   * ライブラリのクリップや SWF を指す src は描かない。
    */
   textImage(src, field) {
     let entry = this.textImages.get(src);
+    // ライブラリのビットマップ（AS2 の書き出し名、AS3 のクラス名）なら、それを使う（読み込まない）。
+    const linked = !entry && (this.exportedBitmap(src) ?? (this.avm2 ? this.linkedCharacter(src.replace(/\.(?=[^.]*$)/, '::')) : null));
+    if (linked?.type === 'bitmap') {
+      entry = { bitmap: linked, failed: false, fields: new Set() };
+      this.textImages.set(src, entry);
+    }
     if (!entry) {
       entry = { bitmap: null, failed: false, fields: new Set() };
       this.textImages.set(src, entry);
@@ -1333,6 +1340,9 @@ export class Movie {
           this.#define({ type: 'morph', ...parseDefineMorphShape(tag) }, lib);
         } else if (tag.code === 10 || tag.code === 48 || tag.code === 75) {
           this.#define({ type: 'font', ...parseDefineFont(tag) }, lib);
+        } else if (tag.code === 13 || tag.code === 62) {
+          const font = lib.dictionary.get(tag.body[0] | (tag.body[1] << 8));
+          if (font?.type === 'font') Object.assign(font, parseDefineFontInfo(tag, font.glyphCount));
         } else if (tag.code === 11 || tag.code === 33) {
           // 静的テキストは、グリフを並べた図形として扱う。
           const text = parseDefineText(tag);
@@ -1770,7 +1780,7 @@ export class TextField extends DisplayObject {
   compositionWidth() {
     if (!this.composition) return 0;
     const f = this.formatAt(Math.max(0, this.selection[0] - 1));
-    return [...this.composition].reduce((sum, ch) => sum + (this.movie.measureText?.(ch, f) ?? (ch.codePointAt(0) >= 0x2e80 ? f.size * 20 : f.size * 10)), 0);
+    return [...this.composition].reduce((sum, ch) => sum + (this.movie.measureText?.(ch, f, this.deviceFont) ?? (ch.codePointAt(0) >= 0x2e80 ? f.size * 20 : f.size * 10)), 0);
   }
 
   /** IME で変換中の文字列を入れる（null で消す）。見える位置までスクロールする。 */
@@ -1982,11 +1992,24 @@ export class TextField extends DisplayObject {
 
   approxHeight() {
     if (!this.text) return 0;
-    let total = 0, line = 0;
+    let total = 0, ascent = 0, descent = 0;
     for (let i = 0; i <= this.text.length; i++) {
-      if (i === this.text.length || this.text[i] === '\r') { total += deviceMetrics(line || this.format.size).height; line = 0; } else line = Math.max(line, this.formatAt(i).size);
+      if (i === this.text.length || this.text[i] === '\r') {
+        if (!ascent) ({ ascent, descent } = deviceMetrics(this.format.size, this.deviceFont ?? this.format.font));
+        total += ascent + descent;
+        ascent = descent = 0;
+      } else {
+        const f = this.formatAt(i), m = deviceMetrics(f.size, this.deviceFont ?? f.font);
+        ascent = Math.max(ascent, m.ascent);
+        descent = Math.max(descent, m.descent);
+      }
     }
     return total;
+  }
+
+  /** 端末のフォントで描くときに、書式のフォント名の代わりに使う名前。SWF 5 以前は、名前によらず Times で描く（実機で確認。test/text.test.js）。 */
+  get deviceFont() {
+    return (this.character.library ?? this.movie.library).version < 6 ? 'Times Roman' : undefined;
   }
 
   /** 今の文字列と書式を、実機と同じ形の HTML にしたもの。 */
@@ -2001,6 +2024,7 @@ export class TextField extends DisplayObject {
       const f = this.format;
       this.#paths = this.movie.textPaths({
         bounds: this.box, fontId: edit?.fontId, fontName: f.font, useOutlines: this.embedFonts,
+        deviceFont: this.deviceFont,
         height: f.size * 20, color: rgbOf(f.color), bold: f.bold, italic: f.italic, align: f.align,
         leftMargin: f.leftMargin * 20, rightMargin: f.rightMargin * 20, indent: f.indent * 20, leading: f.leading * 20,
         text: this.text, html: false, password: this.password, multiline: this.multiline, wordWrap: this.wordWrap,
@@ -2009,7 +2033,7 @@ export class TextField extends DisplayObject {
         runs: this.fmts ? layoutRunsOf(this.text, this.fmts) : !this.embedFonts && this.text && (this.wordWrap || f.bullet || f.blockIndent) ? [{ text: this.text, fmt: f }] : null, // 端末のフォントで、折り返しや箇条書きがあるときは、書式が 1 つでも同じ配置を使う // 文字ごとの書式があるときだけ（text と同じ並び）
         border: this.border, background: this.background, borderColor: rgbOf(this.borderColor), backgroundColor: rgbOf(this.backgroundColor),
       }, this.character.library);
-      this.#paths = this.#scrolled(this.#withSelection(this.#paths));
+      this.#paths = this.#clipped(this.#withSelection(this.#paths));
     }
     return this.#paths;
   }
@@ -2028,13 +2052,16 @@ export class TextField extends DisplayObject {
     return out;
   }
 
-  // スクロールしているとき、文字（背景と枠の後ろ）をずらして、フィールドの枠の中だけに見せる。
-  #scrolled(ops) {
-    if (this.scrollV <= 1 && this.scrollH <= 0) return ops;
-    const info = this.scrollInfo(), n = (this.background ? 1 : 0) + (this.border ? 1 : 0), { xmin, xmax, ymin, ymax } = this.box;
-    if (info.maxV <= 1 && info.maxH <= 0) return ops;
-    const inner = { kind: 'clip', style: { type: 'solid', color: { r: 0, g: 0, b: 0, a: 255 } }, evenOdd: true, path: [['M', xmin + 40, ymin + 40], ['L', xmax - 40, ymin + 40], ['L', xmax - 40, ymax - 40], ['L', xmin + 40, ymax - 40], ['Z']] }; // 余白（2px）の内側だけに見せる
-    return [...ops.slice(0, n), inner, ...shiftOps(ops.slice(n), -this.scrollH * 20, -info.offsetY), { kind: 'unclip' }];
+  // 文字（背景と枠の後ろ）を、フィールドの枠の内側（余白 2px）だけに見せる。最後まで入らない行は、最初に見える行のほかは描かない
+  // （実機で確認。test/as/textclip.as）。スクロールしているときは、文字をずらす。
+  #clipped(ops) {
+    const n = (this.background ? 1 : 0) + (this.border ? 1 : 0);
+    if (ops.length <= n) return ops;
+    const info = this.scrollInfo(), { lines } = info.layout, { xmin, xmax, ymin, ymax } = this.box;
+    const bottom = Math.min(ymax - 40, info.bottom < lines.length ? ymin + lines[info.bottom].y - info.offsetY : Infinity);
+    const inner = { kind: 'clip', style: { type: 'solid', color: { r: 0, g: 0, b: 0, a: 255 } }, evenOdd: true, path: [['M', xmin + 40, ymin + 40], ['L', xmax - 40, ymin + 40], ['L', xmax - 40, bottom], ['L', xmin + 40, bottom], ['Z']] };
+    const body = this.scrollV > 1 || this.scrollH > 0 ? shiftOps(ops.slice(n), -this.scrollH * 20, -info.offsetY) : ops.slice(n);
+    return [...ops.slice(0, n), inner, ...body, { kind: 'unclip' }];
   }
 
   // フォーカスがあるとき、選択（黒地に白い文字）とキャレット（1 本の縦線）を重ねる。実機で、選択の見た目を確かめた。
@@ -2050,7 +2077,7 @@ export class TextField extends DisplayObject {
         if (to <= from) continue;
         const x1 = xmin + line.x[from - line.start], x2 = xmin + line.x[to - line.start], f = this.formatAt(from);
         out.push(rect(x1, ymin + line.y, x2, ymin + line.y + line.height));
-        out.push({ kind: 'text', text: this.password ? '*'.repeat(to - from) : this.text.slice(from, to), x: x1, y: ymin + line.y, width: x2 - x1 + 40, align: 'left', size: f.size * 20, family: f.font, bold: f.bold, italic: f.italic, color: white });
+        out.push({ kind: 'text', text: this.password ? '*'.repeat(to - from) : this.text.slice(from, to), x: x1, y: ymin + line.y, ascent: line.ascent, width: x2 - x1 + 40, align: 'left', size: f.size * 20, family: this.deviceFont ?? f.font, bold: f.bold, italic: f.italic, color: white });
       }
     } else if (this.type === 'input' && this.caretOn && !this.composition) {
       const at = caretAt(layout, this.caret);
@@ -2060,7 +2087,7 @@ export class TextField extends DisplayObject {
       // 変換中の文字列は、選択の始まりに重ねて、下線を引く（確定すると、そこに入る）。
       const at = caretAt(layout, this.selection[0]), f = this.formatAt(Math.max(0, this.selection[0] - 1)), width = this.compositionWidth();
       out.push({ kind: 'fill', style: { type: 'solid', color: white }, evenOdd: true, path: [['M', xmin + at.x, ymin + at.y], ['L', xmin + at.x + width, ymin + at.y], ['L', xmin + at.x + width, ymin + at.y + at.height], ['L', xmin + at.x, ymin + at.y + at.height], ['Z']] });
-      out.push({ kind: 'text', x: xmin + at.x, y: ymin + at.y, width: width + 40, align: 'left', size: f.size * 20, runs: [{ text: this.composition, size: f.size * 20, family: f.font, bold: f.bold, italic: f.italic, underline: true, color: { r: 0, g: 0, b: 0, a: 255 }, letterSpacing: 0 }] });
+      out.push({ kind: 'text', x: xmin + at.x, y: ymin + at.y, ascent: at.ascent, width: width + 40, align: 'left', size: f.size * 20, runs: [{ text: this.composition, size: f.size * 20, family: this.deviceFont ?? f.font, bold: f.bold, italic: f.italic, underline: true, color: { r: 0, g: 0, b: 0, a: 255 }, letterSpacing: 0 }] });
     }
     return out;
   }

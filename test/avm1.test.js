@@ -212,3 +212,15 @@ test('LoadVars / XML の送信と、変数を付けた getURL / loadVariables �
   const offline = await run({});
   assert.deepEqual(offline.traces, ['sendAndLoad true', 'send true', 'reply false status=undefined echo=undefined', 'xml reply false undefined']);
 });
+
+test('BitmapData.draw は、テキストフィールドも描く処理に渡す', async () => {
+  // 描く処理（ブラウザでは CanvasRenderer）の代わりに、受け取ったものを覚えて、全体を赤く塗った画像を返す。
+  const got = [];
+  const rasterize = (movie, d, m, width, height) => {
+    got.push([d.constructor.name, d.text, m.a, m.tx, width, height]);
+    return new Uint8ClampedArray(width * height * 4).map((_, i) => (i % 4 === 0 || i % 4 === 3 ? 255 : 0));
+  };
+  const movie = await Movie.load(readFileSync(new URL('fixtures/asx-drawtext.swf', import.meta.url)), { rasterize });
+  assert.deepEqual(got, [['TextField', 'abc', 2, 1, 4, 4]]);
+  assert.deepEqual(movie.traces, ['ff0000']);
+});
