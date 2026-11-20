@@ -9,7 +9,7 @@
 // イベント: trace（detail に文字列）、warning、error、loaded。画面の大きさは SWF のステージの大きさ（CSS で変えられる）。
 // 入力は、マウスの動きとボタン、キー（要素をクリックして選んでいる間）。音は、ページを最初にクリックするかキーを押した後から鳴る。
 import { Movie } from '../src/player/movie.js';
-import { CanvasRenderer } from '../src/render/canvas.js';
+import { CanvasRenderer, decodeImage } from '../src/render/canvas.js';
 import { WebAudioOutput } from '../src/audio/webaudio.js';
 import { WebCodecsVideo } from '../src/video/webcodecs.js';
 
@@ -237,7 +237,7 @@ export class FlappPlayer extends HTMLElement {
       movie = await Movie.load(source, {
         trace, audio: audioOutput(), video, media, network: http?.network, storage: http ? trustedStorage(label || base || '') : undefined,
         onRequest: ({ kind, url }) => { if (!http) this.dispatchEvent(new CustomEvent('trace', { detail: `[${kind}] ${url}（信用していないので、開きも読みもしません）` })); },
-        matchPlayer: this.hasAttribute('match-player'), rasterize: this.#renderer.rasterizer(),
+        matchPlayer: this.hasAttribute('match-player'), rasterize: this.#renderer.rasterizer(), decodeImage,
         encoding: this.getAttribute('encoding') ?? defaultEncoding(), language: navigator.language.slice(0, 2),
       });
     } catch (e) {

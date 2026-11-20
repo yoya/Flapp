@@ -31,7 +31,7 @@
 <div id="traces"></div>
 <script type="module">
   import { Movie } from '../src/player/movie.js';
-  import { CanvasRenderer } from '../src/render/canvas.js';
+  import { CanvasRenderer, decodeImage } from '../src/render/canvas.js';
   import { WebAudioOutput } from '../src/audio/webaudio.js';
   import { SoundMixer } from '../src/player/sound.js';
   import { FlvPlayback } from '../src/player/video.js';
@@ -170,7 +170,7 @@
     let movie;
     try {
       current?.sounds.stop(); // 前のムービーの音を止める
-      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, network, storage: trust.checked ? trustedStorage(label) : undefined, matchPlayer, rasterize: renderer.rasterizer(), encoding: encoding.value, language: navigator.language.slice(0, 2) });
+      movie = await Movie.load(bytes, { trace, onRequest, audio, video, media, network, storage: trust.checked ? trustedStorage(label) : undefined, matchPlayer, rasterize: renderer.rasterizer(), decodeImage, encoding: encoding.value, language: navigator.language.slice(0, 2) });
     } catch (e) {
       info.textContent = `${label}: ${e.message}`;
       return;

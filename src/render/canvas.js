@@ -105,6 +105,17 @@ function reachOf(op, space) {
   return Number.isFinite(x0) ? { x0, y0, x1, y1 } : null;
 }
 
+/**
+ * 圧縮された画像（JPEG / PNG / GIF）を、乗算済みでない RGBA の画素にする（Movie.load の decodeImage オプション）。ブラウザのデコーダを使う。
+ * @param {{ bytes: Uint8Array, type: string }} encoded
+ */
+export async function decodeImage({ bytes, type }) {
+  const image = await createImageBitmap(new Blob([bytes], { type }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  const canvas = new OffscreenCanvas(image.width, image.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0);
+  return { width: image.width, height: image.height, rgba: ctx.getImageData(0, 0, image.width, image.height).data };
+}
 
 export class CanvasRenderer {
   /** @param {HTMLCanvasElement | OffscreenCanvas} canvas */

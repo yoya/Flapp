@@ -169,3 +169,21 @@ test('Loader: 画像と AS3 の SWF を読み込んで子にする。unload と 
   const loader = movie.root.sortedChildren().find((d) => d.as3 && d.loadedInfo === undefined && d.sortedChildren?.().some((c) => c.loadedInfo));
   assert.ok(loader);
 });
+
+test('Loader で読んだ画像の bitmapData は、ホストの decodeImage で画素になる（アルファの無い画像は不透明）', async () => {
+  const assets = new URL('../tools/assets/', import.meta.url);
+  const network = { load: (req) => readFileSync(new URL(req.url.split('/').pop(), assets)) };
+  // ホストの復号の代わり: 左上だけ赤、ほかは緑。
+  const decodeImage = async ({ bytes }) => {
+    const width = 32, height = 24, rgba = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([0, 255, 0, 255], i);
+    rgba.set([255, 0, 0, 255], 0);
+    return { width, height, rgba };
+  };
+  const movie = await run('as3x-loaderpixels', 12, { network, decodeImage });
+  assert.deepEqual(movie.traces, [
+    'pic.png 32 24 false ffff0000,ff00ff00,ff00ff00,ff00ff00,ff00ff00',
+    'pic.gif 32 24 false ffff0000,ff00ff00,ff00ff00,ff00ff00,ff00ff00',
+    'pic.jpg 32 24 false ffff0000,ff00ff00,ff00ff00,ff00ff00,ff00ff00',
+  ]);
+});

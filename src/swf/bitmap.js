@@ -26,12 +26,31 @@ export function imageFile(bytes, pixelBudget = DEFAULT_PIXEL_BUDGET) {
     const width = png ? view.getUint32(16) : view.getUint16(6, true);
     const height = png ? view.getUint32(20) : view.getUint16(8, true);
     checkSize(width, height, pixelBudget);
-    return { width, height, encoded: { bytes, type: png ? 'image/png' : 'image/gif' } };
+    return { width, height, encoded: { bytes, type: png ? 'image/png' : 'image/gif' }, transparent: png ? pngHasAlpha(bytes) : gifHasAlpha(bytes) };
   }
   if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
   const jpeg = normalizeJPEG([bytes]);
   checkSize(jpeg.width, jpeg.height, pixelBudget);
   return { width: jpeg.width, height: jpeg.height, encoded: { bytes: jpeg.bytes, type: 'image/jpeg' } };
+}
+
+// PNG にアルファがあるか: 色の種類がアルファ付き（4・6）か、tRNS（透明色）の塊がある。
+function pngHasAlpha(bytes) {
+  if (bytes[25] === 4 || bytes[25] === 6) return true;
+  for (let p = 8; p + 8 <= bytes.length;) {
+    const len = ((bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]) >>> 0;
+    const type = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7]);
+    if (type === 'tRNS') return true;
+    if (type === 'IDAT' || type === 'IEND') return false;
+    p += 12 + len;
+  }
+  return false;
+}
+
+// GIF にアルファがあるか: 透明色を指定する拡張（Graphic Control Extension の透明フラグ）がある。
+function gifHasAlpha(bytes) {
+  for (let i = 13; i + 3 < bytes.length; i++) if (bytes[i] === 0x21 && bytes[i + 1] === 0xf9 && bytes[i + 2] === 4 && (bytes[i + 3] & 1)) return true;
+  return false;
 }
 
 function checkSize(width, height, pixelBudget) {

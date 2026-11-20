@@ -363,10 +363,15 @@ export function installBitmap(vm, movie) {
     self.display.setPicture(loaded ? self.loadedImage.def : self.bitmapData?.bitmap ?? null, self.smoothing ?? false);
   };
   /**
-   * Loader で読み込んだ画像（JPEG / PNG / GIF）を表示する Bitmap を作る。画像の復号は描画側が行うので、スクリプトから画素は読めない
-   * （bitmapData は、同じ大きさの透明な BitmapData）。
+   * Loader で読み込んだ画像（JPEG / PNG / GIF）を表示する Bitmap を作る。ホストが画像を画素にできたら（def.rgba）、その BitmapData
+   * （アルファの無い画像は、不透明な BitmapData。実機で確認）。できなければ、表示は描画側が行い、bitmapData は同じ大きさの透明な BitmapData。
    */
   vm.display.loadedBitmap = (def) => {
+    if (def.rgba) {
+      const pixels = create(def.width, def.height, def.transparent === true || !!def.alpha);
+      pixels.rgba.set(def.rgba);
+      return vm.construct(c.Bitmap, [wrap(pixels)]);
+    }
     const data = wrap(create(def.width, def.height, true));
     const bitmap = vm.construct(c.Bitmap, [data]);
     bitmap.loadedImage = { def, data };

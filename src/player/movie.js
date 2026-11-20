@@ -173,6 +173,9 @@ export class Movie {
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
    *             - 埋め込みの H.263 / VP6 を整数倍で置いたとき、実機と同じに、横方向だけ右隣の画素と混ぜて描く
+   *   decodeImage: ({ bytes, type }) => Promise<{ width, height, rgba }>   JPEG / PNG / GIF の画像を画素（乗算済みでない RGBA）にする関数
+   *             （ブラウザでは render/canvas.js の decodeImage）。スクリプトが画素を読む画像（Loader で読んだ画像と、AS3 のクラスに結び付いた
+   *             ビットマップ）だけに使う。省略すると、それらの画素は透明（読み込んだ画像）か白（クラスのビットマップ）になる
    *   rasterize: (movie, 表示オブジェクト, 行列, 幅, 高さ) => RGBA   表示オブジェクトを画像に描く処理（AS3 の BitmapData.draw 用。
    *             ブラウザでは CanvasRenderer の rasterizer()）。省略すると、表示オブジェクトの draw は警告を残して何もしない
    *   language: System.capabilities.language の値（'ja' など。既定は 'en'）
@@ -205,8 +208,9 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage, decodeImage } = {}) {
     this.media = media ?? null;
+    this.decodeImage = decodeImage ?? null;
     this.network = network ?? null;
     this.storage = storage ?? null;
     this.measureText = null; // (文字, 書式) => 幅（twips）。描く側（render/canvas.js の prepare）が、端末のフォントで測る関数を入れる
@@ -349,7 +353,10 @@ export class Movie {
     }
     if (image) {
       this.#bitmapPixelBudget -= image.width * image.height;
-      done({ bitmap: { type: 'bitmap', id: -1, ...image }, size: bytes.length });
+      const bitmap = { type: 'bitmap', id: -1, ...image };
+      if (!this.decodeImage) { done({ bitmap, size: bytes.length }); return; }
+      // 画素も用意する（スクリプトが bitmapData を読むため）。復号に失敗しても、表示はする。
+      this.#pixelsOf(bitmap).then(() => later(() => done({ bitmap, size: bytes.length })));
       return;
     }
     const magic = String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0, bytes[2] ?? 0);
@@ -1340,6 +1347,26 @@ export class Movie {
     }
     if (streamHead && streamBlocks.length) frames.stream = buildStream(streamHead, streamBlocks);
     return frames;
+  }
+
+  // 圧縮された画像（def.encoded。JPEG のアルファは def.alpha）を、ホストの decodeImage で画素（def.rgba）にする。
+  // JPEG3 / 4 の色はアルファを掛けた値なので、アルファで割り戻す。失敗したら、何もしない（警告だけ）。
+  async #pixelsOf(def) {
+    if (!this.decodeImage || !def.encoded || def.rgba) return;
+    try {
+      const { width, height, rgba } = await this.decodeImage(def.encoded);
+      if (width !== def.width || height !== def.height) return;
+      const out = new Uint8ClampedArray(rgba);
+      if (def.alpha) {
+        for (let i = 0, p = 0; i < out.length; i += 4, p++) {
+          const a = def.alpha[p] ?? 0, k = a === 0 ? 0 : 255 / a;
+          out[i] = Math.min(out[i], a) * k; out[i + 1] = Math.min(out[i + 1], a) * k; out[i + 2] = Math.min(out[i + 2], a) * k; out[i + 3] = a;
+        }
+      }
+      def.rgba = out;
+    } catch (e) {
+      this.warn(`bitmap ${def.id} cannot be decoded: ${e.message}`);
+    }
   }
 
   /**
