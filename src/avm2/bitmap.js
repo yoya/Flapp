@@ -180,7 +180,11 @@ export function installBitmap(vm, movie) {
         const x0 = Math.min(r.x, r.x + dx - ex), y0 = Math.min(r.y, r.y + dy - ey), x1 = Math.max(r.x + r.width, r.x + r.width + dx + ex), y1 = Math.max(r.y + r.height, r.y + r.height + dy + ey);
         return vm.construct(c.Rectangle, [Math.floor(x0), Math.floor(y0), Math.ceil(x1) - Math.floor(x0), Math.ceil(y1) - Math.floor(y0)]);
       },
-      perlinNoise: () => { movie.warn('BitmapData.perlinNoise is not supported'); },
+      perlinNoise: (self, [baseX, baseY, octaves, seed, stitch, fractal, channels = 7, gray = false, offsets = null]) => {
+        const offs = offsets instanceof ASArray ? offsets.items.map((p) => (p instanceof ASObject ? { x: field(p, 'x'), y: field(p, 'y') } : { x: 0, y: 0 })) : null;
+        ops.perlinNoise(B(self), num(baseX), num(baseY), Math.min(int(octaves), 16), int(seed), vm.toBoolean(stitch), vm.toBoolean(fractal), int(channels), vm.toBoolean(gray), offs);
+      },
+      pixelDissolve: (self, [source, rect, point, seed = 0, count = 0, color = 0]) => ops.pixelDissolve(B(self), other(source, 'sourceBitmapData'), rectOf(rect, 'sourceRect'), pointOf(point, 'destPoint'), int(seed), int(count), vm.toUint32(color)),
     },
   });
   vm.defineClass({ name: 'flash.display::BitmapDataChannel', final: true, staticValues: { RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8 } });

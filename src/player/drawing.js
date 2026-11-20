@@ -109,6 +109,20 @@ export class Drawing {
     }
   }
 
+  /** 今の塗りのスタイル（無ければ null）。 */
+  fillStyle() {
+    return this.#fill?.style ?? null;
+  }
+
+  /** 三角形を 1 つ、塗りのスタイル style で塗る（drawTriangles でビットマップを三角形ごとに貼るとき）。points は [[x, y] × 3]（twips）。 */
+  fillTriangle(points, style) {
+    if (++this.#segments > MAX_SEGMENTS) return;
+    const path = [['M', ...points[0]], ['L', ...points[1]], ['L', ...points[2]], ['Z']];
+    this.#ops.push({ kind: 'fill', style, evenOdd: true, path });
+    for (const [x, y] of points) this.#extend(x, y);
+    this.#snapshot = null;
+  }
+
   /** color が undefined なら塗りなし。 */
   beginFill(color) {
     this.beginStyle(color && { type: 'solid', color });

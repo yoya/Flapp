@@ -552,7 +552,7 @@ export function installFlash(vm, movie, types) {
     return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff, a: Math.round(Math.min(Math.max(a, 0), 1) * 255) };
   };
   // new Graphics() で直接作ったもの（描き先が無い）への描画は、何もしない。
-  const nowhere = { clear() {}, lineStyle() {}, lineGradient() {}, beginFill() {}, beginStyle() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {}, cubicTo() {}, setWinding() {} };
+  const nowhere = { clear() {}, lineStyle() {}, lineGradient() {}, beginFill() {}, beginStyle() {}, endFill() {}, moveTo() {}, lineTo() {}, curveTo() {}, cubicTo() {}, setWinding() {}, fillStyle() { return null; }, fillTriangle() {} };
   const G = (self) => self.display?.drawing?.() ?? nowhere;
   // 楕円は、実機と同じく 8 本の 2 次ベジェ曲線で描く。
   const ellipse = (g, cx, cy, rx, ry) => {
@@ -672,6 +672,58 @@ export function installFlash(vm, movie, types) {
       endFill: (self) => { G(self).endFill(); },
       cubicCurveTo: (self, [c1x, c1y, c2x, c2y, x, y]) => { G(self).cubicTo(num(c1x) * 20, num(c1y) * 20, num(c2x) * 20, num(c2y) * 20, num(x) * 20, num(y) * 20); },
       drawPath: (self, [commands, data, winding = 'evenOdd']) => { drawPath(G(self), commands, data, winding); },
+      // drawTriangles(頂点, 添字, uvt, 裏向きの省略): 添字が無ければ頂点を 3 つずつ。positive は符号付き面積が正（画面で時計回り）のもの、
+      // negative は負のものを描かない。塗りがビットマップで uvt があれば、三角形ごとに UV（0〜1）で貼る（t は使わない）。
+      // 三角形が 1 つもできなければ ArgumentError #2004、裏向きの指定が不正なら #2008（実機で確認）。
+      drawTriangles: (self, [vertices, indices = null, uvt = null, culling = 'none']) => {
+        const cull = str(culling);
+        if (!['none', 'positive', 'negative'].includes(cull)) vm.throwError('ArgumentError', 2008, 'Parameter culling must be one of the accepted values.');
+        if (!(vertices instanceof ASVector)) return;
+        const v = vertices.items.map(num), n = v.length >> 1;
+        const idx = indices instanceof ASVector ? indices.items.map((i) => vm.toInt32(i)) : Array.from({ length: n - (n % 3) }, (_, i) => i);
+        if (idx.length < 3) vm.throwError('ArgumentError', 2004, 'One of the parameters is invalid.');
+        const g = G(self), style = g.fillStyle();
+        const uv = uvt instanceof ASVector ? uvt.items.map(num) : null;
+        const stride = uv ? (uv.length >= n * 3 ? 3 : 2) : 0;
+        for (let k = 0; k + 2 < idx.length; k += 3) {
+          const tri = [idx[k], idx[k + 1], idx[k + 2]];
+          if (tri.some((i) => i < 0 || i >= n)) continue;
+          const [p0, p1, p2] = tri.map((i) => [v[i * 2], v[i * 2 + 1]]);
+          const area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+          if ((cull === 'positive' && area > 0) || (cull === 'negative' && area < 0)) continue;
+          const points = [p0, p1, p2].map(([x, y]) => [x * 20, y * 20]);
+          if (style?.type === 'bitmap' && uv && style.bitmap) {
+            // 画像の画素 (u × 幅, v × 高さ) を、頂点（twips）へ写すアフィン変換で、三角形ごとに貼る。t（遠近）があれば、三角形を
+            // 細かく分けて、遠近を正しく補間した UV で貼る。
+            const W = style.bitmap.width, H = style.bitmap.height;
+            const tex = tri.map((i) => ({ u: uv[i * stride], v: uv[i * stride + 1], t: stride === 3 ? uv[i * stride + 2] || 1e-9 : 1 }));
+            const put = (q0, q1, q2) => {
+              const [s0, s1, s2] = [q0.p, q1.p, q2.p], [t0, t1, t2] = [q0.t, q1.t, q2.t];
+              const det = (t1[0] - t0[0]) * (t2[1] - t0[1]) - (t2[0] - t0[0]) * (t1[1] - t0[1]);
+              if (!det) return;
+              const a = ((s1[0] - s0[0]) * (t2[1] - t0[1]) - (s2[0] - s0[0]) * (t1[1] - t0[1])) / det;
+              const cc = ((s2[0] - s0[0]) * (t1[0] - t0[0]) - (s1[0] - s0[0]) * (t2[0] - t0[0])) / det;
+              const b = ((s1[1] - s0[1]) * (t2[1] - t0[1]) - (s2[1] - s0[1]) * (t1[1] - t0[1])) / det;
+              const d = ((s2[1] - s0[1]) * (t1[0] - t0[0]) - (s1[1] - s0[1]) * (t2[0] - t0[0])) / det;
+              g.fillTriangle([s0, s1, s2], { ...style, matrix: { a, b, c: cc, d, tx: s0[0] - a * t0[0] - cc * t0[1], ty: s0[1] - b * t0[0] - d * t0[1] } });
+            };
+            const at = (wa, wb, wc) => {
+              const p = [0, 1].map((k) => points[0][k] * wa + points[1][k] * wb + points[2][k] * wc);
+              const z = tex[0].t * wa + tex[1].t * wb + tex[2].t * wc;
+              const u = (tex[0].u * tex[0].t * wa + tex[1].u * tex[1].t * wb + tex[2].u * tex[2].t * wc) / z;
+              const vv = (tex[0].v * tex[0].t * wa + tex[1].v * tex[1].t * wb + tex[2].v * tex[2].t * wc) / z;
+              return { p, t: [u * W, vv * H] };
+            };
+            const N = stride === 3 && !(tex[0].t === tex[1].t && tex[1].t === tex[2].t) ? 8 : 1;
+            for (let i = 0; i < N; i++) {
+              for (let j = 0; j < N - i; j++) {
+                put(at(1 - (i + j) / N, i / N, j / N), at(1 - (i + 1 + j) / N, (i + 1) / N, j / N), at(1 - (i + j + 1) / N, i / N, (j + 1) / N));
+                if (j < N - i - 1) put(at(1 - (i + 1 + j) / N, (i + 1) / N, j / N), at(1 - (i + j + 2) / N, (i + 1) / N, (j + 1) / N), at(1 - (i + j + 1) / N, i / N, (j + 1) / N));
+              }
+            }
+          } else if (style) g.fillTriangle(points, style);
+        }
+      },
       // 並びの中の塗り・線・パスを、順に描く。知らないもの（三角形・シェーダ）は飛ばす。
       drawGraphicsData: (self, [list]) => {
         if (!(list instanceof ASVector)) return;
@@ -734,6 +786,7 @@ export function installFlash(vm, movie, types) {
   plainData('GraphicsBitmapFill', [['bitmapData', null, same], ['matrix', null, same], ['repeat', true, bool], ['smooth', false, bool]], ['IGraphicsData', 'IGraphicsFill']);
   plainData('GraphicsGradientFill', [['type', 'linear', wordOrNull], ['colors', null, same], ['alphas', null, same], ['ratios', null, same], ['matrix', null, same], ['spreadMethod', 'pad', same], ['interpolationMethod', 'rgb', wordOrNull], ['focalPointRatio', 0, num]], ['IGraphicsData', 'IGraphicsFill']);
   plainData('GraphicsStroke', [['thickness', NaN, num], ['pixelHinting', false, bool], ['scaleMode', 'normal', wordOrNull], ['caps', 'none', wordOrNull], ['joints', 'round', wordOrNull], ['miterLimit', 3, num], ['fill', null, same]], ['IGraphicsData', 'IGraphicsStroke']);
+  vm.defineClass({ name: 'flash.display::TriangleCulling', final: true, staticValues: { NONE: 'none', POSITIVE: 'positive', NEGATIVE: 'negative' } });
   plainData('GraphicsTrianglePath', [['vertices', null, same], ['indices', null, same], ['uvtData', null, same], ['culling', 'none', wordOrNull]], ['IGraphicsData', 'IGraphicsPath']);
   vm.defineClass({ name: 'flash.display::GraphicsPathCommand', final: true, staticValues: { NO_OP: 0, MOVE_TO: 1, LINE_TO: 2, CURVE_TO: 3, WIDE_MOVE_TO: 4, WIDE_LINE_TO: 5, CUBIC_CURVE_TO: 6 } });
   vm.defineClass({ name: 'flash.display::GraphicsPathWinding', final: true, staticValues: { EVEN_ODD: 'evenOdd', NON_ZERO: 'nonZero' } });

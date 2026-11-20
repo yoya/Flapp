@@ -254,6 +254,78 @@ export function bitmapOps({ charge = () => {}, step = () => {}, invalid = () => 
       const result = { width: w, height: h, rgba, transparent: true };
       transfer(b, result, { x: 0, y: 0, width: w, height: h }, point, (di, si, from) => put(b, di, pixel(b, ((from[si + 3] << 24) | (from[si] << 16) | (from[si + 1] << 8) | from[si + 2]) >>> 0)));
     },
+    /**
+     * perlinNoise: パーリンノイズで埋める。乱数の列と雑音の作り方は実機と同じではない（値は一致しない）が、周波数（baseX / baseY px で
+     * 1 周期）、オクターブ（ひとつ上がるごとに周波数 2 倍・強さ半分）、stitch（端でつながる）、fractal（偽なら乱流 = 絶対値の和）、
+     * 成分の選び方と灰色は仕様どおり。offsets はオクターブごとの位置のずれ（{ x, y } の配列）。
+     */
+    perlinNoise: (b, baseX, baseY, octaves, seed, stitch, fractal, channels, gray, offsets) => {
+      let state = (Math.abs(seed) || 1) >>> 0;
+      const rand = () => { state = (Math.imul(state, 1103515245) + 12345) >>> 0; return state; };
+      const perm = Array.from({ length: 256 }, (_, i) => i);
+      for (let i = 255; i > 0; i--) { const j = rand() % (i + 1); [perm[i], perm[j]] = [perm[j], perm[i]]; }
+      const grads = Array.from({ length: 4 }, () => Array.from({ length: 256 }, () => { const a = (rand() / 4294967296) * Math.PI * 2; return [Math.cos(a), Math.sin(a)]; }));
+      const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+      const noise = (ch, x, y, wrapX, wrapY) => {
+        const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+        const g = (ix, iy) => {
+          const gx = wrapX ? ((ix % wrapX) + wrapX) % wrapX : ix, gy = wrapY ? ((iy % wrapY) + wrapY) % wrapY : iy;
+          return grads[ch][perm[(perm[gx & 255] + gy) & 255]];
+        };
+        const dot = (ix, iy) => { const v = g(ix, iy); return v[0] * (x - ix) + v[1] * (y - iy); };
+        const u = fade(fx), v = fade(fy);
+        const a = dot(x0, y0) + (dot(x0 + 1, y0) - dot(x0, y0)) * u, c = dot(x0, y0 + 1) + (dot(x0 + 1, y0 + 1) - dot(x0, y0 + 1)) * u;
+        return a + (c - a) * v; // おおよそ -0.7〜0.7
+      };
+      const bx = Math.max(1, Math.abs(baseX)), by = Math.max(1, Math.abs(baseY));
+      const used = [1, 2, 4, 8].map((bit) => (channels & bit) !== 0);
+      work(whole(b));
+      for (let y = 0; y < b.height; y++) {
+        for (let x = 0; x < b.width; x++) {
+          const out = [0, 0, 0, 0];
+          for (let ch = 0; ch < 4; ch++) {
+            if (!(gray ? ch === 0 || ch === 3 : used[ch])) continue;
+            let sum = 0, amp = 1, freqX = 1 / bx, freqY = 1 / by, total = 0;
+            for (let o = 0; o < Math.max(1, octaves); o++) {
+              const off = offsets?.[o] ?? { x: 0, y: 0 };
+              const wrapX = stitch ? Math.max(1, Math.round(b.width * freqX)) : 0, wrapY = stitch ? Math.max(1, Math.round(b.height * freqY)) : 0;
+              const n = noise(ch, (x + off.x) * freqX, (y + off.y) * freqY, wrapX, wrapY);
+              sum += (fractal ? n : Math.abs(n)) * amp;
+              total += amp;
+              amp /= 2; freqX *= 2; freqY *= 2;
+            }
+            const v = sum / total;
+            out[ch] = Math.max(0, Math.min(255, Math.round(fractal ? (v / 1.4 + 0.5) * 255 : (v / 0.7) * 255)));
+          }
+          const a = b.transparent && used[3] ? out[3] : 255;
+          if (gray) out[1] = out[2] = out[0];
+          put(b, (y * b.width + x) * 4, pixel(b, ((a << 24) | (out[0] << 16) | (out[1] << 8) | out[2]) >>> 0));
+        }
+      }
+      changed(b);
+    },
+    /**
+     * pixelDissolve: 元の rect の画素のうち count 個を、乱数で選んだ位置に写す（元と先が同じなら color で埋める）。次に渡す種を返す。
+     * 選ぶ順番は実機と同じではない。
+     */
+    pixelDissolve: (b, s, rect, point, seed, count, color) => {
+      const sx = Math.round(rect.x), sy = Math.round(rect.y), w = Math.round(rect.width), h = Math.round(rect.height);
+      const n = w * h;
+      if (!(n > 0)) return seed;
+      let state = (seed >>> 0) || 1;
+      const next = () => { state ^= state << 13; state >>>= 0; state ^= state >>> 17; state ^= state << 5; state >>>= 0; return state; };
+      const dx = Math.round(point.x), dy = Math.round(point.y), p = pixel(b, color);
+      const from = s.rgba.slice();
+      step(Math.min(count, n));
+      for (let i = 0; i < Math.min(count, n); i++) {
+        const k = next() % n, x = k % w, y = Math.floor(k / w);
+        if (!inside(b, dx + x, dy + y) || !inside(s, sx + x, sy + y)) continue;
+        const di = ((dy + y) * b.width + dx + x) * 4, si = ((sy + y) * s.width + sx + x) * 4;
+        if (s === b) put(b, di, p); else put(b, di, [from[si], from[si + 1], from[si + 2], b.transparent ? from[si + 3] : 255]);
+      }
+      changed(b);
+      return state | 0;
+    },
     /** 元のビットマップ s を、行列 m（{ a, b, c, d, tx, ty }、px）で写した絵（b と同じ大きさの RGBA）。clip の外は透明。いちばん近い画素を取る。 */
     transformed: (b, s, m, clip) => {
       const det = m.a * m.d - m.b * m.c;

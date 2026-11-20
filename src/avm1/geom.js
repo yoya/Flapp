@@ -270,7 +270,11 @@ export function installGeom(vm) {
       const ex = Math.ceil(Math.max(0, d.blurX - 1) / 2 * d.passes), ey = Math.ceil(Math.max(0, d.blurY - 1) / 2 * d.passes);
       return rect(q.x - ex, q.y - ey, q.width + 2 * ex, q.height + 2 * ey);
     }),
-    perlinNoise: () => undefined, pixelDissolve: () => 0,
+    perlinNoise: each((b, [baseX, baseY, octaves, seed, stitch, fractal, channels = 7, gray = false, offsets]) => {
+      const offs = offsets?.items ? offsets.items.map((p) => xy(p)) : null;
+      ops.perlinNoise(b, num(baseX), num(baseY), Math.min(int(octaves), 16), int(seed), toBool(vm, stitch), toBool(vm, fractal), int(channels), toBool(vm, gray), offs);
+    }),
+    pixelDissolve: each((b, [src, r, p, seed = 0, count = 0, color = 0]) => { const s = B(src); return s ? ops.pixelDissolve(b, s, xywh(r), xy(p), int(seed), int(count), int(color) >>> 0) : 0; }),
   });
   klass(display, 'BitmapData', bdProto, (_, [width, height, transparent = true, fill = 0xffffffff]) => {
     const w = int(width), h = int(height);

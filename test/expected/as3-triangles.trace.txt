@@ -1,0 +1,5 @@
+bounds 300,150
+bad culling ERR 2008
+null vertices ok
+short ERR 2004
+constants none,positive,negative

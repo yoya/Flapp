@@ -109,3 +109,26 @@ test('全ビットマップの画素数の合計に上限がある', async () =>
   assert.match(movie.warnings[0], /DefineBitsLossless.*pixel budget/);
   assert.match(movie.warnings[1], /DefineBitsLossless.*zlib/);
 });
+
+test('perlinNoise と pixelDissolve: 値は実機と同じではないが、範囲・成分の選び方・繰り返しの性質を満たす', async () => {
+  const { bitmapOps } = await import('../src/player/bitmapops.js');
+  const ops = bitmapOps();
+  const b = ops.create(32, 32, true);
+  ops.perlinNoise(b, 16, 16, 2, 7, true, true, 1 | 8, false, null);
+  const px = (x, y) => [...b.rgba.subarray((y * 32 + x) * 4, (y * 32 + x) * 4 + 4)];
+  const values = new Set();
+  for (let i = 0; i < b.rgba.length; i += 4) { values.add(b.rgba[i]); assert.equal(b.rgba[i + 1], 0); assert.equal(b.rgba[i + 2], 0); }
+  assert.ok(values.size > 20); // なめらかに変わる
+  assert.ok(Math.abs(px(0, 5)[0] - px(31, 5)[0]) < 40); // stitch: 左右の端がつながる
+  const c = ops.create(32, 32, false);
+  ops.perlinNoise(c, 16, 16, 1, 7, false, false, 7, true, null);
+  for (let i = 0; i < c.rgba.length; i += 4) assert.ok(c.rgba[i] === c.rgba[i + 1] && c.rgba[i + 1] === c.rgba[i + 2] && c.rgba[i + 3] === 255); // 灰色
+  // pixelDissolve: 数だけ写す（同じビットマップなら色で埋める）。
+  const d = ops.create(8, 8, true), s = ops.create(8, 8, true);
+  ops.fill(s, ops.whole(s), 0xffff0000);
+  const nextSeed = ops.pixelDissolve(d, s, { x: 0, y: 0, width: 8, height: 8 }, { x: 0, y: 0 }, 1, 20, 0);
+  let red = 0;
+  for (let i = 0; i < d.rgba.length; i += 4) if (d.rgba[i + 3] === 255) red++;
+  assert.ok(red > 10 && red <= 20);
+  assert.notEqual(nextSeed, 1);
+});

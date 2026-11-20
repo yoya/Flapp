@@ -46,8 +46,8 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 - `a:hover` などリンクの状態のスタイル（`StyleSheet` は AS2・AS3 とも `TextField.styleSheet` に付けられます）
 - 3D 変形のうち、3D の部分木の中でのフィルタ・ブレンド・マスク・`scrollRect`・9 分割拡大、3D のものの `getBounds`、`Matrix3D.pointAt`
   （実機と同じ値にならない）
-- `ShaderFilter`、描画 API の `drawTriangles`、`BitmapData` の `perlinNoise`・`pixelDissolve`（`applyFilter` のぼかし系は、縁の外の半透明の値が
-  実機と少しずれます）
+- `ShaderFilter`。`BitmapData` の `perlinNoise`・`pixelDissolve` は、乱数の列が実機と違うので値が一致しません。`applyFilter` のぼかし系は、
+  縁の外の半透明の値が実機と少しずれます
 
 # 使い方
 
