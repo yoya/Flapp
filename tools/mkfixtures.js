@@ -1705,6 +1705,38 @@ fixtures['video-vp6a'] = swf({
   ],
 });
 
+// 共有ライブラリ: import-lib が書き出した記号（赤い四角のスプライト "box"）を、import-main が ImportAssets で取り込んで置く。
+// 実機では、import-lib.swf を同じ場所から読む（受信サーバから配って確かめた）。
+fixtures['import-lib'] = swf({
+  version: 8,
+  tags: [
+    square(1, 800, [255, 0, 0]),
+    DefineSprite(2, 1, [PlaceObject2({ depth: 1, id: 1 }), ShowFrame(), End()]),
+    tag(56, [...u16(1), ...u16(2), ...cstr('box')]), // ExportAssets
+    ShowFrame(),
+    End(),
+  ],
+});
+const ToNumberTrace = (name) => [PushString(name), GetVariable, Trace()];
+fixtures['import-main'] = swf({
+  version: 8, frames: 2,
+  tags: [
+    tag(71, [...cstr('import-lib.swf'), 1, 0, ...u16(1), ...u16(10), ...cstr('box')]), // ImportAssets2: box を ID 10 として
+    PlaceObject2({ depth: 1, id: 10, name: 'b', matrix: { tx: 400, ty: 400 } }),
+    ShowFrame(),
+    // 2 フレーム目: 置いたものの大きさと、取り込んだ名前での attachMovie。
+    DoAction([
+      ...ToNumberTrace('b._width'),
+      PushString('5'), PushString('c'), PushString('box'), PushString('3'), PushString('_root'), GetVariable, PushString('attachMovie'), [0x52], [0x17],
+      PushString('c._x'), PushString('100'), [0x1d],
+      ...ToNumberTrace('c._width'),
+      [0x07],
+    ]),
+    ShowFrame(),
+    End(),
+  ],
+});
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = new URL('../test/fixtures/', import.meta.url);
   mkdirSync(dir, { recursive: true });

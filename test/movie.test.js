@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { realTrace } from './helpers.js';
 import { Movie, MovieClip } from '../src/player/movie.js';
 import { parsePlaceObject, parseRemoveObject } from '../src/swf/display.js';
 import { parseSWF } from '../src/swf/parse.js';
@@ -174,4 +176,17 @@ test('埋まっている深度への新規配置は無視する（実機と同�
   assert.equal(list(movie.root), '1:1@400,400');
   assert.equal(movie.root.children.get(1), red);
   assert.deepEqual(movie.warnings, ['cannot place character 2 at depth 1: the depth is occupied']);
+});
+
+test('共有ライブラリ（ImportAssets2）: 書き出された記号を取り込んで置き、取り込んだ名前で attachMovie できる（実機と同じ trace）', async () => {
+  const lib = readFileSync(new URL('fixtures/import-lib.swf', import.meta.url));
+  const requested = [];
+  const network = { load: (req) => { requested.push(req.url); return req.url === 'import-lib.swf' ? lib : null; } };
+  const movie = await Movie.load(readFileSync(new URL('fixtures/import-main.swf', import.meta.url)), { network });
+  movie.advance();
+  assert.deepEqual(requested, ['import-lib.swf']);
+  assert.deepEqual(movie.traces, realTrace(readFileSync(new URL('expected/import-main.trace.txt', import.meta.url))));
+  // 通信を任されていなければ、取り込めない（警告を残す）。
+  const alone = await Movie.load(readFileSync(new URL('fixtures/import-main.swf', import.meta.url)));
+  assert.match(alone.warnings.join('\n'), /ImportAssets import-lib\.swf/);
 });

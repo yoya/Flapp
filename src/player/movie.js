@@ -183,6 +183,10 @@ export class Movie {
   static async load(bytes, options = {}) {
     const movie = new Movie(await parseSWF(bytes, options), options);
     await movie.#decodeBitmaps(movie.library);
+    if (movie.library.imports?.length) {
+      await movie.#importAssets(movie.library);
+      movie.#createRoot();
+    }
     if (movie.avm2) {
       movie.#framePhase(); // AS3: 1 フレーム目の frameConstructed、フレームスクリプト、exitFrame
       movie.#guard(() => movie.avm2.display.loaded()); // 読み込みが済んだことを loaderInfo に伝える
@@ -272,8 +276,13 @@ export class Movie {
     });
     this.emptySprite = { type: 'sprite', id: -1, order: -1, timeline: Object.assign([[]], { labels: new Map() }) };
 
-    const timeline = this.#buildTimeline(swf.tags, null, this.library);
-    this.root = new MovieClip(this, { type: 'sprite', id: 0, order: Infinity, timeline }, 0, PLACE_DEFAULTS, 0, null);
+    this.rootTimeline = this.#buildTimeline(swf.tags, null, this.library);
+    // 共有ライブラリを取り込むものは、取り込んでからルート（1 フレーム目）を作る（Movie.load）。
+    if (!this.library.imports?.length) this.#createRoot();
+  }
+
+  #createRoot() {
+    this.root = new MovieClip(this, { type: 'sprite', id: 0, order: Infinity, timeline: this.rootTimeline }, 0, PLACE_DEFAULTS, 0, null);
     // AS1 / AS2 のレベル（_level0 がルート。loadMovieNum などで、上に重ねて別のムービーを読み込める）。番号 → ルートのクリップ
     this.levels = new Map([[0, this.root]]);
     // AS3 のステージ。ルートを子に持つ入れ物で、スクリプトが stage.addChild で入れたものはルートの兄弟になる。
@@ -359,7 +368,7 @@ export class Movie {
    * 読み込んだ SWF を解析して、そのライブラリ（辞書、書き出し名、版）と、ルートのタイムラインを作る。
    * 解析の上限（大きさ、ビットマップの画素数、表示オブジェクトの数）は、このムービーと共有する。
    */
-  async loadLibrary(bytes) {
+  async loadLibrary(bytes, depth = 0) {
     const swf = await parseSWF(bytes);
     const attributes = swf.tags.find((t) => t.code === 69);
     const legacy = swf.version < 6 ? new LegacyText(this.encoding) : null;
@@ -370,6 +379,7 @@ export class Movie {
     for (const w of swf.warnings) this.warn(`loaded movie: ${w}`);
     const timeline = this.#buildTimeline(swf.tags, null, library);
     await this.#decodeBitmaps(library);
+    await this.#importAssets(library, depth + 1);
     // 図形のビットマップの塗りは、キャラクタ ID ではなくビットマップの定義そのものを持たせる（描画側は、このムービーの辞書しか知らない）。
     const bind = (value, depth) => {
       if (!value || typeof value !== 'object' || depth > 6) return;
@@ -1232,6 +1242,14 @@ export class Movie {
             const id = r.u16();
             lib.exports.set(r.string(), id);
           }
+        } else if (tag.code === 57 || tag.code === 71) {
+          // ImportAssets / ImportAssets2: 別の SWF（url）が書き出した記号を、この SWF の ID として使う。読み込みは importAssets。
+          const r = new Reader(tag.body, lib.legacy !== null);
+          const url = r.string();
+          if (tag.code === 71) { r.u8(); r.u8(); } // 予約（1 と 0）
+          const items = [];
+          for (let n = r.u16(); n > 0; n--) items.push({ id: r.u16(), name: r.string() });
+          (lib.imports ??= []).push({ url, items });
         } else if ((tag.code === 82 || tag.code === 72) && this.avm2 && lib.isAS3) {
           // DoABC: フラグ（u32）と名前の後に ABC が続く。古い形 (72) は ABC だけ。
           let at = 0;
@@ -1322,6 +1340,39 @@ export class Movie {
     }
     if (streamHead && streamBlocks.length) frames.stream = buildStream(streamHead, streamBlocks);
     return frames;
+  }
+
+  /**
+   * 共有ライブラリ（ImportAssets）: url の SWF をホストの network.load で読み、その書き出し名の記号を、lib の ID と名前（attachMovie で
+   * 使える）として登録する。再生を始める前に済ませる（実機は、読み込むまで取り込んだ記号を使うフレームへ進まない）。
+   * 読めなければ（ホストが通信を任されていなければ）、警告を残して、その記号は無いままにする。取り込みの入れ子は 4 段まで。
+   */
+  async #importAssets(lib, depth = 0) {
+    for (const { url, items } of lib.imports ?? []) {
+      this.request({ kind: 'loadMovie', url, target: '', method: '' });
+      let bytes = null;
+      try {
+        const found = depth < 4 && this.network?.load ? await this.network.load({ url, method: 'GET', data: null, contentType: null }) : null;
+        bytes = found instanceof Uint8Array ? found : found instanceof ArrayBuffer ? new Uint8Array(found) : null;
+      } catch (e) {
+        this.warn(`ImportAssets ${url}: ${e.message}`);
+      }
+      if (!bytes || bytes.length > MAX_LOADED_BYTES) { this.warn(`ImportAssets ${url}: the shared library cannot be loaded`); continue; }
+      let other;
+      try {
+        other = (await this.loadLibrary(bytes, depth)).library;
+      } catch (e) {
+        if (e.name !== 'SWFError') throw e;
+        this.warn(`ImportAssets ${url}: ${e.message}`);
+        continue;
+      }
+      for (const { id, name } of items) {
+        const def = other.dictionary.get(other.exports.get(name));
+        if (!def) { this.warn(`ImportAssets ${url}: "${name}" is not exported`); continue; }
+        lib.dictionary.set(id, def);
+        lib.exports.set(name, id);
+      }
+    }
   }
 
   async #decodeBitmaps(lib) {
