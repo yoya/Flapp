@@ -15,7 +15,7 @@ import { installStdlib } from './stdlib.js';
 import { installText } from './text.js';
 import { installXMLDocument } from './xmldoc.js';
 import { installVideo } from './video.js';
-import { ASArray, ASClass, ASFunction, ASObject, ASVector, publicKey } from './object.js';
+import { ASArray, ASClass, ASFunction, ASObject, ASThrown, ASVector, publicKey } from './object.js';
 import { installUtils } from './utils.js';
 
 const DEG = 180 / Math.PI;
@@ -980,7 +980,15 @@ export function installFlash(vm, movie, types) {
   // キャラクタに結び付けられたクラス（SymbolClass）。無ければ種類ごとの既定のクラス。
   const classFor = (d) => {
     const linked = (d.character.library?.symbolClasses ?? movie.symbolClasses).get(d.character.id);
-    const klass = linked ? vm.classByName(linked) : undefined;
+    let klass;
+    try {
+      klass = linked ? vm.classByName(linked) : undefined;
+    } catch (e) {
+      // 紐づいたクラスが読めない（定義が SWF に無い）ときは、実機と同じく未処理の例外として表示し、既定のクラスで続ける。
+      // 実機は、続行を押すと先へ進む（続行の後のクラスは実機で未確認）。例外のまま投げると、再生のタイマーが止まる。
+      if (!(e instanceof ASThrown)) throw e;
+      vm.trace(vm.describeError(e.value));
+    }
     if (klass) return klass;
     if (d.character.button) return c.SimpleButton;
     if (d instanceof types.MovieClip) return c.MovieClip;

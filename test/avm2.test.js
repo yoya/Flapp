@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { ASThrown } from '../src/avm2/object.js';
 import { Movie } from '../src/player/movie.js';
 
 async function run(name, frames, options = {}) {
@@ -186,4 +187,18 @@ test('Loader で読んだ画像の bitmapData は、ホストの decodeImage で
     'pic.gif 32 24 false ffff0000,ff00ff00,ff00ff00,ff00ff00,ff00ff00',
     'pic.jpg 32 24 false ffff0000,ff00ff00,ff00ff00,ff00ff00,ff00ff00',
   ]);
+});
+
+test('SymbolClass のクラスの読み込みが例外を投げるとき: 止まらず、既定のクラスで表示し、例外を trace に残す', async () => {
+  // 実物の例（クラスは ABC にあるが、その初期化が未定義の変数を読んで例外になる）を、クラスの検索が例外を投げることで代える。
+  const traces = [];
+  const movie = await Movie.load(readFileSync(new URL('fixtures/as3-triangles.swf', import.meta.url)), { trace: (s) => traces.push(s), now: () => 0 });
+  const vm = movie.avm2, classByName = vm.classByName.bind(vm);
+  vm.classByName = (name) => { if (name === 'no.such::Missing') throw new ASThrown('VerifyError: Error #1014'); return classByName(name); };
+  movie.symbolClasses.set(movie.root.character.id, 'no.such::Missing');
+  const before = traces.length;
+  const obj = vm.display.attach(movie.root); // 例外を投げずに戻る
+  assert.equal(obj.klass.name, 'flash.display::MovieClip');
+  assert.deepEqual(traces.slice(before), ['VerifyError: Error #1014']);
+  for (let i = 0; i < 3; i++) movie.advance(); // 再生は続く
 });
