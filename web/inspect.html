@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SWF インスペクタ</title>
+<title>Flapp 解析（SWF インスペクタ）</title>
 <style>
   :root { --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --chip: #f2f2f7; --accent: #0a66c2; --warn: #b3261e; --sel: #e8f0fe; }
   @media (prefers-color-scheme: dark) {
@@ -41,12 +41,15 @@
   .detail { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
   pre { background: var(--chip); padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 6px 0 0; }
   .hidden { display: none; }
+  .notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; color: var(--warn); }
   @media (max-width: 600px) { main { padding: 12px; } .kv { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <main>
   <h1>SWF インスペクタ</h1>
+  <p><a href="index.html">再生</a> ・ 解析</p>
+  <div class="notice hidden" id="notice" role="alert"></div>
   <div class="drop" id="drop">
     <input type="file" id="file" accept=".swf,application/x-shockwave-flash">
     <span class="muted">SWF をここへドラッグするか、ファイルを選ぶと、中身を表にします。読むだけで、実行はしません。</span>
@@ -74,7 +77,21 @@
   </section>
 </main>
 
+<script>
+// モジュールのスクリプトは file:// では読めない。その場合も、SWF をドロップしたときにブラウザが SWF を開いて再生しないよう、先に止める。
+(() => {
+  const notice = document.getElementById('notice');
+  const say = (text) => { notice.textContent = text; notice.classList.remove('hidden'); };
+  for (const type of ['dragenter', 'dragover', 'drop']) window.addEventListener(type, (e) => e.preventDefault());
+  if (location.protocol === 'file:') {
+    say('このページは、ファイルとして開くと動きません。ターミナルで npm run serve を実行してから、http://127.0.0.1:8123/web/inspect.html を開いてください。');
+  } else {
+    setTimeout(() => { if (!window.flappInspectorReady) say('スクリプトを読み込めません。npm run serve で配信したページを、http:// で開いてください。'); }, 1500);
+  }
+})();
+</script>
 <script type="module">
+window.flappInspectorReady = true;
 import { inspectSWF } from './inspect.js';
 
 const SECTION_NAME = { control: '制御', display: '表示', action: 'スクリプト', definition: '定義', sprite: 'スプライト', sound: '音', video: '動画', other: 'その他' };
@@ -181,9 +198,12 @@ $('file').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (f) await load(new Uint8Array(await f.arrayBuffer()), f.name);
 });
-for (const type of ['dragenter', 'dragover']) $('drop').addEventListener(type, (e) => { e.preventDefault(); $('drop').classList.add('over'); });
-for (const type of ['dragleave', 'drop']) $('drop').addEventListener(type, (e) => { e.preventDefault(); $('drop').classList.remove('over'); });
-$('drop').addEventListener('drop', async (e) => {
+// ページのどこに落としても、ブラウザが SWF を開いて再生してしまわないよう、ページ全体をドロップ先にする。
+for (const type of ['dragenter', 'dragover']) window.addEventListener(type, (e) => { e.preventDefault(); $('drop').classList.add('over'); });
+window.addEventListener('dragleave', (e) => { if (e.relatedTarget === null) $('drop').classList.remove('over'); });
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  $('drop').classList.remove('over');
   const f = e.dataTransfer.files[0];
   if (f) await load(new Uint8Array(await f.arrayBuffer()), f.name);
 });
