@@ -13,6 +13,7 @@ import { installMedia } from './media.js';
 import { installNet } from './net.js';
 import { installStdlib } from './stdlib.js';
 import { installText } from './text.js';
+import { installXMLDocument } from './xmldoc.js';
 import { installVideo } from './video.js';
 import { ASArray, ASClass, ASFunction, ASObject, ASVector, publicKey } from './object.js';
 import { installUtils } from './utils.js';
@@ -442,6 +443,7 @@ export function installFlash(vm, movie, types) {
   installBitmap(vm, movie);
   installStdlib(vm);
   const geom3d = installGeom3D(vm, movie);
+  installXMLDocument(vm);
   const filters = installFilters(vm);
 
   // --- 子の出し入れ ---

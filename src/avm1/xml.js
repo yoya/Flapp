@@ -4,19 +4,10 @@
 import { toBool, toInt32, toStr } from './convert.js';
 import { defineClass, defineMethods } from './globals.js';
 import { AVMArray, AVMFunction, AVMObject, DONT_DELETE, DONT_ENUM } from './object.js';
+import { escapeXML as escapeText, parseLegacyXML } from '../player/legacyxml.js';
 
 const HIDDEN = DONT_ENUM | DONT_DELETE;
-const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: ' ' };
-const ESCAPES = { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' };
-const unescapeText = (s) => s.replace(/&(#x[0-9a-fA-F]+|#\d+|\w+);/g, (all, name) => {
-  if (name[0] !== '#') return ENTITIES[name] ?? all;
-  const code = name[1] === 'x' ? parseInt(name.slice(2), 16) : Number(name.slice(1));
-  return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : all;
-});
-const escapeText = (s) => s.replace(/[<>&"']/g, (c) => ESCAPES[c]);
-// 解析の結果（XML.status）。実機と同じ番号。
-const STATUS = { ok: 0, cdata: -2, comment: -5, element: -6, unclosed: -9, unopened: -10 };
-const MAX_NODES = 100000;
+const ENTITIES = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'", nbsp: '\u00a0' };
 
 export function installXML(vm) {
   const nodeProto = new AVMObject(vm, vm.objectProto);
@@ -51,89 +42,24 @@ export function installXML(vm) {
     return inner === '' && n.children.length === 0 ? `<${n.name}${attrs} />` : `<${n.name}${attrs}>${inner}</${n.name}>`;
   };
 
-  // 文字列 text を解析して、文書 doc の子にする。途中で誤りがあれば、そこまでの木を残して status に理由を入れる。
+  // 文字列 text を解析して、文書 doc の子にする。途中で誤りがあれば、そこまでの木を残して status に理由を入れる（player/legacyxml.js）。
   const parse = (doc, text, ignoreWhite) => {
     const d = doc.xml;
     for (const child of d.children) child.xml.parent = null;
     d.children = [];
-    d.xmlDecl = d.docTypeDecl = undefined;
-    d.status = STATUS.ok;
-    const stack = [doc];
-    let count = 0;
-    const add = (node) => {
-      if (++count > MAX_NODES) return;
-      const parent = stack[stack.length - 1];
-      parent.xml.children.push(node);
+    const result = parseLegacyXML(text, { ignoreWhite, entities: ENTITIES });
+    d.xmlDecl = result.xmlDecl;
+    d.docTypeDecl = result.docTypeDecl;
+    d.status = result.status;
+    const build = (plain, parent) => {
+      const node = newNode(plain.type, plain.type === 1 ? plain.name : plain.value);
+      // 後ろの属性から作る（列挙したときに書かれた順になる）。
+      for (const [key, value] of [...plain.attrs].reverse()) node.xml.attributes.set(key, value);
       node.xml.parent = parent;
+      parent.xml.children.push(node);
+      for (const child of plain.children) build(child, node);
     };
-    const addText = (s) => {
-      if (s === '' || (ignoreWhite && /^[ \t\r\n]*$/.test(s))) return;
-      add(newNode(3, s));
-    };
-    let i = 0;
-    while (i < text.length) {
-      const lt = text.indexOf('<', i);
-      if (lt < 0) {
-        addText(unescapeText(text.slice(i)));
-        break;
-      }
-      addText(unescapeText(text.slice(i, lt)));
-      const skipTo = (end, status) => {
-        const at = text.indexOf(end, lt);
-        if (at < 0) d.status = status;
-        return at < 0 ? -1 : at + end.length;
-      };
-      if (text.startsWith('<!--', lt)) {
-        i = skipTo('-->', STATUS.comment);
-      } else if (text.startsWith('<![CDATA[', lt)) {
-        i = skipTo(']]>', STATUS.cdata);
-        if (i >= 0) addText(text.slice(lt + 9, i - 3));
-      } else if (text.startsWith('<?', lt)) {
-        i = skipTo('?>', STATUS.element);
-        if (i >= 0) d.xmlDecl = (d.xmlDecl ?? '') + text.slice(lt, i);
-      } else if (text.startsWith('<!', lt)) {
-        i = skipTo('>', STATUS.element);
-        if (i >= 0) d.docTypeDecl = (d.docTypeDecl ?? '') + text.slice(lt, i);
-      } else if (text[lt + 1] === '/') {
-        const gt = text.indexOf('>', lt);
-        const name = gt < 0 ? '' : text.slice(lt + 2, gt).trim();
-        if (gt < 0) d.status = STATUS.element;
-        else if (stack.length > 1 && stack[stack.length - 1].xml.name === name) stack.pop();
-        // 開いている要素のどれかの終了タグなら「閉じていない要素がある」、どれでもなければ「開始タグが無い」。
-        else d.status = stack.slice(1).some((node) => node.xml.name === name) ? STATUS.unclosed : STATUS.unopened;
-        i = gt < 0 || d.status !== STATUS.ok ? -1 : gt + 1;
-      } else {
-        // 開始タグ: 名前、属性（値は引用符で囲む）、> または />
-        const head = /^<([^\s/>]+)/.exec(text.slice(lt, lt + 1024));
-        let p = head ? lt + head[0].length : -1;
-        const node = head ? newNode(1, head[1]) : null;
-        const attrs = [];
-        let closed = false, selfClosing = false;
-        while (p >= 0 && p < text.length) {
-          const rest = /^\s*(\/?>|([^\s=/>]+)\s*=\s*("([^"]*)"|'([^']*)'))/.exec(text.slice(p));
-          if (!rest) break;
-          p += rest[0].length;
-          if (rest[2] === undefined) {
-            closed = true;
-            selfClosing = rest[1] === '/>';
-            break;
-          }
-          attrs.push([rest[2], unescapeText(rest[4] ?? rest[5])]);
-        }
-        if (!node || !closed) {
-          d.status = STATUS.element;
-          i = -1;
-        } else {
-          // 後ろの属性から作る（列挙したときに書かれた順になる）。
-          for (const [key, value] of attrs.reverse()) node.xml.attributes.set(key, value);
-          add(node);
-          if (!selfClosing) stack.push(node);
-          i = p;
-        }
-      }
-      if (i < 0) return;
-    }
-    if (stack.length > 1) d.status = STATUS.unclosed;
+    for (const child of result.children) build(child, doc);
   };
 
   // --- XMLNode ---
