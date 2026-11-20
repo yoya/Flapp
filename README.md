@@ -9,7 +9,8 @@ SWF ファイルを読み込んで、ブラウザの Canvas に再生します�
 
 - **ファイル**: 無圧縮、zlib 圧縮 (CWS)、LZMA 圧縮 (ZWS) の SWF
 - **表示**: 図形（単色・グラデーション・ビットマップの塗りと線）、ビットマップ、モーフ、文字（静的なテキストと、テキストフィールド。範囲ごとの書式と、`htmlText` の書式タグ・箇条書き・折り返し）、
-  ボタン、マスク、ブレンド、9 分割拡大、シーン、フィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み）
+  ボタン、マスク、ブレンド、9 分割拡大、シーン、フィルタ（ぼかし・影・光彩・ベベル・グラデーション光彩・グラデーションベベル・色行列・畳み込み・変位マップ）、
+  3D 変形（AS3 の `z`・`rotationX` / `rotationY`・`Matrix3D`・透視投影）
 - **スクリプト**: ActionScript 1 / 2 (AVM1) と ActionScript 3 (AVM2)
 - **音**: イベント音とストリーム音（PCM、ADPCM、MP3）
 - **ビデオ**: SWF に埋め込まれたビデオと FLV ファイル（Sorenson H.263、Screen Video、VP6 とアルファ付きの VP6。FLV では Screen Video v2 も。
@@ -31,7 +32,8 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 未対応のもの:
 
 - Screen Video v2 の、ストリームの中のパレット（実機も再生できません）
-- 読み込んだ画像の画素を、スクリプトから読むこと（`Loader` の画像の `bitmapData` は、同じ大きさの透明な画像になります）
+- 読み込んだ画像の画素は、ホストが `decodeImage`（ブラウザでは画像のデコーダ）を渡したときだけ読めます。JPEG の画素の値は、復号器の違いで
+  実機と少しずれます
 - `Loader` で読み込んだ ActionScript 1 / 2 の SWF のスクリプト（表示だけします）、AS3 の `ApplicationDomain` の分離（読み込んだ SWF の
   クラスは、いつも読み込んだ側の子のドメインとして扱います）、AS1 / 2 で版の違う SWF を読み込んだときの、版ごとのスクリプトの規則
 - Stage3D、RTMP / RTMFP、DRM、Pixel Bender、TLF、カメラとマイク、印刷、Worker
@@ -42,9 +44,10 @@ SWF は、`trust` が未設定または 0 のとき（既定）、信用でき�
 - `<img>` タグのうち、ライブラリの書き出し名や SWF を指す `src`（JPEG・PNG・GIF の URL だけ、`network.load` で読んで描きます。`trust` が無いと読みません）、
   `align` の `left` と `right` 以外の指定、`getImageReference`
 - AS2 の `TextField.StyleSheet`（AS3 の `StyleSheet` は `TextField.styleSheet` に付けられます）と、`a:hover` などリンクの状態のスタイル
-- `Matrix3D`、`XMLDocument` / `XMLNode`（AS3 の旧 XML）
-- スクリプトから作る `DisplacementMapFilter` と `ShaderFilter`、描画 API のビットマップの塗り（`beginBitmapFill`、`lineBitmapStyle`）と `drawPath` / `drawGraphicsData`
-- 共有ライブラリ（`ImportAssets`）
+- 3D 変形のうち、3D の部分木の中でのフィルタ・ブレンド・マスク・`scrollRect`・9 分割拡大、3D のものの `getBounds`、`Matrix3D.pointAt`
+  （実機と同じ値にならない）
+- `ShaderFilter`、描画 API の `drawTriangles`、`BitmapData` の `perlinNoise`・`pixelDissolve`（`applyFilter` のぼかし系は、縁の外の半透明の値が
+  実機と少しずれます）
 
 # 使い方
 
