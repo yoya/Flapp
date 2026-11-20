@@ -1,0 +1,33 @@
+root pp 55|(x=200, y=150)|384.196
+child pp null
+new pp 55|(x=250, y=250)|480.246
+pp toMatrix3D 480.246,0,0,0,0,480.246,0,0,0,0,1,1,0,0,0,0
+2d (a=1, b=0, c=0, d=1, tx=60, ty=60)|
+rotY |0.707,0,-0.707,0,0,1,0,0,0.707,0,0.707,0,60,60,0,1|0|45|19|47
+rotY 400 400,-200
+rotationZ vs rotation 30,false,true 10,10
+z |1,0,0,0,0,1,0,0,0,0,1,0,10,20,100,1
+z 0 back |true
+matrix set clears 3d |0|5
+matrix3D set 5|6|7|30|0|true
+matrix3D null (a=1, b=0, c=0, d=1, tx=0, ty=0)|0|0
+scaleZ true|1,0,0,0,0,1,0,0,0,0,2,0,0,0,0,1
+local3DToGlobal 69,57
+globalToLocal3D 21,4,0
+Matrix3D new 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1
+Matrix3D rot 0,1,0,0,-1,0,0,0,0,0,1,0,0,0,0,1
+Matrix3D rot pivot 0,0,-1,0,0,1,0,0,1,0,0,0,10,0,10,1
+Matrix3D ops 2,0,0,0,0,2.121,2.828,0,0,-2.121,2.828,0,11,2,3,1 det=24 pos=Vector3D(11, 2, 3)
+Matrix3D invert true 0.5,0,0,0,0,0.25,0,0,0,0,0.125,0,-0.5,-0.5,-0.375,1
+Matrix3D singular ERR 2183
+Matrix3D transformVector 10,1,0,1,0,1,0
+Matrix3D decompose 7 8 9 | 0.524 0 0 | 2 3 4
+Matrix3D recompose true 0,0,-1,0,0,1,0,0,1,0,0,0,1,2,3,1
+Matrix3D rawData set 5,6,7,16
+Matrix3D transpose 1,5,9,13,2,6,10,14,3,7,11,15,4,8,12,16
+Utils3D projectVector 160.082,320.164,1,30
+pp fov 0 ERR 2182
+pp fov 1 1
+pp fov 179 179
+pp fov 180 ERR 2182
+pp fov -5 ERR 2182

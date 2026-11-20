@@ -17,6 +17,7 @@
 // 未対応: 繰り返さないビットマップ塗りで画像から 1 画素より外側
 //         （実機は縁の色で埋めるが、ここでは透明）、透明なレイヤー上での subtract。
 import { MovieClip } from '../player/movie.js';
+import { lift, multiply as multiply3D, project, transform as transform3D } from '../player/matrix3d.js';
 import { applyFilters } from './filters.js';
 
 const GRADIENT_HALF = 16384; // グラデーションは (-16384, -16384)〜(16384, 16384) の正方形で定義される
@@ -89,6 +90,8 @@ function directionOf(text) {
 }
 
 const resetTransform = (ctx) => ctx.setTransform(1, 0, 0, 1, 0, 0);
+const domToMatrix = (m) => ({ a: m.a, b: m.b, c: m.c, d: m.d, tx: m.e, ty: m.f });
+
 // 塗りの図形（op.path）が届く範囲を、塗りの定義空間（space はそこから図形への行列）での外接矩形 { x0, y0, x1, y1 } にする。
 function reachOf(op, space) {
   const inv = space.inverse();
@@ -176,6 +179,7 @@ export class CanvasRenderer {
     this.scale = scale;
     const twipsToPixels = { a: scale / 20, b: 0, c: 0, d: scale / 20, tx: (-xmin * scale) / 20, ty: (-ymin * scale) / 20 };
     this.base = twipsToPixels;
+    this.w3 = null; // 3D の部分木を描いている間の、親のワールドの 3D の行列（px）
     // ルートにもスクリプトが位置や色変換を設定できる（_root._x など）。
     // AS3 のムービーは、ステージの子（ルートと、スクリプトがステージに直接入れたもの）を描く。
     // AS1 / AS2 のムービーは、レベル（_level0 がルート。loadMovieNum で読み込んだものは、その上に重なる）を番号の小さい順に描く。
@@ -247,6 +251,7 @@ export class CanvasRenderer {
       this.#releaseLayer(content);
       return;
     }
+    if (child.t3 || this.w3) { this.#draw3D(ctx, child, parentMatrix, concatCx(parentCx, child.cxform), mask); return; }
     const m = concat(parentMatrix, child.matrix);
     const cx = concatCx(parentCx, child.cxform);
     // 不透明な背景色: 中身の外接矩形（自分の座標系）を、その色で塗る。色変換はかからない（実機で確認）。
@@ -363,6 +368,99 @@ export class CanvasRenderer {
     } else if (child.character.type === 'morph') {
       this.#drawShape(ctx, child.character.pathsAt(child.ratio), m, cx, mask);
     }
+  }
+
+  // --- 3D ---
+
+  /**
+   * 3D の表示オブジェクト（と、その中のもの）: 自分の中身を平面の画像に描き、ワールドの 3D の行列で写して透視投影した位置へ、
+   * 格子の三角形ごとに貼る。子は、自分の行列を親として、同じように描く（入れ子の 3D も、射影の前に合成される。実機の画面で確認）。
+   * 3D の部分木の中では、フィルタ・ブレンド・マスク・scrollRect・9 分割拡大は掛けない。
+   */
+  #draw3D(ctx, child, parentMatrix, cx, mask) {
+    const parentW = this.w3 ?? (() => {
+      const toStage = concat(domToMatrix(new DOMMatrix([this.base.a, this.base.b, this.base.c, this.base.d, this.base.tx, this.base.ty]).inverse()), parentMatrix);
+      return lift({ ...toStage, tx: toStage.tx / 20, ty: toStage.ty / 20 });
+    })();
+    const W = multiply3D(parentW, child.local3D() ?? lift({ ...child.matrix, tx: child.matrix.tx / 20, ty: child.matrix.ty / 20 }));
+    const { center, focal } = this.movie.projection(child);
+    const toDevice = (x, y) => {
+      const p = project(transform3D(W, x, y, 0, 1), center, focal);
+      return p && { x: this.base.a * p.x * 20 + this.base.c * p.y * 20 + this.base.tx, y: this.base.b * p.x * 20 + this.base.d * p.y * 20 + this.base.ty };
+    };
+    const paths = child instanceof MovieClip ? child.drawingPaths() : child.character.type === 'shape' ? child.character.paths
+      : child.character.type === 'morph' ? child.character.pathsAt(child.ratio) : child.paths?.();
+    const b = paths?.length && child.bounds(IDENTITY);
+    if (b && b.xmax > b.xmin && b.ymax > b.ymin) this.#warp(ctx, paths, b, toDevice, cx, mask);
+    if (child instanceof MovieClip) {
+      const saved = this.w3;
+      this.w3 = W;
+      this.#drawChildren(ctx, child.sortedChildren(), 0, Infinity, parentMatrix, cx, mask);
+      this.w3 = saved;
+    }
+  }
+
+  // paths（自分の座標、twips）を画像に描き、外接矩形 b を格子に分けて、toDevice（自分の座標の px → 装置の画素）で写した三角形に貼る。
+  #warp(ctx, paths, b, toDevice, cx, mask) {
+    const [x0, y0, x1, y1] = [b.xmin / 20, b.ymin / 20, b.xmax / 20, b.ymax / 20];
+    const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => toDevice(x, y));
+    if (corners.some((p) => !p)) return;
+    // 画像の解像度: 写した先の辺の長さに合わせる（1 辺 2048 画素まで）。
+    const side = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+    const k = Math.min(8, Math.max(0.05, Math.max(side(corners[0], corners[1]), side(corners[3], corners[2])) / (x1 - x0), Math.max(side(corners[0], corners[3]), side(corners[1], corners[2])) / (y1 - y0)));
+    const tw = Math.min(2048, Math.ceil((x1 - x0) * k) + 2), th = Math.min(2048, Math.ceil((y1 - y0) * k) + 2);
+    const kx = (tw - 2) / (x1 - x0), ky = (th - 2) / (y1 - y0);
+    const texture = new OffscreenCanvas(tw, th);
+    const tctx = texture.getContext('2d');
+    const outer = this.slice;
+    this.slice = null;
+    this.#drawShape(tctx, paths, { a: kx / 20, b: 0, c: 0, d: ky / 20, tx: 1 - x0 * kx, ty: 1 - y0 * ky }, cx, mask);
+    this.slice = outer;
+    const N = 8;
+    const grid = [];
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+      const u = x0 + ((x1 - x0) * i) / N, v = y0 + ((y1 - y0) * j) / N;
+      grid.push({ s: toDevice(u, v), t: { x: 1 + (u - x0) * kx, y: 1 + (v - y0) * ky } });
+    }
+    const at = (i, j) => grid[j * (N + 1) + i];
+    // 三角形は、継ぎ目が見えないよう少し重ねて貼る。重なったところの半透明が濃くならないよう、別の画像に「置き換え」で貼ってから重ねる。
+    const layer = this.#acquireLayer();
+    layer.ctx.globalCompositeOperation = 'copy';
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      for (const tri of [[at(i, j), at(i + 1, j), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i, j + 1)]]) {
+        if (tri.some((p) => !p.s)) continue;
+        this.#triangle(layer.ctx, texture, tri);
+      }
+    }
+    layer.ctx.globalCompositeOperation = 'source-over';
+    resetTransform(layer.ctx);
+    this.#composite(ctx, layer, 'source-over');
+    this.#releaseLayer(layer);
+  }
+
+  // 画像 texture の三角形（各頂点の t）を、装置の三角形（s）へ、アフィン変換で貼る（継ぎ目が見えないよう、少し外へ広げて切り抜く）。
+  #triangle(ctx, texture, [p, q, r]) {
+    const [s0, s1, s2] = [p.s, q.s, r.s], [t0, t1, t2] = [p.t, q.t, r.t];
+    const det = (t1.x - t0.x) * (t2.y - t0.y) - (t2.x - t0.x) * (t1.y - t0.y);
+    if (!det) return;
+    const a = ((s1.x - s0.x) * (t2.y - t0.y) - (s2.x - s0.x) * (t1.y - t0.y)) / det;
+    const c = ((s2.x - s0.x) * (t1.x - t0.x) - (s1.x - s0.x) * (t2.x - t0.x)) / det;
+    const bb = ((s1.y - s0.y) * (t2.y - t0.y) - (s2.y - s0.y) * (t1.y - t0.y)) / det;
+    const d = ((s2.y - s0.y) * (t1.x - t0.x) - (s1.y - s0.y) * (t2.x - t0.x)) / det;
+    const e = s0.x - a * t0.x - c * t0.y, f = s0.y - bb * t0.x - d * t0.y;
+    const cxm = (s0.x + s1.x + s2.x) / 3, cym = (s0.y + s1.y + s2.y) / 3;
+    const grow = (pt) => { const dx = pt.x - cxm, dy = pt.y - cym, l = Math.hypot(dx, dy) || 1; return [pt.x + (dx / l) * 0.6, pt.y + (dy / l) * 0.6]; };
+    ctx.save();
+    resetTransform(ctx);
+    ctx.beginPath();
+    ctx.moveTo(...grow(s0));
+    ctx.lineTo(...grow(s1));
+    ctx.lineTo(...grow(s2));
+    ctx.closePath();
+    ctx.clip();
+    ctx.setTransform(a, bb, c, d, e, f);
+    ctx.drawImage(texture, 0, 0);
+    ctx.restore();
   }
 
   // --- レイヤー ---

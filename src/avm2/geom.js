@@ -218,7 +218,7 @@ export function installGeom(vm, onStage) {
     name: 'flash.geom::Transform',
     getters: {
       // matrix に null を代入した後は、null が読める（行列そのものは変わらない。実機で確認）。
-      matrix: (self) => { const m = self.target.matrix; return self.target.matrixHidden ? null : matrix({ ...m, tx: m.tx / 20, ty: m.ty / 20 }); },
+      matrix: (self) => { const m = self.target.matrix; return self.target.matrixHidden || self.target.t3 ? null : matrix({ ...m, tx: m.tx / 20, ty: m.ty / 20 }); }, // 3D のものは null
       colorTransform: (self) => colorTransform(cxOf(self.target.cxform)),
       // ステージに載っていないものは、親の変形を含まず、自分の行列の全体が 5 倍されたものになる（実機で確認）。
       concatenatedMatrix: (self) => {
@@ -240,6 +240,7 @@ export function installGeom(vm, onStage) {
       matrix: (self, v) => {
         self.target.matrixHidden = v === null || v === undefined;
         if (self.target.matrixHidden) return;
+        self.target.t3 = null; // 2D の行列を代入すると、3D でなくなる（実機で確認）
         const m = M(need(v, c.Matrix, 'value'));
         self.target.setMatrix({ a: Math.fround(m.a), b: Math.fround(m.b), c: Math.fround(m.c), d: Math.fround(m.d), tx: Math.trunc(m.tx * 20), ty: Math.trunc(m.ty * 20) });
         self.target.xform = null; // 拡大率と回転は、行列から取り直す

@@ -20,6 +20,7 @@ import { toBool, toStr } from '../avm1/convert.js';
 import { LegacyText } from '../swf/legacy.js';
 import { layoutRunsOf, mergeFormat, mergeRange, parseHtml, sameFormat, toHtml } from './richtext.js';
 import { caretAt, indexAt, layoutOf, lineOf, restricts, shiftOps, wordAt } from './textedit.js';
+import { compose, focalLength, lift, multiply as multiply3D, project, transform as transform3D } from './matrix3d.js';
 import { Reader, SWFError } from '../swf/reader.js';
 import { parseDefineShape } from '../swf/shape.js';
 import { deviceMetrics, editTextToPaths, parseDefineEditText, parseDefineFont, parseDefineText, plainText, textToPaths } from '../swf/text.js';
@@ -597,6 +598,19 @@ export class Movie {
     }
     entry.fields.add(field);
     return entry;
+  }
+
+  /**
+   * 3D の表示オブジェクト d の透視投影 { center, focal }（px）。親をたどって、PerspectiveProjection を持つもの（AS3 の
+   * transform.perspectiveProjection を代入したもの）の値、無ければルートのもの（既定は視野角 55 度、中心はステージの中央。
+   * 焦点距離は (ステージの幅 / 2) / tan(視野角 / 2)。実機で確認）。
+   */
+  projection(d) {
+    const width = (this.frameSize.xmax - this.frameSize.xmin) / 20, height = (this.frameSize.ymax - this.frameSize.ymin) / 20;
+    let pp = null;
+    for (let a = d?.parent; a && !pp; a = a.parent) if (a.pp && !a.pp.root) pp = a.pp;
+    pp ??= this.root.pp ?? { fieldOfView: 55, center: null, root: true };
+    return { center: pp.center ?? (pp.root ? { x: width / 2, y: height / 2 } : { x: 250, y: 250 }), focal: focalLength(pp.fieldOfView, pp.root ? width : 500) };
   }
 
   /** 打ち込まれた文字（IME で確定した文字列も）を、フォーカスのある入力フィールドへ入れる。キーが押されたことは、keyDown で別に伝える。 */
@@ -1370,6 +1384,19 @@ export class DisplayObject {
   }
 
   /** AS3: 表示リストに戻ったときに呼ばれる。 */
+  /**
+   * 3D の表示オブジェクト（AS3 の z・rotationX などを代入したもの。t3 を持つ）の行列（px、Matrix3D.rawData と同じ並び）。2D なら null。
+   * 2D の行列から位置・拡大率・回転（rotationZ）を取り、t3 の z・rotationX・rotationY・scaleZ と合わせて作る。
+   */
+  local3D() {
+    if (!this.t3) return null;
+    const m = this.matrix, flip = m.a * m.d - m.b * m.c < 0 ? -1 : 1;
+    return compose({
+      x: m.tx / 20, y: m.ty / 20, z: this.t3.z, rotationX: this.t3.rotationX, rotationY: this.t3.rotationY, rotationZ: (Math.atan2(m.b, m.a) * 180) / Math.PI,
+      scaleX: Math.hypot(m.a, m.b), scaleY: flip * Math.hypot(m.c, m.d), scaleZ: this.t3.scaleZ,
+    });
+  }
+
   revive() {
     this.removed = false;
   }
@@ -1413,9 +1440,30 @@ export class DisplayObject {
     return { x: m.a * x + m.c * y + m.tx, y: m.b * x + m.d * y + m.ty };
   }
 
-  /** 親の座標系での外接矩形。 */
+  /** 親の座標系での外接矩形。3D のものは、外接矩形の角を射影した点の外接矩形（実機の width / height と同じ）。 */
   boundsInParent() {
-    return this.bounds(this.matrix);
+    if (!this.t3 || !this.parent) return this.bounds(this.matrix);
+    const b = this.bounds(IDENTITY);
+    if (!b) return b;
+    let movie = null;
+    for (let a = this; a && !movie; a = a.parent) movie = a.movie ?? null;
+    if (!movie) return this.bounds(this.matrix);
+    const w = this.world3D(), { center, focal } = movie.projection(this);
+    let out = null;
+    for (const [x, y] of [[b.xmin, b.ymin], [b.xmax, b.ymin], [b.xmax, b.ymax], [b.xmin, b.ymax]]) {
+      const p = project(transform3D(w, x / 20, y / 20, 0, 1), center, focal);
+      if (!p) continue;
+      const q = this.parent.globalToLocal(p.x * 20, p.y * 20);
+      out = out ? { xmin: Math.min(out.xmin, q.x), xmax: Math.max(out.xmax, q.x), ymin: Math.min(out.ymin, q.y), ymax: Math.max(out.ymax, q.y) } : { xmin: q.x, xmax: q.x, ymin: q.y, ymax: q.y };
+    }
+    // 0.5 px 単位で外へ広げる（実機の width / height から）。
+    return out && { xmin: Math.floor(out.xmin / 10) * 10, xmax: Math.ceil(out.xmax / 10) * 10, ymin: Math.floor(out.ymin / 10) * 10, ymax: Math.ceil(out.ymax / 10) * 10 };
+  }
+
+  /** ルート（ステージ）から自分までの 3D の行列（px）。2D のものは、z を変えない行列として掛ける。 */
+  world3D() {
+    const own = this.local3D() ?? lift({ ...this.matrix, tx: this.matrix.tx / 20, ty: this.matrix.ty / 20 });
+    return this.parent ? multiply3D(this.parent.world3D(), own) : own;
   }
 
   /** ルートから見た変換行列。 */

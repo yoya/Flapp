@@ -7,7 +7,7 @@ const BLEND_MODES = ['add', 'alpha', 'darken', 'difference', 'erase', 'hardlight
 const QUALITIES = ['low', 'medium', 'high', 'best', '8x8', '8x8linear', '16x16', '16x16linear'];
 const SCALE_MODES = ['exactFit', 'noBorder', 'noScale', 'showAll'];
 
-export function installDisplayExtras(vm, { movie, display, D }) {
+export function installDisplayExtras(vm, { movie, display, D, xform, setXform, geom3d }) {
   const c = vm.classes;
   const num = (v) => vm.toNumber(v);
   const str = (v) => vm.toStr(v);
@@ -68,10 +68,19 @@ export function installDisplayExtras(vm, { movie, display, D }) {
     d.maskedBy = target;
     if (target) target.maskFor = d;
   });
-  // 3D の値は、持つだけ（3D の描画はしない）。
-  for (const [name, initial] of [['z', 0], ['rotationX', 0], ['rotationY', 0], ['rotationZ', 0], ['scaleZ', 1]]) {
-    accessor(DO, name, (self) => X(self)[name] ?? initial, (self, v) => { X(self)[name] = num(v); });
+  // 3D: どれかを代入すると、3D の表示オブジェクトになる（transform.matrix が null になり、0 に戻しても 2D には戻らない。
+  // rotationZ は rotation と同じ値。rotationX / rotationY は 360 で丸めない。どれも実機で確認）。
+  const t3 = (d) => (d.t3 ??= { z: 0, rotationX: 0, rotationY: 0, scaleZ: 1 });
+  for (const name of ['z', 'rotationX', 'rotationY', 'scaleZ']) {
+    accessor(DO, name, (self) => D(self).t3?.[name] ?? (name === 'scaleZ' ? 1 : 0), (self, v) => { const n = num(v); if (!Number.isNaN(n)) t3(D(self))[name] = n; });
   }
+  accessor(DO, 'rotationZ', (self) => xform(D(self)).rotation, (self, v) => {
+    const r = num(v) % 360;
+    if (Number.isNaN(r)) return;
+    t3(D(self));
+    setXform(D(self), { rotation: r > 180 ? r - 360 : r < -180 ? r + 360 : r });
+  });
+  for (const [name, fn] of Object.entries(geom3d.methods)) method(DO, name, fn);
 
   // --- InteractiveObject と DisplayObjectContainer ---
   const IO = c.InteractiveObject;

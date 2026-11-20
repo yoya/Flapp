@@ -8,6 +8,7 @@ import { installBytes } from './bytes.js';
 import { installDisplayExtras } from './displayext.js';
 import { installFilters } from './filters.js';
 import { installGeom } from './geom.js';
+import { installGeom3D } from './geom3d.js';
 import { installMedia } from './media.js';
 import { installNet } from './net.js';
 import { installStdlib } from './stdlib.js';
@@ -440,6 +441,7 @@ export function installFlash(vm, movie, types) {
   installText(vm, movie);
   installBitmap(vm, movie);
   installStdlib(vm);
+  const geom3d = installGeom3D(vm, movie);
   const filters = installFilters(vm);
 
   // --- 子の出し入れ ---
@@ -917,7 +919,7 @@ export function installFlash(vm, movie, types) {
   });
   display.stage = new ASObject(c.Stage); // 表示オブジェクト（movie.stage）は、ルートができた後でプレイヤーが結び付ける
 
-  installDisplayExtras(vm, { movie, display, D });
+  installDisplayExtras(vm, { movie, display, D, xform, setXform, geom3d });
 
   // --- 表示リストとの結び付け ---
   // キャラクタに結び付けられたクラス（SymbolClass）。無ければ種類ごとの既定のクラス。
