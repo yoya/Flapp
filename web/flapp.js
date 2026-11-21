@@ -9,7 +9,8 @@
 //
 // 属性: src（SWF の URL）、trust（付けると、信用する SWF として動かす。付けなければ、通信もページの移動もしない）、
 //       allow-networking / allow-origins / credentials / allow-navigation（信用するときの通信の決まり。trustedHttp の policy）、
-//       encoding（SWF 5 以前の文字コード。既定はブラウザの言語から）、match-player（実機と同じに映さないものを映さない）。
+//       encoding（SWF 5 以前の文字コード。既定はブラウザの言語から）、match-player（実機と同じに映さないものを映さない）、
+//       flash-lite（FSCommand2 を Flash Lite として実行し、fscommand2 のイベントで知らせる。detail.result に結果を入れる）。
 // プロパティ: movie（再生中の Movie）、メソッド: load(url か bytes, { label })、stop()。
 // イベント: trace（detail に文字列）、warning、error、loaded。画面の大きさは SWF のステージの大きさ（CSS で変えられる）。
 // 入力は、マウスかタッチ（タップはクリック、なぞるとドラッグ）と、キー（要素をクリックして選んでいる間）。音は、ページを最初にクリックするかキーを押した後から鳴る。
@@ -263,7 +264,7 @@ export function attachInput(canvas, getMovie, after = () => {}) {
 }
 
 export class FlappPlayer extends HTMLElement {
-  static observedAttributes = ['src', 'trust', 'encoding', 'match-player', 'allow-networking', 'allow-origins', 'credentials', 'allow-navigation', 'redirect-to'];
+  static observedAttributes = ['src', 'trust', 'encoding', 'match-player', 'allow-networking', 'allow-origins', 'credentials', 'allow-navigation', 'redirect-to', 'flash-lite'];
   #canvas = document.createElement('canvas');
   #renderer = new CanvasRenderer(this.#canvas);
   #timer = 0;
@@ -367,6 +368,13 @@ export class FlappPlayer extends HTMLElement {
         onRequest: ({ kind, url }) => { if (!http) this.dispatchEvent(new CustomEvent('trace', { detail: `[${kind}] ${url}（信用していないので、開きも読みもしません）` })); },
         matchPlayer: this.hasAttribute('match-player'), rasterize: this.#renderer.rasterizer(), decodeImage,
         encoding: this.getAttribute('encoding') ?? defaultEncoding(), language: navigator.language.slice(0, 2),
+        // flash-lite: FSCommand2 を Flash Lite として実行する。処理は fscommand2 のイベントで受ける（detail.result に結果を入れる。
+        // 入れなければ -1 = 対応していない）。
+        fscommand2: this.hasAttribute('flash-lite') ? (command, args, { setVariable }) => {
+          const detail = { command, args, result: -1, setVariable };
+          this.dispatchEvent(new CustomEvent('fscommand2', { detail }));
+          return detail.result;
+        } : undefined,
       });
     } catch (e) {
       this.dispatchEvent(new CustomEvent('error', { detail: e.message }));
@@ -406,12 +414,13 @@ export class FlappPlayer extends HTMLElement {
 }
 customElements.define('flapp-player', FlappPlayer);
 
-/** target（要素か、その中に <flapp-player> を作る入れ物）に SWF を埋め込む。<flapp-player> を返す。options: trust、encoding、matchPlayer。 */
-export function embed(target, src, { trust = false, encoding, matchPlayer = false } = {}) {
+/** target（要素か、その中に <flapp-player> を作る入れ物）に SWF を埋め込む。<flapp-player> を返す。options: trust、encoding、matchPlayer、flashLite。 */
+export function embed(target, src, { trust = false, encoding, matchPlayer = false, flashLite = false } = {}) {
   const el = target instanceof FlappPlayer ? target : document.createElement('flapp-player');
   if (trust) el.setAttribute('trust', '');
   if (encoding) el.setAttribute('encoding', encoding);
   if (matchPlayer) el.setAttribute('match-player', '');
+  if (flashLite) el.setAttribute('flash-lite', '');
   if (!(target instanceof FlappPlayer)) target.append(el);
   el.setAttribute('src', src);
   return el;

@@ -163,6 +163,25 @@ node tools/build.js flashlite-2  # 構成を選んで作る
   細かな挙動まで再現するものではありません。Flash Lite の実機とは照合していません。
 - 構成の定義は [tools/profiles.js](tools/profiles.js)、外した機能の代わりに置くモジュールは [src/absent/](src/absent/) にあります。
 
+### Flash Lite の FSCommand2
+
+デスクトップ版の実機は、FSCommand2 の命令を読み飛ばします（Flapp の既定も同じです）。Flash Lite の SWF を動かすときは、
+`<flapp-player>` に `flash-lite` を付けると、FSCommand2 を Flash Lite として実行します（引数を取り出して、結果を返します）。
+
+```html
+<flapp-player src="lite.swf" flash-lite></flapp-player>
+<script>
+  document.querySelector('flapp-player').addEventListener('fscommand2', (e) => {
+    const { command, args, setVariable } = e.detail;
+    if (command === 'FullScreen') e.detail.result = 0;   // 結果を入れる。入れなければ -1（対応していない）
+    if (command === 'GetLanguage') { setVariable(args[0], 'ja'); e.detail.result = 0; } // 変数に書く命令
+  });
+</script>
+```
+
+コマンドの中身は、ページの側で決めます（Flapp が自分で実行するコマンドはありません）。コードから使うときは、`Movie.load` の
+`fscommand2` オプションに同じ処理を渡します。
+
 ## SWF の中身を見る（SWF インスペクタ）
 
 `web/inspect.html` は、SWF のヘッダ・要約・タグの一覧を表にします。行をクリックすると、そのタグの中身（解釈した項目と先頭 256 バイトの 16 進ダンプ）を出します。

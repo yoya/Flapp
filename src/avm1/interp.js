@@ -72,8 +72,9 @@ export class AVM1 {
    *   load: (要求, done, { sync }) => void   読み込みを、ホストに任せるための関数。done(バイト列 | null) を、後のフレームの処理の中で
    *            呼ぶ（sync なら、ホストがその場で返したときはその場で呼ぶ）。既定は、読めなかった扱い（null）
    */
-  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, storage = null, stage = { width: 550, height: 400 }, language = 'en', focus = null } = {}) {
+  constructor({ version = 8, trace = () => {}, now = () => 0, random = Math.random, maxSteps = 2e7, maxAllocations = 4e6, maxDepth = 256, legacy = null, request = () => {}, navigate = () => {}, load = null, storage = null, stage = { width: 550, height: 400 }, language = 'en', focus = null, fscommand2 = null } = {}) {
     this.request = request;
+    this.fscommand2 = fscommand2; // Flash Lite の FSCommand2 を処理する関数（無ければ、命令を読み飛ばす）
     this.focus = focus ?? { get: () => null, set: () => {} }; // キーボードのフォーカス: { get() → 表示オブジェクト | null, set(表示オブジェクト | null) }（Selection 用）
     this.navigate = navigate;
     this.storage = storage; // SharedObject の保存先（player/sharedstore.js の説明）。無ければ、再生中だけ値を持つ
@@ -624,6 +625,18 @@ export class AVM1 {
         }
         case 0x34: push(Math.floor(this.now())); break; // GetTime
         case 0x26: this.trace(this.traceText(pop())); break; // Trace
+        case 0x2d: { // FSCommand2（Flash Lite）: 引数の数、コマンド名、引数の順に取り出して、結果を積む
+          // デスクトップ版の実機は、この命令を読み飛ばす（スタックにも触らない。実機で確認）。ホストが fscommand2 を渡したときだけ、
+          // Flash Lite として実行する。結果が数値でも文字列でもなければ -1（対応していない、の値）。
+          if (!this.fscommand2) break;
+          const count = Math.min(Math.max(0, toInt32(this, pop())), stack.length);
+          const args = [];
+          for (let i = 0; i < count; i++) { const v = pop(); args.push(v instanceof AVMObject ? toStr(this, v) : v); }
+          const command = toStr(this, args.shift() ?? '');
+          const result = this.fscommand2(command, args, { setVariable: (name, value) => this.setVariable(frame, String(name), value) });
+          push(typeof result === 'number' || typeof result === 'string' ? result : -1);
+          break;
+        }
 
         // --- 分岐 ---
         case 0x99: pc += view.getInt16(data, true); break; // Jump

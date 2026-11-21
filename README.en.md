@@ -158,6 +158,25 @@ The usage is the same; only the file you load changes.
   the detailed behavior of that version's player. They have not been compared with a real Flash Lite device.
 - The profiles are defined in [tools/profiles.js](tools/profiles.js). The modules that stand in for the features left out are in [src/absent/](src/absent/).
 
+### FSCommand2 of Flash Lite
+
+The desktop player skips the FSCommand2 action (Flapp does the same by default). To run Flash Lite SWFs, add `flash-lite` to `<flapp-player>`;
+FSCommand2 is then run as Flash Lite does (it takes its arguments and returns a result).
+
+```html
+<flapp-player src="lite.swf" flash-lite></flapp-player>
+<script>
+  document.querySelector('flapp-player').addEventListener('fscommand2', (e) => {
+    const { command, args, setVariable } = e.detail;
+    if (command === 'FullScreen') e.detail.result = 0;   // set the result; when not set, it is -1 (not supported)
+    if (command === 'GetLanguage') { setVariable(args[0], 'ja'); e.detail.result = 0; } // a command that writes a variable
+  });
+</script>
+```
+
+What each command does is decided by the page (Flapp does not run any command by itself). From code, pass the same handler as the
+`fscommand2` option of `Movie.load`.
+
 ## Viewing the contents of a SWF (SWF inspector)
 
 `web/inspect.html` shows a SWF's header, summary, and list of tags as a table. Selecting a row shows the contents of that tag (its decoded fields and a hex dump of the first 256 bytes).

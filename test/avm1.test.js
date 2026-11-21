@@ -224,3 +224,28 @@ test('BitmapData.draw は、テキストフィールドも描く処理に渡す'
   assert.deepEqual(got, [['TextField', 'abc', 2, 1, 4, 4]]);
   assert.deepEqual(movie.traces, ['ff0000']);
 });
+
+test('FSCommand2: ホストが処理を渡さなければ読み飛ばし、渡せば Flash Lite として実行する', async () => {
+  // 実機（デスクトップ版）は、この命令でスタックに触らない: 命令の後の trace は、積んであった引数を上から出す。
+  const str = (s) => [0x96, ...u16(s.length + 2), 0, ...new TextEncoder().encode(s), 0];
+  const actions = [
+    ...str('M1'), ...str('1'), ...str('FullScreen'), ...str('2'), 0x2d, 0x26, 0x26, // FSCommand2、trace を 2 回
+    ...str('out'), ...str('GetName'), ...str('2'), 0x2d, 0x26, // 変数 out に書く命令
+    ...str('out'), 0x1c, 0x26, // out の値
+    ...str('Unknown'), ...str('1'), 0x2d, 0x26,
+  ];
+  const bytes = swf({ version: 4, frames: 1, tags: [tag(12, [...actions, 0]), ShowFrame(), End()] });
+  const plain = await Movie.load(bytes);
+  assert.deepEqual(plain.traces.slice(0, 2), ['2', 'FullScreen']); // 実機の出力と同じ（tmp で確かめた）
+  const calls = [];
+  const lite = await Movie.load(bytes, {
+    fscommand2: (command, args, { setVariable }) => {
+      calls.push([command, args]);
+      if (command === 'FullScreen') return 0;
+      if (command === 'GetName') { setVariable(args[0], 'flapp'); return 0; }
+      return undefined; // 対応していない → -1
+    },
+  });
+  assert.deepEqual(calls, [['FullScreen', ['1']], ['GetName', ['out']], ['Unknown', []]]);
+  assert.deepEqual(lite.traces, ['0', 'M1', '0', 'flapp', '-1']);
+});

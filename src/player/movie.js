@@ -173,6 +173,9 @@ export class Movie {
    *   matchPlayer: true にすると、見た目を実機の Flash Player に寄せる。既定は false。今のところ、次の 2 つが変わる:
    *             - 復号はできるが実機が映さないもの（インターレースの VP6）を、実機と同じに映さない
    *             - 埋め込みの H.263 / VP6 を整数倍で置いたとき、実機と同じに、横方向だけ右隣の画素と混ぜて描く
+   *   fscommand2: (command, args, { setVariable }) => number | string   Flash Lite の FSCommand2 を処理する関数（ActionScript 1 / 2）。
+   *             渡すと、FSCommand2 を Flash Lite として実行する（引数を取り出して、結果を積む。結果が数値でも文字列でもなければ -1）。
+   *             setVariable(name, value) は、呼んだタイムラインの変数へ書く。省略すると、デスクトップ版の実機と同じく、命令を読み飛ばす
    *   decodeImage: ({ bytes, type }) => Promise<{ width, height, rgba }>   JPEG / PNG / GIF の画像を画素（乗算済みでない RGBA）にする関数
    *             （ブラウザでは render/canvas.js の decodeImage）。スクリプトが画素を読む画像（Loader で読んだ画像と、AS3 のクラスに結び付いた
    *             ビットマップ）だけに使う。省略すると、それらの画素は透明（読み込んだ画像）か白（クラスのビットマップ）になる
@@ -208,7 +211,7 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage, decodeImage } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage, decodeImage, fscommand2 } = {}) {
     this.media = media ?? null;
     this.decodeImage = decodeImage ?? null;
     this.network = network ?? null;
@@ -274,6 +277,7 @@ export class Movie {
       request: this.request,
       navigate: (req) => this.navigate(req),
       focus: { get: () => this.focus, set: (d) => this.setFocus(d) },
+      fscommand2: fscommand2 ?? null,
       storage: this.storage,
       load: (req, done, options) => this.load(req, (fn) => this.avm.later(fn), done, options),
       now: this.now,
