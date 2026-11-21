@@ -5,7 +5,7 @@
 <title>Flapp</title>
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; }
-  canvas { display: block; margin: 12px 0; border: 1px solid #888; }
+  canvas { display: block; margin: 12px 0; border: 1px solid #888; max-width: 100%; height: auto; touch-action: none; box-sizing: border-box; }
   #info, #warnings, #traces { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
   #warnings { color: #a40; }
   #traces { max-height: 240px; overflow: auto; border: 1px solid #ccc; padding: 4px 8px; margin-top: 8px; }
@@ -47,7 +47,7 @@
   const audio = new WebAudioOutput();
   window.flappAudio = audio; // 開発用（コンソールから audio.level() で音が出ているかを確かめられる）
   // 有効になったら、流れている途中のストリーム音を次のフレームで鳴らし直させる。
-  for (const type of ['pointerdown', 'keydown']) {
+  for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) { // iOS は、指を離したときの操作でないと有効にできないことがある
     window.addEventListener(type, () => {
       if (audio.context.state === 'suspended') audio.resume().then(() => (current?.sounds ?? videoSounds)?.resync());
     }, { capture: true });
@@ -100,7 +100,6 @@
       if (image) {
         if (canvas.width !== image.width || canvas.height !== image.height) Object.assign(canvas, { width: image.width, height: image.height });
         canvas.style.width = `${image.width}px`;
-        canvas.style.height = `${image.height}px`;
         if (image.image) ctx.drawImage(image.image, 0, 0);
         else ctx.putImageData(new ImageData(image.rgba, image.width, image.height), 0, 0);
       }
@@ -119,13 +118,21 @@
   };
   const moveTo = (movie, e) => {
     const rect = canvas.getBoundingClientRect();
-    movie.mouseMove(Math.round((e.clientX - rect.left) * 20), Math.round((e.clientY - rect.top) * 20));
+    const k = (movie.frameSize.xmax - movie.frameSize.xmin) / canvas.clientWidth; // 画面の 1 px がステージの何 twips か（縮めて表示していても合う。枠線は除く）
+    movie.mouseMove(Math.round((e.clientX - rect.left - canvas.clientLeft) * k), Math.round((e.clientY - rect.top - canvas.clientTop) * k));
   };
   canvas.tabIndex = 0;
-  canvas.addEventListener('mousemove', input(moveTo));
-  canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
-  canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
-  window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
+  canvas.addEventListener('pointermove', input((movie, e) => { if (e.isPrimary) moveTo(movie, e); }));
+  canvas.addEventListener('pointerleave', input((movie, e) => { if (e.isPrimary) movie.mouseLeave(); }));
+  canvas.addEventListener('pointerdown', input((movie, e) => {
+    if (!e.isPrimary) return;
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* 捕まえられないポインタ（合成のイベントなど）は、捕まえずに続ける */ } // 押したままなら、ステージの外へ出ても動きを伝える
+    moveTo(movie, e);
+    movie.mouseDown();
+  }));
+  const release = input((movie, e) => { if (e.isPrimary) movie.mouseUp(); });
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
   // キーは仮想キーコード（Key.getCode() の値）と文字コード（Key.getAscii() の値）で渡す。
   let lastInput = -Infinity; // 最後の利用者の操作の時刻（信用する SWF が、このページを移動させてよいか）
   for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, () => { lastInput = performance.now(); }, { capture: true });
@@ -184,8 +191,7 @@
     const scale = window.devicePixelRatio || 1;
     const draw = () => {
       renderer.render(movie, scale);
-      canvas.style.width = `${canvas.width / scale}px`;
-      canvas.style.height = `${canvas.height / scale}px`;
+      canvas.style.width = `${canvas.width / scale}px`; // 高さは CSS（height: auto）が、縦横の比で決める
       info.textContent = `${label}: SWF ${movie.version}, ${movie.frameRate} fps, ` +
         `frame ${movie.root.currentFrame} / ${movie.root.totalFrames}`;
       warnings.textContent = movie.warnings.join('\n');

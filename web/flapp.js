@@ -12,7 +12,8 @@
 //       encoding（SWF 5 以前の文字コード。既定はブラウザの言語から）、match-player（実機と同じに映さないものを映さない）。
 // プロパティ: movie（再生中の Movie）、メソッド: load(url か bytes, { label })、stop()。
 // イベント: trace（detail に文字列）、warning、error、loaded。画面の大きさは SWF のステージの大きさ（CSS で変えられる）。
-// 入力は、マウスの動きとボタン、キー（要素をクリックして選んでいる間）。音は、ページを最初にクリックするかキーを押した後から鳴る。
+// 入力は、マウスかタッチ（タップはクリック、なぞるとドラッグ）と、キー（要素をクリックして選んでいる間）。音は、ページを最初にクリックするかキーを押した後から鳴る。
+// ステージが画面より広ければ、縦横の比のまま、幅に収まるように縮めて表示する（スマートフォン）。
 import { Movie } from '../src/player/movie.js';
 import { CanvasRenderer, decodeImage } from '../src/render/canvas.js';
 import { WebAudioOutput } from '../src/audio/webaudio.js';
@@ -180,7 +181,7 @@ let sharedAudio = null;
 const audioOutput = () => {
   if (sharedAudio) return sharedAudio;
   sharedAudio = new WebAudioOutput();
-  for (const type of ['pointerdown', 'keydown']) {
+  for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) { // iOS は、指を離したときの操作でないと有効にできないことがある
     window.addEventListener(type, () => {
       if (sharedAudio.context.state === 'suspended') sharedAudio.resume().then(() => { for (const el of document.querySelectorAll('flapp-player')) el.movie?.sounds.resync(); });
     }, { capture: true });
@@ -224,10 +225,32 @@ export function attachInput(canvas, getMovie, after = () => {}) {
   canvas.after(area);
   const act = (handle) => (e) => { const movie = getMovie(); if (movie) { handle(movie, e); after(movie); } };
   const place = () => { area.style.left = `${canvas.offsetLeft}px`; area.style.top = `${canvas.offsetTop}px`; };
-  const focus = () => { place(); area.focus({ preventScroll: true }); };
+  // タッチでは、入力フィールドを選んだときだけ textarea へ移す（タップのたびに、画面のキーボードが出ないように）。
+  // ほかの所を触ったら、textarea から外して、キーボードを閉じる。マウスやペンでは、いつも移す。
+  let touch = false; // 最後に押したのがタッチか
+  canvas.addEventListener('pointerdown', (e) => { touch = e.pointerType === 'touch'; }, { capture: true });
+  const focus = () => {
+    if (touch && getMovie()?.focus?.type !== 'input') { area.blur(); return; }
+    place();
+    area.focus({ preventScroll: true });
+  };
   canvas.addEventListener('focus', focus);
-  canvas.addEventListener('mousedown', () => setTimeout(focus));
+  canvas.addEventListener('click', focus); // タップの中で、同期して移す（iOS は、利用者の操作の中で移さないとキーボードが出ない）
   area.addEventListener('keydown', act(sendKey));
+  canvas.addEventListener('keydown', act(sendKey)); // textarea へ移していないとき（タッチの後の、外付けのキーボード）
+  canvas.addEventListener('keyup', act((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
+  // 画面のキーボード（Android）は、keydown が keyCode 229 で来て、中身は beforeinput で届く。keydown で扱えたキーは、
+  // そこで既定の動作を止めているので、ここには来ない。textarea は空のままにする（既定の動作を止める）。
+  area.addEventListener('beforeinput', (e) => {
+    const movie = getMovie();
+    if (!movie || e.isComposing || /Composition/.test(e.inputType ?? '')) return; // 変換中は、composition のイベントで受ける
+    if (e.inputType === 'insertText' && e.data) movie.textInput(e.data);
+    else if (e.inputType === 'deleteContentBackward') { movie.keyDown(8, 0, {}); movie.keyUp(8); }
+    else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') { movie.keyDown(13, 13, {}); movie.keyUp(13); }
+    else return;
+    e.preventDefault();
+    after(movie);
+  });
   area.addEventListener('keyup', act((movie, e) => { if (e.keyCode) movie.keyUp(e.keyCode); }));
   area.addEventListener('compositionupdate', act((movie, e) => movie.compose(e.data)));
   area.addEventListener('compositionend', act((movie, e) => { movie.textInput(e.data ?? ''); area.value = ''; }));
@@ -253,7 +276,7 @@ export class FlappPlayer extends HTMLElement {
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
-    root.innerHTML = '<style>:host { display: inline-block; line-height: 0; position: relative; } canvas { display: block; outline: none; }</style>';
+    root.innerHTML = '<style>:host { display: inline-block; line-height: 0; position: relative; max-width: 100%; } canvas { display: block; outline: none; max-width: 100%; height: auto; touch-action: none; }</style>';
     root.append(this.#canvas);
     const canvas = this.#canvas;
     // マウスとキーの入力をムービーへ伝える。キー入力は、要素をクリックして選んでいる間だけ受け取る。
@@ -265,16 +288,25 @@ export class FlappPlayer extends HTMLElement {
     };
     const moveTo = (movie, e) => {
       const rect = canvas.getBoundingClientRect();
-      movie.mouseMove(Math.round((e.clientX - rect.left) * 20), Math.round((e.clientY - rect.top) * 20));
+      const k = (movie.frameSize.xmax - movie.frameSize.xmin) / canvas.clientWidth; // 表示が縮んでいても、ステージの座標に合わせる（twips。枠線は除く）
+      movie.mouseMove(Math.round((e.clientX - rect.left - canvas.clientLeft) * k), Math.round((e.clientY - rect.top - canvas.clientTop) * k));
     };
     canvas.tabIndex = 0;
     for (const type of ['pointerdown', 'keydown']) this.addEventListener(type, () => { this.#lastInput = performance.now(); }, { capture: true });
     // 画面の外にあるときは遅くする（実機のプラグインと同じく 1 秒に 2 回）。ページが隠れているときは、ブラウザがタイマーを止める。
     if (typeof IntersectionObserver === 'function') new IntersectionObserver((entries) => { this.#visible = entries.at(-1).isIntersecting; }).observe(this);
-    canvas.addEventListener('mousemove', input(moveTo));
-    canvas.addEventListener('mouseleave', input((movie) => movie.mouseLeave()));
-    canvas.addEventListener('mousedown', input((movie, e) => { moveTo(movie, e); movie.mouseDown(); }));
-    window.addEventListener('mouseup', input((movie) => movie.mouseUp()));
+    // ポインタ（マウス・タッチ・ペン）の入力。指を離しても、押したままの間は動きを伝え続ける（ポインタを捕まえる）。
+    canvas.addEventListener('pointermove', input((movie, e) => { if (e.isPrimary) moveTo(movie, e); }));
+    canvas.addEventListener('pointerleave', input((movie, e) => { if (e.isPrimary) movie.mouseLeave(); }));
+    canvas.addEventListener('pointerdown', input((movie, e) => {
+      if (!e.isPrimary) return;
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* 捕まえられないポインタ（合成のイベントなど）は、捕まえずに続ける */ }
+      moveTo(movie, e);
+      movie.mouseDown();
+    }));
+    const release = input((movie, e) => { if (e.isPrimary) movie.mouseUp(); });
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
     attachInput(canvas, () => this.movie, () => { canvas.style.cursor = this.movie.avm && !this.movie.avm.mouseVisible ? 'none' : this.movie.hoverButton ? 'pointer' : ''; this.#draw(); });
     addEventListener('pagehide', () => this.movie?.saveSharedObjects()); // 実機も、閉じるときに保存する
   }
@@ -369,8 +401,7 @@ export class FlappPlayer extends HTMLElement {
     if (!movie) return;
     const scale = window.devicePixelRatio || 1;
     this.#renderer.render(movie, scale);
-    this.#canvas.style.width = `${this.#canvas.width / scale}px`;
-    this.#canvas.style.height = `${this.#canvas.height / scale}px`;
+    this.#canvas.style.width = `${this.#canvas.width / scale}px`; // 高さは CSS（height: auto）が、縦横の比で決める
   }
 }
 customElements.define('flapp-player', FlappPlayer);

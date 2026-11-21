@@ -104,6 +104,21 @@ The server exposes the repository root only to this machine (127.0.0.1).
   When the SWF is not trusted, values are kept only while it plays). The values that can be stored are numbers, strings, booleans, null, undefined, Date, arrays, and plain objects, up to 100 KB. URLs other than http / https (such as `javascript:`) are not opened.
   Loads from another server work only when that server allows them with CORS. The default is not to trust (do not turn this on for SWFs you do not trust).
 
+## Using it on a smartphone (iPhone and Android)
+
+The playback page, the embedded player (`<flapp-player>`), and the inspector page are made to work on iPhone (Safari) and Android (Chrome) screens.
+
+- **Touch**: a tap is a click, and moving a finger is a drag (they are passed to the SWF as the same input as a mouse). On top of the SWF, finger movement goes to the SWF,
+  so the page does not scroll or zoom there (touch outside the SWF to move the page).
+- **Display**: when the stage is wider than the screen, it is scaled down to fit the screen width, keeping its aspect ratio. The touched position is converted to stage coordinates.
+- **Text input**: tapping an input field shows the on-screen keyboard. Tapping elsewhere closes it.
+- **Sound**: it plays after the first tap (a browser restriction).
+
+Not possible: hover (moving the mouse over something without pressing), input with two or more fingers (only the first finger is used), and the right-click menu. SWFs that are controlled with keys
+need an external keyboard.
+
+This was checked in a desktop browser set to a smartphone screen size and touch input. It has not yet been checked on real devices (iPhone or Android).
+
 ## Viewing the contents of a SWF (SWF inspector)
 
 `web/inspect.html` shows a SWF's header, summary, and list of tags as a table. Selecting a row shows the contents of that tag (its decoded fields and a hex dump of the first 256 bytes).

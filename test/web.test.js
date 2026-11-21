@@ -105,3 +105,56 @@ test('redirect: networking が none なら、切り替えても何も送らな�
   assert.equal(await network.load({ url: 'data.txt' }), null);
   assert.equal(log.fetched.length, 0);
 });
+
+// --- 入力（attachInput）。ブラウザの要素の代わりに、イベントを受けるだけの物を使う ---
+const { attachInput } = await import('../web/flapp.js');
+const inputSetup = () => {
+  const log = [];
+  const element = () => Object.assign(new EventTarget(), {
+    style: {}, setAttribute() {}, after() {}, offsetLeft: 0, offsetTop: 0,
+    focus() { log.push('focus'); }, blur() { log.push('blur'); },
+  });
+  globalThis.document = { createElement: element };
+  const movie = {
+    focus: null,
+    textInput: (t) => log.push(`text ${t}`), keyDown: (code, ascii) => log.push(`down ${code} ${ascii}`), keyUp: (code) => log.push(`up ${code}`),
+  };
+  const canvas = element();
+  const area = attachInput(canvas, () => movie);
+  const fire = (target, type, props = {}) => { const e = Object.assign(new Event(type, { cancelable: true }), props); target.dispatchEvent(e); return e; };
+  return { log, movie, canvas, area, fire };
+};
+
+test('タッチ: 入力フィールドを選んだときだけ、キーボードを出す（textarea へ移す）。マウスでは、いつも移す', () => {
+  const { log, movie, canvas, fire } = inputSetup();
+  fire(canvas, 'pointerdown', { pointerType: 'touch' });
+  fire(canvas, 'click');
+  assert.deepEqual(log, ['blur']); // 入力フィールドでない所のタップ: キーボードを出さない
+  log.length = 0;
+  movie.focus = { type: 'input' };
+  fire(canvas, 'pointerdown', { pointerType: 'touch' });
+  fire(canvas, 'click');
+  assert.deepEqual(log, ['focus']);
+  log.length = 0;
+  movie.focus = { type: 'dynamic' }; // 選べるだけのテキスト
+  fire(canvas, 'pointerdown', { pointerType: 'touch' });
+  fire(canvas, 'click');
+  assert.deepEqual(log, ['blur']);
+  log.length = 0;
+  movie.focus = null;
+  fire(canvas, 'pointerdown', { pointerType: 'mouse' });
+  fire(canvas, 'click');
+  assert.deepEqual(log, ['focus']);
+});
+
+test('画面のキーボード: beforeinput の文字・削除・改行を、ムービーへ伝える。変換中のものは伝えない', () => {
+  const { log, area, fire } = inputSetup();
+  assert.equal(fire(area, 'beforeinput', { inputType: 'insertText', data: 'あ' }).defaultPrevented, true);
+  fire(area, 'beforeinput', { inputType: 'deleteContentBackward' });
+  fire(area, 'beforeinput', { inputType: 'insertLineBreak' });
+  assert.deepEqual(log, ['text あ', 'down 8 0', 'up 8', 'down 13 13', 'up 13']);
+  log.length = 0;
+  assert.equal(fire(area, 'beforeinput', { inputType: 'insertCompositionText', data: 'か', isComposing: true }).defaultPrevented, false);
+  assert.equal(fire(area, 'beforeinput', { inputType: 'insertFromPaste', data: 'x' }).defaultPrevented, false); // 貼り付けは paste のイベントで受ける
+  assert.deepEqual(log, []);
+});
