@@ -61,6 +61,7 @@
       };
       const movie = await Movie.load(await (await fetch(entry.swf)).arrayBuffer(), {
         matchPlayer: new URLSearchParams(location.search).has('matchPlayer'), media: fetchLocal, network: { load: ({ url }) => fetchLocal(url) },
+        vp6: () => import('../src/video/vp6.js').then((m) => m.VP6Decoder), // VP6 の復号器は別のファイル（Movie.load の vp6）
       });
       let frame = entry.frame ?? Math.min(SETTLE_FRAME, movie.root.totalFrames);
       for (let i = 1; i < frame; i++) movie.advance();

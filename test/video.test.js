@@ -8,7 +8,7 @@ import { deflateRawSync, deflateSync, gunzipSync } from 'node:zlib';
 import { decodeADPCM } from '../src/audio/decode.js';
 import { Movie } from '../src/player/movie.js';
 import { SoundMixer } from '../src/player/sound.js';
-import { FlvPlayback, decodable, embeddedSequence } from '../src/player/video.js';
+import { FlvPlayback, decodable, embeddedSequence, vp6Source } from '../src/player/video.js';
 import { parseSWF } from '../src/swf/parse.js';
 import { parseDefineVideoStream, parseVideoFrame } from '../src/swf/video.js';
 import { parseFLV } from '../src/video/flv.js';
@@ -20,10 +20,14 @@ import { SCREEN_VIDEO, fixtures, screenVideoPixel } from '../tools/mkfixtures.js
 const asset = (name) => readFileSync(new URL(`../tools/assets/${name}`, import.meta.url));
 const flvBytes = asset('video-h263.flv');
 const tagsOf = async (name, code) => (await parseSWF(fixtures[name])).tags.filter((t) => t.code === code);
+// VP6 の復号器は別のファイルなので、ホストが渡す（Movie.load の vp6 オプション）。
+const vp6 = () => VP6Decoder;
+const vp6Ready = vp6Source(vp6, (m) => { throw new Error(m); }); // embeddedSequence に渡す、復号器を返す関数
 // FlvPlayback を動かすための、時刻を手で進められる最小限のホスト。
 function host() {
   const h = { time: 0, now: () => h.time, warnings: [], warn: (m) => h.warnings.push(m) };
   h.sounds = new SoundMixer(h, null);
+  h.vp6 = vp6Source(vp6, h.warn);
   return h;
 }
 
@@ -390,14 +394,14 @@ test('VP6: matchPlayer を指定すると、インターレースのストリー
   const size = { width: 62, height: 44 };
   const frames = (name) => new Map(parseFLV(asset(name)).video.map((t, n) => [n, t.data.subarray(1)]));
   // 既定では、ffmpeg と同じに復号して映す。
-  const shown = embeddedSequence('vp6', frames('video-vp6i.flv'), () => {}, size).show(0);
+  const shown = embeddedSequence('vp6', frames('video-vp6i.flv'), () => {}, size, false, vp6Ready).show(0);
   assert.deepEqual(shown.rgba, vp6Shown(vp6Reference('video-vp6i.yuv.gz')[0]));
   // 埋め込みのビデオ: 枠が黒くなる。アルファ付きは、何も映らない。警告は 1 回だけ。
   const warnings = [];
-  const hidden = embeddedSequence('vp6', frames('video-vp6i.flv'), (m) => warnings.push(m), size, true);
+  const hidden = embeddedSequence('vp6', frames('video-vp6i.flv'), (m) => warnings.push(m), size, true, vp6Ready);
   for (const n of [0, 3, 7]) assert.deepEqual([hidden.show(n).width, hidden.show(n).height, ...new Set(hidden.show(n).rgba)], [62, 44, 0, 255]);
   assert.deepEqual(warnings, ['interlaced VP6 is not shown (as in the real player)']);
-  assert.equal(embeddedSequence('vp6a', frames('video-vp6ai.flv'), () => {}, size, true).show(7), null);
+  assert.equal(embeddedSequence('vp6a', frames('video-vp6ai.flv'), () => {}, size, true, vp6Ready).show(7), null);
   // FLV: 何も映らない。
   for (const name of ['video-vp6i.flv', 'video-vp6ai.flv']) {
     const h = Object.assign(host(), { matchPlayer: true });
@@ -411,19 +415,19 @@ test('VP6: matchPlayer を指定すると、インターレースのストリー
     assert.deepEqual([plain.image().width, plain.image().height], [62, 44]);
   }
   // インターレースでないストリームには、影響しない。オプションは Movie.load から渡る。
-  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true });
+  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true, vp6 });
   for (let i = 0; i < 10; i++) movie.advance();
   assert.equal(movie.matchPlayer, true);
   assert.deepEqual(movie.root.sortedChildren()[0].image().rgba, vp6Shown(vp6Reference('video-vp6.yuv.gz')[7]));
   assert.deepEqual(movie.warnings, []);
-  assert.equal((await Movie.load(fixtures['video-vp6'])).matchPlayer, false);
+  assert.equal((await Movie.load(fixtures['video-vp6'], { vp6 })).matchPlayer, false);
 });
 
 test('埋め込みビデオ: matchPlayer を指定すると、H.263 と VP6 の塗りに、横方向の混ぜ合わせを頼む印が付く', async () => {
   // 実機は、埋め込みの H.263 / VP6 を整数倍で描くとき、横方向だけ右隣の画素と混ぜる。混ぜるのは描画側（render/canvas.js）で、
   // その結果は web/compare.html?matchPlayer で実機の画面と比べる。ここでは、描画側に頼む印だけを確かめる。
   const blend = async (name, options) => {
-    const movie = await Movie.load(fixtures[name], options);
+    const movie = await Movie.load(fixtures[name], { vp6, ...options });
     for (let i = 0; i < 10; i++) movie.advance();
     return movie.root.sortedChildren().map((video) => video.paths()[0].style.blendRight);
   };
@@ -433,7 +437,7 @@ test('埋め込みビデオ: matchPlayer を指定すると、H.263 と VP6 の�
   assert.deepEqual(await blend('video-screen', { matchPlayer: true }), [false]);
   assert.deepEqual(await blend('video-vp6'), [false, false]);
   // NetStream の絵を映しているときも、混ぜない。
-  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true });
+  const movie = await Movie.load(fixtures['video-vp6'], { matchPlayer: true, vp6 });
   const [video] = movie.root.sortedChildren();
   const picture = video.image();
   video.source = { image: () => picture };
@@ -450,13 +454,13 @@ test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[1] = 9 << 3; })), /unknown version/);
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = 0; })), /size is zero/);
   assert.throws(() => new VP6Decoder().decode(edit((d) => { d[2] = d[3] = 255; })), /out of range/); // 4080×4080
-  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[0] |= 1; d[2] = 0xff; d[3] = 0xff; })), VideoError); // 係数の区画がフレームの外
+  assert.throws(() => new VP6Decoder().decode(edit((d) => { d[0] |= 1; d[2] = 0xff; d[3] = 0xff; })), { name: 'VideoError' }); // 係数の区画がフレームの外
   // アルファ付き: 色のデータの長さがフレームからはみ出す。色とアルファの大きさが違う。
   const [alphaKey] = parseFLV(asset('video-vp6a.flv')).video.map((t) => Uint8Array.from(t.data.subarray(1)));
   assert.throws(() => new VP6Decoder(true).decode(Uint8Array.from([0xff, 0xff, 0xff, ...alphaKey.subarray(3)])), /outside the frame/);
   const offset = (alphaKey[0] << 16) | (alphaKey[1] << 8) | alphaKey[2];
   alphaKey[3 + offset + 3] = 2; // アルファの側の、マクロブロックの列の数
-  assert.throws(() => new VP6Decoder(true).decode(alphaKey), VideoError);
+  assert.throws(() => new VP6Decoder(true).decode(alphaKey), { name: 'VideoError' });
   // でたらめに壊したフレームを続けて復号しても、VideoError のほかは起きない。
   let seed = 1;
   const rnd = (n) => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
@@ -471,7 +475,7 @@ test('VP6: 壊れたデータは VideoError にする（ほかの例外や、止
         const p = decoder.decode(data);
         assert.ok(p.width * p.height <= 1 << 22 && p.y.length === p.width * p.height);
       } catch (e) {
-        assert.ok(e instanceof VideoError, e.stack);
+        assert.equal(e.name, 'VideoError', e.stack); // VP6 の復号器は別のファイルなので、プレイヤーは名前で見分ける
         failed++;
       }
     }
@@ -484,7 +488,7 @@ test('埋め込みビデオと FLV の VP6: 絵は表示する大きさに切り
     const pictures = vp6Reference(reference, alpha).map(vp6Shown);
     assert.equal(decodable(alpha ? 'vp6a' : 'vp6'), true);
     assert.equal(parseDefineVideoStream((await tagsOf(fixture, 60))[0]).codec, alpha ? 'vp6a' : 'vp6');
-    const movie = await Movie.load(fixtures[fixture]);
+    const movie = await Movie.load(fixtures[fixture], { vp6 });
     for (let i = 0; i < 10; i++) movie.advance();
     const [main, still] = movie.root.sortedChildren();
     assert.equal(main.ratio, 7);
@@ -507,10 +511,46 @@ test('埋め込みビデオと FLV の VP6: 絵は表示する大きさに切り
   }
   // 符号化された大きさより広い枠には、何も映らない（黒くなる）。狭い枠には、左上の部分が映る。
   const frames = new Map(parseFLV(asset('video-vp6.flv')).video.map((t, n) => [n, t.data.subarray(1)]));
-  const wide = embeddedSequence('vp6', frames, () => {}, { width: 80, height: 48 }).show(0);
+  const wide = embeddedSequence('vp6', frames, () => {}, { width: 80, height: 48 }, false, vp6Ready).show(0);
   assert.deepEqual([wide.width, wide.height, ...new Set(wide.rgba)], [80, 48, 0, 255]);
-  const narrow = embeddedSequence('vp6', frames, () => {}, { width: 20, height: 10 }).show(0);
+  const narrow = embeddedSequence('vp6', frames, () => {}, { width: 20, height: 10 }, false, vp6Ready).show(0);
   const full = vp6Shown(vp6Reference('video-vp6.yuv.gz', false)[0]);
   assert.deepEqual([...narrow.rgba.subarray(0, 80)], [...full.subarray(0, 80)]);
   assert.deepEqual([...narrow.rgba.subarray(9 * 80)], [...full.subarray(9 * 62 * 4, 9 * 62 * 4 + 80)]);
+});
+
+test('VP6 の復号器: ホストが渡したときだけ、VP6 のビデオを映すときに 1 回だけ読み込む', async () => {
+  // VP6 を使わない SWF では、読み込みの関数を呼ばない。
+  let calls = 0;
+  const counted = (value) => () => { calls++; return value; };
+  const h263 = await Movie.load(fixtures['video-h263'], { vp6: counted(VP6Decoder) });
+  for (let i = 0; i < 10; i++) h263.advance();
+  assert.equal(calls, 0);
+  // 埋め込みの VP6: 2 つ置かれていても 1 回。Promise で返しても、最初のフレームから映る（Movie.load が待つ）。
+  const movie = await Movie.load(fixtures['video-vp6'], { vp6: counted(Promise.resolve(VP6Decoder)) });
+  assert.equal(calls, 1);
+  for (let i = 0; i < 10; i++) movie.advance();
+  assert.deepEqual(movie.root.sortedChildren().map((v) => v.image()?.width), [62, 62]);
+  assert.deepEqual(movie.warnings, []);
+  // 渡さなければ、映さずに再生を続ける（警告は 1 回）。読み込みに失敗したときも同じ。
+  const without = await Movie.load(fixtures['video-vp6']);
+  for (let i = 0; i < 10; i++) without.advance();
+  assert.deepEqual(without.root.sortedChildren().map((v) => v.image()), [null, null]);
+  assert.deepEqual(without.warnings, ['VP6 video needs a decoder from the host (it will not be shown)']);
+  const failed = await Movie.load(fixtures['video-vp6'], { vp6: () => Promise.reject(new Error('HTTP 404')) });
+  for (let i = 0; i < 10; i++) failed.advance();
+  assert.equal(failed.root.sortedChildren()[0].image(), null);
+  assert.deepEqual(failed.warnings, ['VP6 decoder could not be loaded: HTTP 404 (VP6 video will not be shown)']);
+  // FLV: 再生を始めたときに読み込みを始め、読み込めるまでは絵が無い。読み込めたら、その時刻のフレームから映る。
+  const h = host();
+  let resolve;
+  h.vp6 = vp6Source(() => new Promise((r) => { resolve = r; }), h.warn);
+  const playback = new FlvPlayback(h, parseFLV(asset('video-vp6.flv')));
+  playback.play(0);
+  assert.equal(playback.image(), null);
+  resolve(VP6Decoder);
+  await new Promise((r) => setImmediate(r));
+  h.time = 520;
+  assert.deepEqual(playback.image().rgba, vp6Shown(vp6Reference('video-vp6.yuv.gz')[6]));
+  assert.deepEqual(h.warnings, []);
 });

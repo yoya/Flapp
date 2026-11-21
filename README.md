@@ -143,25 +143,38 @@ node tools/build.js flashlite-2  # 構成を選んで作る
 
 | 構成 | 外すもの | 大きさ | gzip |
 |---|---|---|---|
-| `full` | なし（最新の Flash Player 相当） | 539 KB | 187 KB |
-| `flashplayer-12` | なし（Flapp が実装している範囲では `full` と同じ） | 539 KB | 187 KB |
-| `flashplayer-8` | ActionScript 3、LZMA 圧縮、H.264 | 315 KB | 112 KB |
-| `flashlite-4` | LZMA 圧縮 | 537 KB | 186 KB |
+| `full` | なし（最新の Flash Player 相当） | 510 KB | 177 KB |
+| `flashplayer-12` | なし（Flapp が実装している範囲では `full` と同じ） | 510 KB | 177 KB |
+| `flashplayer-8` | ActionScript 3、LZMA 圧縮、H.264 | 286 KB | 102 KB |
+| `flashlite-4` | LZMA 圧縮 | 508 KB | 176 KB |
 | `flashlite-2` | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 229 KB | 81 KB |
 | `flashlite-1.1` | `flashlite-2` と同じ | 229 KB | 81 KB |
-| `no-video` | ビデオ | 487 KB | 169 KB |
-| `no-avm2` | ActionScript 3 | 318 KB | 114 KB |
+| `no-video` | ビデオ | 488 KB | 169 KB |
+| `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3、ビデオ | 267 KB | 95 KB |
-| `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
+| `as3-only` | ActionScript 1 / 2 | 417 KB | 147 KB |
 | `animation-only` | ActionScript 1 / 2 / 3、ビデオ | 154 KB | 57 KB |
 
-（大きさは 1.2.0 の時点。束ねない `web/flapp.js` は、75 ファイルで 1,215 KB、gzip で 410 KB です。）
+（大きさは、VP6 の復号器を別のファイルにした後の時点。束ねない `web/flapp.js` は、74 ファイルで 1,155 KB、gzip で 393 KB です。）
+
+ビデオを含む構成は、VP6 の復号器を束に入れず、`dist/flapp-vp6.js`（66 KB、gzip で 19 KB）として別に置きます（下の「VP6 の復号器」）。
 
 - 外した機能が要る SWF は、警告（`warning` のイベント）を残して、その機能なしで再生します。スクリプトを外した版は絵と音だけを再生し、
   ビデオを外した版は埋め込みのビデオを映さず、FLV は見つからない扱いにします。LZMA を外した版は、ZWS の SWF を読めません（`error` のイベント）。
 - Flash Lite と Flash Player の版ごとの構成は、「その版に無い機能を外したもの」です（Flapp が実装している範囲で）。その版のプレイヤーの
   細かな挙動まで再現するものではありません。Flash Lite の実機とは照合していません。
 - 構成の定義は [tools/profiles.js](tools/profiles.js)、外した機能の代わりに置くモジュールは [src/absent/](src/absent/) にあります。
+
+### VP6 の復号器
+
+VP6 の復号器（[src/video/vp6.js](src/video/vp6.js)）は LGPL 2.1 以降なので、プレイヤーの本体とは別のファイルにしてあります。
+本体は、VP6 のビデオ（埋め込みのビデオと FLV）を映すときにだけ、このファイルを読み込みます。VP6 を使わない SWF では読み込みません。
+
+- 束ねた版では、ビデオを含む構成のとき、`dist/flapp-vp6.js`（`src/video/vp6.js` そのもの。最小化しないので、配るファイルがそのままソースです）と、
+  LGPL の本文（`dist/LGPL-2.1-or-later.txt`）を、束の横に置きます。束はこのファイルを、束と同じ場所から読み込みます。
+- VP6 を配らないときは、`flapp-vp6.js` を置かないでください。VP6 のビデオだけが映らず（警告を残します）、ほかは同じに動きます。
+  ビデオを含まない構成の束は、VP6 のファイルを一度も読みに行きません。
+- 束ねない `web/flapp.js` は、`src/video/vp6.js` を読み込みます。
 
 ### Flash Lite の FSCommand2
 
@@ -204,6 +217,7 @@ const renderer = new CanvasRenderer(canvas);
 const movie = await Movie.load(bytes, {
   trace: console.log,
   rasterize: renderer.rasterizer(),
+  vp6: () => import('./src/video/vp6.js').then((m) => m.VP6Decoder), // VP6 の復号器（LGPL。VP6 のビデオを映すときにだけ呼ぶ。省略すると VP6 は映らない）
   media: (url) => (url === 'movie.flv' ? flvBytes : null), // NetStream.play(url) が再生する FLV（プレイヤーは自分では取りに行かない）
   network: { // 移動と読み込みを許すときだけ渡す（どの URL を許すかは、ここで決める）
     navigate: ({ url, target, method, data }) => window.open(url, target || '_self'),
@@ -248,6 +262,8 @@ SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
 - VP6 には公開された仕様が無いので、VP6 の復号（[src/video/vp6.js](src/video/vp6.js)）だけは、FFmpeg の復号器を JavaScript に移したものです。
   このファイルと、それに寄りかかるテスト用の素材の生成（[tools/mkvp6.js](tools/mkvp6.js)）は、FFmpeg と同じ LGPL 2.1 以降
   （[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）で、著作権の表示は vp6.js の冒頭にあります。
+  vp6.js はほかのモジュールを読み込まない 1 つのファイルで、プレイヤーの本体からは `Movie.load` の `vp6` オプションを通してだけ使います
+  （上の「VP6 の復号器」）。
 - インターレースの VP6 は、実機では映りません（埋め込みのビデオは黒くなり、FLV は何も映りません）が、Flapp は FFmpeg と同じに復号して
   映します。`Movie.load` に `matchPlayer: true` を渡すと（ブラウザのページでは URL に `?matchPlayer` を付けると）、実機と同じに映しません。
 - 実機は、埋め込みの H.263 / VP6 のビデオを整数倍で描くとき、横方向だけ、各画素の右端を右隣の画素と混ぜます。

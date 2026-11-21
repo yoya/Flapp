@@ -5,7 +5,6 @@
 import { scanMP3 } from '../audio/decode.js';
 import { H263Decoder, VideoError, readPictureHeader, toRGBA } from '../video/h263.js';
 import { ScreenVideo2Decoder, ScreenVideoDecoder } from '../video/screen.js';
-import { VP6Decoder } from '../video/vp6.js';
 
 // 1 回の更新で復号する量の上限（巻き戻しや飛び越しで、一度に大量に復号しないため）。フレーム数と、画素数の合計の両方で抑える。
 const MAX_CATCH_UP = 32;
@@ -21,9 +20,43 @@ const DECODERS = {
   h263: () => new H263Decoder(),
   screen: () => new ScreenVideoDecoder(),
   screen2: () => new ScreenVideo2Decoder(),
-  vp6: () => new VP6Decoder(),
-  vp6a: () => new VP6Decoder(true),
 };
+
+/**
+ * VP6 の復号器を、要るときに 1 回だけ用意する。
+ * VP6 の復号器（video/vp6.js）は LGPL で、プレイヤーの本体とは別のファイルとして配るので、プレイヤーは自分では読み込まない。
+ * ホストが Movie.load の vp6 オプションで渡す関数 load（() => VP6Decoder のクラス、その Promise、または null）を、VP6 のビデオを
+ * 映すときにだけ呼ぶ（VP6 を使わない SWF では、何も読み込まない）。
+ * 返す関数は、復号器のクラスを返す（読み込み中なら undefined、使えなければ null）。ready() は、読み込みを始めて、済むのを待つ。
+ */
+export function vp6Source(load, warn) {
+  let decoder; // undefined: まだ頼んでいない、Promise: 読み込み中、null: 使えない、それ以外: 復号器のクラス
+  const fail = (e) => {
+    decoder = null;
+    warn(`VP6 decoder could not be loaded: ${e?.message ?? e} (VP6 video will not be shown)`);
+  };
+  const settle = (value) => {
+    decoder = typeof value === 'function' ? value : null;
+    if (!decoder) warn('VP6 video needs a decoder from the host (it will not be shown)');
+  };
+  const source = () => {
+    if (decoder === undefined) {
+      try {
+        const value = load ? load() : null;
+        if (typeof value?.then === 'function') decoder = Promise.resolve(value).then(settle, fail);
+        else settle(value);
+      } catch (e) {
+        fail(e);
+      }
+    }
+    return decoder instanceof Promise ? undefined : decoder;
+  };
+  source.ready = async () => {
+    source();
+    await decoder;
+  };
+  return source;
+}
 
 // 真っ黒な絵。
 function black(width, height) {
@@ -70,9 +103,11 @@ class FrameSequence {
    * @param {{ width: number, height: number } | null} [box]  VP6 の埋め込みビデオ: 絵を切り取る大きさ。
    *   無ければ（FLV）、パケットの先頭の 1 バイトが、右と下から削る画素数
    * @param {boolean} [matchPlayer]  実機が映さないもの（インターレースの VP6）を、実機と同じに映さないか（Movie.load の同名のオプション）
+   * @param {(() => Function | null | undefined) | null} [vp6]  VP6 の復号器のクラスを返す関数（vp6Source）。無ければ VP6 は映らない
    */
-  constructor(codec, packet, keyBefore, warn, box = null, matchPlayer = false) {
+  constructor(codec, packet, keyBefore, warn, box = null, matchPlayer = false, vp6 = null) {
     this.codec = codec;
+    this.vp6 = vp6;
     this.box = box;
     this.matchPlayer = matchPlayer;
     this.hidden = false; // 実機に合わせて映していない（警告は 1 回だけ）
@@ -92,7 +127,15 @@ class FrameSequence {
   show(target) {
     if (this.failed || target === this.decoded) return this.image;
     if (!this.decoder || target < this.decoded) {
-      this.decoder = DECODERS[this.codec]();
+      if (this.codec === 'vp6' || this.codec === 'vp6a') {
+        const VP6Decoder = this.vp6 ? this.vp6() : null;
+        if (VP6Decoder === undefined) return this.image; // 復号器を読み込み中（読み込めたら、その時のフレームから映る）
+        if (!VP6Decoder) {
+          this.failed = true; // 復号器が無い（警告は vp6Source が出す）
+          return this.image;
+        }
+        this.decoder = new VP6Decoder(this.codec === 'vp6a');
+      } else this.decoder = DECODERS[this.codec]();
       this.decoded = this.keyBefore(target) - 1;
     }
     let pixels = MAX_CATCH_UP_PIXELS;
@@ -124,7 +167,7 @@ class FrameSequence {
         if (this.image?.width === picture.width && this.image.height === picture.height) Object.assign(this.image, { rgba, version: this.image.version + 1 });
         else this.image = { type: 'bitmap', width: picture.width, height: picture.height, rgba, version: 0 };
       } catch (e) {
-        if (!(e instanceof VideoError)) throw e;
+        if (e?.name !== 'VideoError') throw e; // VP6 の復号器は別のファイルなので、クラスではなく名前で見分ける
         this.warn(`video frame ${this.decoded}: ${e.message}`);
         this.failed = true; // 壊れたストリームは、そこで止める（前の絵は残す）
         break;
@@ -138,8 +181,9 @@ class FrameSequence {
  * SWF に埋め込まれたビデオ（DefineVideoStream と VideoFrame）のフレーム列。
  * @param {{ width: number, height: number }} size  DefineVideoStream の幅と高さ
  * @param {boolean} [matchPlayer]  Movie.load の同名のオプション
+ * @param {(() => Function | null | undefined) | null} [vp6]  VP6 の復号器（vp6Source）
  */
-export function embeddedSequence(codec, frames, warn, size, matchPlayer = false) {
+export function embeddedSequence(codec, frames, warn, size, matchPlayer = false, vp6 = null) {
   // Screen Video のフレームは、先頭に FLV のビデオタグと同じ 1 バイト（フレームの種類とコーデック）が付いている。
   // 仕様書の表には無いが、実機はこの 1 バイトが無いと何も表示しない（実機で確認）。
   const packet = codec === 'screen' ? (n) => frames.get(n)?.subarray(1) : (n) => frames.get(n);
@@ -163,7 +207,7 @@ export function embeddedSequence(codec, frames, warn, size, matchPlayer = false)
   };
   // VP6 のデータには、FLV のような先頭の 1 バイトは無い。絵は、DefineVideoStream の大きさに切り取られる（どちらも実機で確認）。
   const box = codec === 'vp6' || codec === 'vp6a' ? { width: size.width, height: size.height } : null;
-  return new FrameSequence(codec, packet, keyBefore, warn, box, matchPlayer);
+  return new FrameSequence(codec, packet, keyBefore, warn, box, matchPlayer, vp6);
 }
 
 const AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
@@ -234,7 +278,8 @@ function flvSound(flv, warn) {
  */
 export class FlvPlayback {
   /**
-   * @param {{ now: () => number, sounds: object, warn: (message: string) => void, matchPlayer?: boolean }} movie
+   * @param {{ now: () => number, sounds: object, warn: (message: string) => void, matchPlayer?: boolean, vp6?: Function }} movie
+   *   vp6 は、VP6 の復号器を返す関数（vp6Source。Movie では movie.vp6）
    * @param {object} flv  parseFLV の結果
    */
   constructor(movie, flv) {
@@ -247,7 +292,8 @@ export class FlvPlayback {
     this.fed = 0; // ホストのデコーダに入れ終えたフレームの数
     if (decodable(codec) || codec === 'screen2') {
       const keyBefore = (target) => { for (let n = target; n > 0; n--) if (flv.video[n]?.key) return n; return 0; };
-      this.sequence = new FrameSequence(codec, (n) => flv.video[n]?.data, keyBefore, warn, null, movie.matchPlayer ?? false);
+      this.sequence = new FrameSequence(codec, (n) => flv.video[n]?.data, keyBefore, warn, null, movie.matchPlayer ?? false, movie.vp6 ?? null);
+      if (codec === 'vp6' || codec === 'vp6a') movie.vp6?.(); // 復号器の読み込みを、最初の絵を出す前に始めておく
     } else if (codec === 'avc') {
       // 設定（シーケンスヘッダ）を渡してデコーダを開く。絵になるフレームだけを、復号の順に並べておく。
       const header = flv.video.find((t) => t.packetType === 0);

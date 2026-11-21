@@ -25,7 +25,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
  *
- * A copy of the GNU Lesser General Public License is in LICENSES/LGPL-2.1-or-later.txt.
+ * A copy of the GNU Lesser General Public License is in LICENSES/LGPL-2.1-or-later.txt of the Flapp
+ * repository (https://github.com/yoya/Flapp, src/video/vp6.js), and next to this file as
+ * LGPL-2.1-or-later.txt when it is distributed as flapp-vp6.js.
  */
 
 // VP6 の復号。Flapp のほかの部分は仕様書だけから書いているが、VP6 は公開された仕様が無いので、このファイルだけは
@@ -37,7 +39,17 @@
 //
 // 入力は信用できないデータとして扱う。配列の外を読まない・書かないこと、大きさの上限（MAX_VIDEO_PIXELS）を守ることは、
 // 移したコードの側で保証する（FFmpeg が余白の付いたバッファに頼っている所は、座標を丸めて読む形にしてある）。
-import { MAX_VIDEO_PIXELS, VideoError } from './h263.js';
+//
+// このファイルは、プレイヤーの本体（MIT）とは別のファイルとして配り、VP6 のビデオを映すときにだけ読み込まれる
+// （Movie.load の vp6 オプション）。そのため、ほかのモジュールを読み込まない。下の 2 つは video/h263.js の同名のものと同じ値・同じ名前で、
+// プレイヤーは復号の失敗を、例外の名前（'VideoError'）で見分ける。
+const MAX_VIDEO_PIXELS = 1 << 22; // 1 フレームの画素数の上限（2048×2048 相当）
+class VideoError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'VideoError';
+  }
+}
 
 // ---- 表（FFmpeg の vp56data.c と vp6data.h から、値を変えずに取り出したもの。多次元の表は 1 列に並べてある） ----
 const COEFF_PARSE_TABLE = new Uint8Array([

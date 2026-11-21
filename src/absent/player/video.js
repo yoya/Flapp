@@ -4,3 +4,5 @@ export const embeddedSequence = () => null;
 export class FlvPlayback {
   constructor() { throw Object.assign(new Error('video is not included in this build'), { name: 'VideoError' }); }
 }
+// VP6 の復号器も読み込まない（ビデオを映さないので、ホストが渡した読み込みの関数は呼ばない）。
+export const vp6Source = () => Object.assign(() => null, { ready: async () => {} });

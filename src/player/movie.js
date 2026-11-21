@@ -9,7 +9,7 @@ import { VideoScriptObject } from '../avm1/video.js';
 import { AVMFunction } from '../avm1/object.js';
 import { Drawing } from './drawing.js';
 import { SoundMixer, buildStream } from './sound.js';
-import { decodable, embeddedSequence } from './video.js';
+import { decodable, embeddedSequence, vp6Source } from './video.js';
 import { parseDefineVideoStream, parseVideoFrame } from '../swf/video.js';
 import { parseDefineButtonSound, parseDefineSound, parseSoundStreamBlock, parseSoundStreamHead, parseStartSound } from '../swf/sound.js';
 import { imageFile, parseBitmap } from '../swf/bitmap.js';
@@ -156,6 +156,10 @@ export class Movie {
    *   media: (url) => Uint8Array | Promise<Uint8Array> | null   NetStream.play(url) が再生する FLV ファイルを返す関数。
    *             プレイヤーは自分ではファイルを取りに行かない。省略すると、どの URL も「見つからない」扱いになる
    *   video: H.264 の復号（video/webcodecs.js の冒頭を参照。ブラウザでは WebCodecsVideo）。省略すると、H.264 の FLV は映らない
+   *   vp6: () => VP6Decoder | Promise<VP6Decoder> | null   VP6 の復号器（video/vp6.js の VP6Decoder のクラス）を返す関数。
+   *             VP6 の復号器は LGPL で、本体とは別のファイルとして配るので、プレイヤーは自分では読み込まない。この関数は、VP6 の
+   *             ビデオを映すときに 1 回だけ呼ぶ（VP6 を使わない SWF では呼ばない）。例: () => import('./vp6.js').then((m) => m.VP6Decoder)。
+   *             省略すると、VP6 のビデオは映らない（警告を残す）
    *   network: 移動と通信を、ホストに任せるための関数（省略すると、どちらも行わない。要求は記録だけして、読み込みは
    *             失敗として伝える）。プレイヤーは自分では通信しない。SWF を信用するか、どの URL を許すかは、ホストが決める。
    *             navigate: ({ url, target, method, data }) => void   getURL / navigateToURL などによる移動
@@ -189,6 +193,8 @@ export class Movie {
   static async load(bytes, options = {}) {
     const movie = new Movie(await parseSWF(bytes, options), options);
     await movie.#decodeBitmaps(movie.library);
+    // 埋め込みの VP6 があれば、最初のフレームを描く前に復号器を用意しておく（FLV や、後から読み込む SWF では、要るときに読む）。
+    if ([...movie.dictionary.values()].some((d) => d.type === 'video' && (d.codec === 'vp6' || d.codec === 'vp6a') && d.numFrames > 0)) await movie.vp6.ready();
     if (movie.library.imports?.length) {
       await movie.#importAssets(movie.library);
       movie.#createRoot();
@@ -211,7 +217,7 @@ export class Movie {
   #instanceNames = 0;
 
   /** 直接は使わず Movie.load() を使う（ビットマップの展開が非同期のため）。 */
-  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage, decodeImage, fscommand2 } = {}) {
+  constructor(swf, { maxInstances = 100000, maxBitmapPixels = 1 << 26, trace, now, random, avm = {}, encoding = 'windows-1252', onRequest, language = 'en', audio, rasterize, media, video, matchPlayer = false, network, storage, decodeImage, fscommand2, vp6 } = {}) {
     this.media = media ?? null;
     this.decodeImage = decodeImage ?? null;
     this.network = network ?? null;
@@ -219,6 +225,7 @@ export class Movie {
     this.measureText = null; // (文字, 書式, フォント名の代わり) => 幅（twips）。描く側（render/canvas.js の prepare）が、端末のフォントで測る関数を入れる
     this.matchPlayer = matchPlayer === true;
     this.video = video ?? null;
+    this.vp6 = vp6Source(vp6 ?? null, (message) => this.warn(message)); // VP6 の復号器のクラスを返す（player/video.js の vp6Source）
     this.rasterize = rasterize ? (d, m, width, height) => rasterize(this, d, m, width, height) : null;
     this.boundFields = new Set(); // 変数と連動しているテキストフィールド
     this.requests = []; // スクリプトが要求した URL（実行はしない）。{ kind, url, target, method }
@@ -2155,7 +2162,7 @@ export class VideoObject extends DisplayObject {
     if (this.source) return this.source.image();
     const { codec, frames } = this.character;
     if (!frames?.size || !decodable(codec)) return null;
-    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`), this.character, this.movie.matchPlayer);
+    this.#sequence ??= embeddedSequence(codec, frames, (message) => this.movie.warn(`video ${this.character.id}: ${message}`), this.character, this.movie.matchPlayer, this.movie.vp6);
     return this.#sequence.show(this.ratio);
   }
 

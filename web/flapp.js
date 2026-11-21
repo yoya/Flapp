@@ -191,6 +191,12 @@ const audioOutput = () => {
 };
 const video = WebCodecsVideo.supported ? new WebCodecsVideo() : undefined; // H.264 は、ブラウザのデコーダで復号する
 
+// VP6 の復号器（src/video/vp6.js。LGPL 2.1 以降）は、本体とは別のファイルで、VP6 のビデオを映すときにだけ読み込む。
+// 束ねた版では、tools/build.js がこの行を、束の横に置く flapp-vp6.js に書き換える（VP6 を置かない構成では null にして、読みに行かない）。
+const VP6_URL = new URL('../src/video/vp6.js', import.meta.url).href;
+/** VP6 の復号器のクラスを読み込む関数（Movie.load の vp6 オプション）。VP6 を置かない構成では null。 */
+export const loadVP6 = VP6_URL ? () => import(VP6_URL).then((m) => m.VP6Decoder) : null;
+
 // SWF 5 以前の文字列の文字コードの既定（実機は OS の言語に合わせるので、ブラウザの言語から決める）。
 const defaultEncoding = () => {
   const language = navigator.language.toLowerCase();
@@ -364,7 +370,7 @@ export class FlappPlayer extends HTMLElement {
     let movie;
     try {
       movie = await Movie.load(source, {
-        trace, audio: audioOutput(), video, media, network: http?.network, storage: http ? trustedStorage(label || base || '') : undefined,
+        trace, audio: audioOutput(), video, vp6: loadVP6, media, network: http?.network, storage: http ? trustedStorage(label || base || '') : undefined,
         onRequest: ({ kind, url }) => { if (!http) this.dispatchEvent(new CustomEvent('trace', { detail: `[${kind}] ${url}（信用していないので、開きも読みもしません）` })); },
         matchPlayer: this.hasAttribute('match-player'), rasterize: this.#renderer.rasterizer(), decodeImage,
         encoding: this.getAttribute('encoding') ?? defaultEncoding(), language: navigator.language.slice(0, 2),

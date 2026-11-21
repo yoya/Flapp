@@ -138,25 +138,38 @@ The usage is the same; only the file you load changes.
 
 | Profile | Left out | Size | gzip |
 |---|---|---|---|
-| `full` | nothing (the latest Flash Player) | 539 KB | 187 KB |
-| `flashplayer-12` | nothing (the same as `full`, within what Flapp implements) | 539 KB | 187 KB |
-| `flashplayer-8` | ActionScript 3, LZMA compression, H.264 | 315 KB | 112 KB |
-| `flashlite-4` | LZMA compression | 537 KB | 186 KB |
+| `full` | nothing (the latest Flash Player) | 510 KB | 177 KB |
+| `flashplayer-12` | nothing (the same as `full`, within what Flapp implements) | 510 KB | 177 KB |
+| `flashplayer-8` | ActionScript 3, LZMA compression, H.264 | 286 KB | 102 KB |
+| `flashlite-4` | LZMA compression | 508 KB | 176 KB |
 | `flashlite-2` | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 229 KB | 81 KB |
 | `flashlite-1.1` | the same as `flashlite-2` | 229 KB | 81 KB |
-| `no-video` | video | 487 KB | 169 KB |
-| `no-avm2` | ActionScript 3 | 318 KB | 114 KB |
+| `no-video` | video | 488 KB | 169 KB |
+| `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3, video | 267 KB | 95 KB |
-| `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
+| `as3-only` | ActionScript 1 / 2 | 417 KB | 147 KB |
 | `animation-only` | ActionScript 1 / 2 / 3, video | 154 KB | 57 KB |
 
-(Sizes are as of 1.2.0. The unbundled `web/flapp.js` is 75 files, 1,215 KB, or 410 KB with gzip.)
+(Sizes are as of the change that moved the VP6 decoder into its own file. The unbundled `web/flapp.js` is 74 files, 1,155 KB, or 393 KB with gzip.)
+
+Profiles with video do not include the VP6 decoder in the bundle; it is placed separately as `dist/flapp-vp6.js` (66 KB, 19 KB with gzip). See "The VP6 decoder" below.
 
 - A SWF that needs a feature that was left out plays without it and leaves a warning (the `warning` event). A build without scripts plays only the pictures and sound.
   A build without video does not show embedded video and treats FLV files as not found. A build without LZMA cannot read ZWS files (the `error` event).
 - The profiles for Flash Lite and Flash Player versions leave out the features that version does not have (within what Flapp implements). They do not reproduce
   the detailed behavior of that version's player. They have not been compared with a real Flash Lite device.
 - The profiles are defined in [tools/profiles.js](tools/profiles.js). The modules that stand in for the features left out are in [src/absent/](src/absent/).
+
+### The VP6 decoder
+
+The VP6 decoder ([src/video/vp6.js](src/video/vp6.js)) is under LGPL 2.1 or later, so it is kept in a file separate from the player itself.
+The player loads that file only when it shows VP6 video (embedded video or FLV). SWFs that do not use VP6 never load it.
+
+- In the bundled builds, profiles with video place `dist/flapp-vp6.js` (`src/video/vp6.js` as it is; it is not minified, so the distributed file is its own source)
+  and the LGPL text (`dist/LGPL-2.1-or-later.txt`) next to the bundles. A bundle loads the file from the same place as itself.
+- If you do not want to distribute VP6, leave `flapp-vp6.js` out. Only VP6 video goes unshown (with a warning); everything else works the same.
+  Bundles of profiles without video never try to load the VP6 file.
+- The unbundled `web/flapp.js` loads `src/video/vp6.js`.
 
 ### FSCommand2 of Flash Lite
 
@@ -199,6 +212,7 @@ const renderer = new CanvasRenderer(canvas);
 const movie = await Movie.load(bytes, {
   trace: console.log,
   rasterize: renderer.rasterizer(),
+  vp6: () => import('./src/video/vp6.js').then((m) => m.VP6Decoder), // the VP6 decoder (LGPL; called only to show VP6 video; without it, VP6 is not shown)
   media: (url) => (url === 'movie.flv' ? flvBytes : null), // the FLV that NetStream.play(url) plays (the player does not fetch it by itself)
   network: { // pass this only when navigation and loading are allowed (decide here which URLs are allowed)
     navigate: ({ url, target, method, data }) => window.open(url, target || '_self'),
@@ -240,6 +254,7 @@ To see the contents of a SWF, use `node tools/swfdump.js file.swf`.
   for each font name: `_sans`, `_serif`, and `_typewriter` are drawn as Helvetica, Times, and Courier (the character widths are measured with the browser's fonts).
 - The VP6 decoder ([src/video/vp6.js](src/video/vp6.js)) is a JavaScript port of FFmpeg's decoder, because VP6 has no published specification. That file and the test material generation that depends on it ([tools/mkvp6.js](tools/mkvp6.js))
   are under the same LGPL 2.1 or later as FFmpeg ([LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)). The copyright notice is at the top of vp6.js.
+  vp6.js is a single file that imports no other module, and the player uses it only through the `vp6` option of `Movie.load` (see "The VP6 decoder" above).
 - Interlaced VP6 does not show on the real player (embedded video comes out black, and FLV shows nothing), but Flapp decodes it the same way as FFmpeg and shows it.
   Passing `matchPlayer: true` to `Movie.load` (on a browser page, adding `?matchPlayer` to the URL) makes it match the real player.
 - When the real player draws embedded H.263 / VP6 video at an integer scale, it blends each pixel's right edge with the pixel to its right, horizontally only.

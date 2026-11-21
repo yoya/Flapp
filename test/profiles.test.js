@@ -9,6 +9,7 @@ import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Movie as RepoMovie } from '../src/player/movie.js';
 import { PROFILES, materialize, replaced } from '../tools/profiles.js';
+import { VP6Decoder } from '../src/video/vp6.js';
 
 const fixtures = fileURLToPath(new URL('fixtures/', import.meta.url));
 const files = readdirSync(fixtures).filter((f) => f.endsWith('.swf')).sort();
@@ -22,7 +23,7 @@ const movieOf = async (name) => (await import(pathToFileURL(join(materialize(nam
 async function play(Movie, file, options = {}) {
   let time = 0;
   try {
-    const movie = await Movie.load(readFileSync(join(fixtures, file)), { now: () => time, random: () => 0.5, encoding: file.includes('-sjis') ? 'shift_jis' : undefined, ...options });
+    const movie = await Movie.load(readFileSync(join(fixtures, file)), { now: () => time, random: () => 0.5, encoding: file.includes('-sjis') ? 'shift_jis' : undefined, vp6: () => VP6Decoder, ...options });
     for (let i = 0; i < 40; i++) {
       time += 1000 / (movie.frameRate || 12);
       movie.advance();
