@@ -1,3 +1,5 @@
+日本語 | [English](README.en.md)
+
 # Flapp
 
 Claude Code に Flash 仕様書を渡して生成された Flash Player です。
