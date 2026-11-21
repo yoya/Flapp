@@ -39,6 +39,9 @@
   tbody tr.sel { background: var(--sel); }
   .tag-section { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--chip); color: var(--muted); }
   .detail { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .thumb { width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; background: var(--chip); border-radius: 6px; color: var(--muted); }
+  .big { margin: 0 0 12px; padding: 12px; background: var(--chip); border-radius: 8px; overflow: auto; max-height: 520px; text-align: center; }
+  .big canvas { max-width: 100%; height: auto; background: repeating-conic-gradient(#8884 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
   pre { background: var(--chip); padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 6px 0 0; }
   .hidden { display: none; }
   .notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; color: var(--warn); }
@@ -69,7 +72,7 @@
     <div class="toolbar" id="filters"></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>深さ</th><th>位置</th><th>タグ</th><th>区分</th><th>ID</th><th>内容</th><th>長さ</th></tr></thead>
+        <thead><tr><th>#</th><th>深さ</th><th>位置</th><th>タグ</th><th>区分</th><th>ID</th><th>見本</th><th>内容</th><th>長さ</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -92,7 +95,8 @@
 </script>
 <script type="module">
 window.flappInspectorReady = true;
-import { inspectSWF } from './inspect.js';
+import { inspectSWF, previewKind } from './inspect.js';
+import { drawPreview, lazyThumbs } from './preview.js';
 
 const SECTION_NAME = { control: '制御', display: '表示', action: 'スクリプト', definition: '定義', sprite: 'スプライト', sound: '音', video: '動画', other: 'その他' };
 const $ = (id) => document.getElementById(id);
@@ -149,20 +153,29 @@ function renderFilters() {
   $('filters').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; current = b.dataset.s; renderFilters(); renderRows(); };
 }
 
+// 見本を出せるか（シェイプ・スプライト・画像の定義）
+const previewable = (t) => t.id !== null && previewKind(t.code) !== null;
+let thumbs = null;
+
 function renderRows() {
   const rows = report.tags.filter((t) => current === 'all' || t.section === current);
   $('rows').innerHTML = rows.map((t) => `<tr data-i="${t.index}">
       <td>${t.index}</td><td>${t.depth ? '　'.repeat(t.depth) + t.depth : 0}</td><td>${t.offset}</td>
       <td>${esc(t.name)}</td><td><span class="tag-section">${esc(SECTION_NAME[t.section] ?? t.section)}</span></td>
-      <td>${t.id ?? ''}</td><td class="sum">${t.error ? `<span class="warn">${esc(t.summary)}</span>` : esc(t.summary)}</td><td>${t.length}</td></tr>`).join('');
+      <td>${t.id ?? ''}</td><td>${previewable(t) ? `<div class="thumb" data-i="${t.index}"></div>` : ''}</td>
+      <td class="sum">${t.error ? `<span class="warn">${esc(t.summary)}</span>` : esc(t.summary)}</td><td>${t.length}</td></tr>`).join('');
+  thumbs?.disconnect();
+  thumbs = lazyThumbs($('rows'), report);
 }
 
-function showDetail(t) {
+let detailToken = 0;
+async function showDetail(t) {
+  const token = ++detailToken;
   document.querySelectorAll('#rows tr.sel').forEach((r) => r.classList.remove('sel'));
   document.querySelector(`#rows tr[data-i="${t.index}"]`)?.classList.add('sel');
   const parent = t.parentSprite !== null ? `スプライト ${t.parentSprite} の中` : 'タイムライン';
   const details = t.details.length ? `<div class="kv">${kv(t.details)}</div>` : '';
-  $('detail').innerHTML = `<h2 style="margin-top:0">${t.index}: ${esc(t.name)}（コード ${t.code}）</h2>
+  $('detail').innerHTML = `${previewable(t) ? '<div class="big" id="big">描いています…</div>' : ''}<h2 style="margin-top:0">${t.index}: ${esc(t.name)}（コード ${t.code}）</h2>
     <div class="kv">${kv([['位置', `展開後の ${t.offset} バイト目（長さ ${t.length}）`], ['場所', `${parent}、フレーム ${t.frame}`], ['区分', SECTION_NAME[t.section] ?? t.section], ['ID', t.id ?? '（なし）']])}</div>
     ${t.error ? `<p class="warn">解釈できません: ${esc(t.error)}</p>` : ''}
     ${details}
@@ -170,6 +183,17 @@ function showDetail(t) {
     <pre>${esc(t.hex)}</pre>`;
   $('detail').classList.remove('hidden');
   $('detail').scrollIntoView({ block: 'nearest' });
+  if (!previewable(t)) return;
+  let big = null;
+  try {
+    big = await drawPreview(report, t, 480);
+  } catch (e) {
+    big = null;
+    if (token === detailToken && $('big')) $('big').textContent = `描けません: ${e.message}`;
+    return;
+  }
+  if (token !== detailToken || !$('big')) return; // 別の行を選んだ後は、描いた結果を捨てる
+  $('big').replaceChildren(big ?? '描けません');
 }
 
 function show(r) {

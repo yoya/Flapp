@@ -11,6 +11,8 @@ import { Reader } from '../src/swf/reader.js';
 import { parseDefineEditText, parseDefineFont, parseDefineText } from '../src/swf/text.js';
 import { parseDefineSound } from '../src/swf/sound.js';
 import { parseABC, multinameText } from '../src/avm2/abc.js';
+import { parseDefineShape } from '../src/swf/shape.js';
+import { parseDefineButton } from '../src/swf/display.js';
 
 const SECTION = {
   control: [0, 1, 9, 41, 43, 58, 64, 65, 69, 77, 78, 92, 93],
@@ -161,6 +163,7 @@ export async function inspectSWF(bytes) {
         summary.definitions[kind] = (summary.definitions[kind] ?? 0) + 1;
       }
       summary.sections[section] = (summary.sections[section] ?? 0) + 1;
+      row.raw = t; // プレビュー用（描画のための元のタグ）。JSON にはしない
       tags.push(row);
       if (code === 1) frame++;
       if (code === 39 && t.tags) {
@@ -173,5 +176,124 @@ export async function inspectSWF(bytes) {
   walk(swf.tags, 0, null, 1);
   summary.tagCount = tags.length;
   summary.bytes = swf.fileLength;
-  return { header, summary, tags };
+  return { header, summary, tags, swf, jpegTables: swf.tags.find((t) => t.code === 8)?.body ?? null };
+}
+
+// --- プレビュー用の最小の SWF ---
+// 定義（シェイプ・スプライト）を 1 つ置いただけの SWF を作り、web/preview.js が既存の描画で描く。
+// 必要な定義（塗りの画像、置かれているキャラクタ、JPEG テーブル）も、元の順のまま入れる。
+
+/** プレビューできる定義の種類（タグ番号 → 'shape' | 'sprite' | 'image'）。 */
+export function previewKind(code) {
+  if ([2, 22, 32, 83].includes(code)) return 'shape';
+  if (code === 39) return 'sprite';
+  if ([6, 20, 21, 35, 36, 90].includes(code)) return 'image';
+  return null;
+}
+
+// 置かれたキャラクタの番号（PlaceObject・PlaceObject2・PlaceObject3）。
+function placedIds(tags) {
+  const ids = [];
+  for (const t of tags) {
+    const b = t.body;
+    if (t.code === 4 && b.length >= 2) ids.push(b[0] | (b[1] << 8));
+    if (t.code === 26 && b.length >= 5 && (b[0] & 0x02)) ids.push(b[3] | (b[4] << 8));
+    if (t.code === 70 && b.length >= 6 && (b[0] & 0x02)) ids.push(b[4] | (b[5] << 8));
+  }
+  return ids;
+}
+
+// シェイプの塗りと線の画像の番号（レコードの途中で塗りが変わるものも含む）。
+function shapeImageIds(tag) {
+  const ids = [];
+  const take = (styles) => { for (const st of styles ?? []) if (st.type === 'bitmap') ids.push(st.bitmapId); };
+  try {
+    const shape = parseDefineShape(tag);
+    take(shape.fillStyles);
+    for (const rec of shape.records ?? []) take(rec.fillStyles);
+  } catch {
+    // 読めないシェイプは、画像の依存を持たないものとして扱う（描けなければ、見本は空になる）
+  }
+  return ids;
+}
+
+/**
+ * 定義 id（シェイプかスプライト）を 1 つだけ置いた、最小の SWF（無圧縮）。無い、またはそれ以外の種類なら null。
+ * 置かれているキャラクタ（ボタン・スプライト・シェイプ・テキスト）と、塗りの画像、必要なら JPEG テーブルも、元の順のまま入れる。
+ * 大きさは、シェイプなら形の範囲、スプライトなら元の SWF のステージ。
+ */
+export function miniSWF(swf, id) {
+  const top = swf.tags.filter((t) => t.code !== 0);
+  const byId = new Map();
+  for (const t of top) if (t.body.length >= 2 && DEFINITION_ID.has(t.code)) byId.set(t.body[0] | (t.body[1] << 8), t);
+  const root = byId.get(id);
+  if (!root || previewKind(root.code) === null || previewKind(root.code) === 'image') return null; // 画像は、直接復号して描く（web/preview.js）
+  // 依存を集める。シェイプは塗りの画像、スプライトは置かれたもの、ボタンは状態ごとに置かれたもの。
+  const need = new Set([id]);
+  const queue = [root];
+  while (queue.length) {
+    const t = queue.pop();
+    let deps = [];
+    if (previewKind(t.code) === 'shape') deps = shapeImageIds(t);
+    if (t.code === 39 && t.tags) deps = placedIds(t.tags);
+    if (t.code === 7 || t.code === 34) deps = buttonIds(t);
+    for (const d of deps) {
+      if (need.has(d) || !byId.has(d)) continue;
+      need.add(d);
+      queue.push(byId.get(d));
+    }
+  }
+  const usesImage = [...need].some((d) => previewKind(byId.get(d).code) === 'image');
+  const picked = top.filter((t) => t.code === 8 ? usesImage : (t.body.length >= 2 && need.has(t.body[0] | (t.body[1] << 8)) && DEFINITION_ID.has(t.code)));
+  // 形の範囲（シェイプ）か、元のステージ（スプライト）を、ステージの大きさにする
+  let frame = swf.frameSize;
+  if (previewKind(root.code) === 'shape') {
+    const b = parseDefineShape(root).bounds;
+    frame = { xmin: b.xmin, xmax: b.xmax, ymin: b.ymin, ymax: b.ymax };
+  }
+  // タグの並び: 元の SWF のタグを、そのまま（ヘッダを付け直して）並べる
+  const parts = [];
+  const tagBytes = (code, body) => {
+    const len = body.length;
+    const out = len < 63 ? [((code << 6) | len) & 0xff, ((code << 6) | len) >> 8] : [((code << 6) | 63) & 0xff, ((code << 6) | 63) >> 8, len & 0xff, (len >> 8) & 0xff, (len >> 16) & 0xff, (len >>> 24) & 0xff];
+    return Uint8Array.from([...out, ...body]);
+  };
+  for (const t of picked) parts.push(tagBytes(t.code, t.body));
+  // PlaceObject2（深さ 1 に id、単位行列）・ShowFrame・End
+  parts.push(tagBytes(26, Uint8Array.from([0x06, 0x01, 0x00, id & 0xff, (id >> 8) & 0xff, 0x00])), tagBytes(1, new Uint8Array(0)), tagBytes(0, new Uint8Array(0)));
+  // ヘッダ: FWS、版、長さ、ステージの RECT、フレームレート（8.8）、フレーム数 1
+  const rect = rectBits(frame);
+  const fps = Math.round(swf.frameRate * 256);
+  const head = [0x46, 0x57, 0x53, swf.version, 0, 0, 0, 0, ...rect, fps & 0xff, (fps >> 8) & 0xff, 1, 0];
+  const total = head.length + parts.reduce((n, p) => n + p.length, 0);
+  head[4] = total & 0xff; head[5] = (total >> 8) & 0xff; head[6] = (total >> 16) & 0xff; head[7] = (total >>> 24) & 0xff;
+  const out = new Uint8Array(total);
+  out.set(Uint8Array.from(head), 0);
+  let at = head.length;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+// ボタンの状態ごとに置かれたキャラクタ。
+function buttonIds(tag) {
+  try {
+    return parseDefineButton(tag).records.map((rec) => rec.characterId);
+  } catch {
+    return [];
+  }
+}
+
+// RECT（ビット列）。値は twips。
+function rectBits({ xmin, xmax, ymin, ymax }) {
+  const vals = [xmin, xmax, ymin, ymax];
+  const bitsOf = (v) => { let n = 1; while ((v < 0 ? ~v : v) >= 2 ** (n - 1)) n++; return n; };
+  const n = Math.max(1, ...vals.map(bitsOf));
+  const bits = [];
+  const put = (v, width) => { for (let i = width - 1; i >= 0; i--) bits.push((v >>> i) & 1); };
+  put(n, 5);
+  for (const v of vals) put(v < 0 ? v + 2 ** n : v, n);
+  while (bits.length % 8) bits.push(0);
+  const out = [];
+  for (let i = 0; i < bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8).join(''), 2));
+  return out;
 }

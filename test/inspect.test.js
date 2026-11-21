@@ -72,3 +72,29 @@ test('すべてのテスト用 SWF を、例外なく読める（行の解釈エ
     assert.deepEqual(errors, [], file);
   }
 });
+
+test('見本: スプライトは、置かれたボタンとシェイプを含む最小の SWF になる', async () => {
+  const { miniSWF } = await import('../web/inspect.js');
+  const { parseSWF } = await import('../src/swf/parse.js');
+  const r = await inspectSWF(fixture('button'));
+  const bytes = miniSWF(r.swf, 6);
+  const mini = await parseSWF(bytes);
+  assert.deepEqual(mini.tags.map((t) => t.code), [2, 7, 39, 26, 1, 0]);
+  assert.equal(mini.warnings.length, 0);
+  assert.equal(mini.tags.at(-2).code, 1); // ShowFrame
+});
+
+test('見本: シェイプは、形の範囲を大きさにした SWF になり、画像は対象外', async () => {
+  const { miniSWF } = await import('../web/inspect.js');
+  const { parseSWF } = await import('../src/swf/parse.js');
+  const r = await inspectSWF(fixture('button'));
+  const shape = r.tags.find((t) => t.code === 2 && t.id === 1);
+  assert.ok(shape, 'the fixture has shape 1');
+  const mini = await parseSWF(miniSWF(r.swf, 1));
+  assert.deepEqual(mini.tags.map((t) => t.code), [2, 26, 1, 0]);
+  const { parseDefineShape } = await import('../src/swf/shape.js');
+  assert.deepEqual(mini.frameSize, parseDefineShape(shape.raw).bounds); // ステージは、形の範囲と同じ
+  assert.equal(miniSWF(r.swf, 999), null);
+  const img = await inspectSWF(fixture('bitmap-lossless'));
+  assert.equal(miniSWF(img.swf, 1), null);
+});
