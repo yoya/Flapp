@@ -119,6 +119,45 @@ need an external keyboard.
 
 This was checked in a desktop browser set to a smartphone screen size and touch input. It has not yet been checked on real devices (iPhone or Android).
 
+## Building a player with fewer features
+
+You can build a version that leaves out the features you do not use, so less JavaScript is loaded. It is bundled into one file and minified.
+
+```bash
+npm run build                    # build every profile into dist/
+node tools/build.js flashlite-2  # build the profiles you name
+```
+
+Bundling uses [bun](https://bun.sh) (it is not needed just to play; `web/flapp.js` works without bundling).
+The usage is the same; only the file you load changes.
+
+```html
+<script type="module" src="dist/flapp.flashlite-2.min.js"></script>
+<flapp-player src="movie.swf"></flapp-player>
+```
+
+| Profile | Left out | Size | gzip |
+|---|---|---|---|
+| `full` | nothing (the latest Flash Player) | 539 KB | 187 KB |
+| `flashplayer-12` | nothing (the same as `full`, within what Flapp implements) | 539 KB | 187 KB |
+| `flashplayer-8` | ActionScript 3, LZMA compression, H.264 | 315 KB | 112 KB |
+| `flashlite-4` | LZMA compression | 537 KB | 186 KB |
+| `flashlite-2` | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 229 KB | 81 KB |
+| `flashlite-1.1` | the same as `flashlite-2` | 229 KB | 81 KB |
+| `no-video` | video | 487 KB | 169 KB |
+| `no-avm2` | ActionScript 3 | 318 KB | 114 KB |
+| `no-avm2-no-video` | ActionScript 3, video | 267 KB | 95 KB |
+| `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
+| `animation-only` | ActionScript 1 / 2 / 3, video | 154 KB | 57 KB |
+
+(Sizes are as of 1.1.0. The unbundled `web/flapp.js` is 75 files, 1,212 KB, or 409 KB with gzip.)
+
+- A SWF that needs a feature that was left out plays without it and leaves a warning (the `warning` event). A build without scripts plays only the pictures and sound.
+  A build without video does not show embedded video and treats FLV files as not found. A build without LZMA cannot read ZWS files (the `error` event).
+- The profiles for Flash Lite and Flash Player versions leave out the features that version does not have (within what Flapp implements). They do not reproduce
+  the detailed behavior of that version's player. They have not been compared with a real Flash Lite device.
+- The profiles are defined in [tools/profiles.js](tools/profiles.js). The modules that stand in for the features left out are in [src/absent/](src/absent/).
+
 ## Viewing the contents of a SWF (SWF inspector)
 
 `web/inspect.html` shows a SWF's header, summary, and list of tags as a table. Selecting a row shows the contents of that tag (its decoded fields and a hex dump of the first 256 bytes).

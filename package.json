@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "build": "node tools/build.js",
     "fixtures": "node tools/mkfixtures.js",
     "oracle": "node tools/oracle.js",
     "serve": "node tools/serve.js"

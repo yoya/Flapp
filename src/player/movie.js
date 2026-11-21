@@ -260,10 +260,12 @@ export class Movie {
     this.library.symbolClasses = this.symbolClasses;
     this.library.isAS3 = this.isAS3;
     this.unconstructed = new Set(); // AS3: 表示リストには入ったが、まだコンストラクタを呼んでいないクリップ
-    // ActionScript 3 のムービーは AVM2 で、それ以外は AVM1 で動かす。
-    this.avm2 = this.isAS3 ? new AVM2({ trace: traceOut, now: this.now, random, ...avm }) : null;
+    // ActionScript 3 のムービーは AVM2 で、それ以外は AVM1 で動かす。機能を絞った版（tools/profiles.js）では、どちらかが無い
+    // （AVM2・AVM1 が null）ことがある。無ければ、スクリプトなしで再生する。
+    this.avm2 = this.isAS3 && AVM2 ? new AVM2({ trace: traceOut, now: this.now, random, ...avm }) : null;
     if (this.avm2) installFlash(this.avm2, this, { MovieClip, TextField, VideoObject });
-    this.avm = this.isAS3 ? null : new AVM1({
+    if (this.isAS3 && !AVM2) this.warn('ActionScript 3 is not included in this build; scripts do not run');
+    this.avm = this.isAS3 || !AVM1 ? null : new AVM1({
       version: swf.version,
       trace: traceOut,
       legacy: this.legacy,
@@ -1077,8 +1079,14 @@ export class Movie {
 
   // --- アクションの待ち行列 ---
 
+  #scriptsMissing = false;
+
   queueAction(clip, code) {
     if (this.avm) this.#queue.push({ clip, code });
+    else if (!this.isAS3 && !this.#scriptsMissing) {
+      this.#scriptsMissing = true; // 機能を絞った版（AVM1 なし）で、スクリプトのある SWF を再生した
+      this.warn('ActionScript 1 / 2 is not included in this build; scripts do not run');
+    }
   }
 
   queueInit(spriteId, clip, code) {

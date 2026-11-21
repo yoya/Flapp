@@ -124,6 +124,45 @@ npm run serve
 
 確認は、パソコンのブラウザをスマートフォンの画面の大きさ・タッチ入力にして行いました。実機（iPhone・Android）では、まだ確かめていません。
 
+## 機能を絞った版を作る
+
+使わない機能を外して、読み込む JavaScript を小さくした版を作れます。1 つのファイルに束ねて最小化します。
+
+```bash
+npm run build                    # 全部の構成を dist/ に作る
+node tools/build.js flashlite-2  # 構成を選んで作る
+```
+
+束ねるのには [bun](https://bun.sh) を使います（再生するだけなら不要です。`web/flapp.js` は束ねなくても動きます）。
+使い方は同じで、読み込むファイルだけを替えます。
+
+```html
+<script type="module" src="dist/flapp.flashlite-2.min.js"></script>
+<flapp-player src="movie.swf"></flapp-player>
+```
+
+| 構成 | 外すもの | 大きさ | gzip |
+|---|---|---|---|
+| `full` | なし（最新の Flash Player 相当） | 539 KB | 187 KB |
+| `flashplayer-12` | なし（Flapp が実装している範囲では `full` と同じ） | 539 KB | 187 KB |
+| `flashplayer-8` | ActionScript 3、LZMA 圧縮、H.264 | 315 KB | 112 KB |
+| `flashlite-4` | LZMA 圧縮 | 537 KB | 186 KB |
+| `flashlite-2` | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 229 KB | 81 KB |
+| `flashlite-1.1` | `flashlite-2` と同じ | 229 KB | 81 KB |
+| `no-video` | ビデオ | 487 KB | 169 KB |
+| `no-avm2` | ActionScript 3 | 318 KB | 114 KB |
+| `no-avm2-no-video` | ActionScript 3、ビデオ | 267 KB | 95 KB |
+| `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
+| `animation-only` | ActionScript 1 / 2 / 3、ビデオ | 154 KB | 57 KB |
+
+（大きさは 1.1.0 の時点。束ねない `web/flapp.js` は、75 ファイルで 1,212 KB、gzip で 409 KB です。）
+
+- 外した機能が要る SWF は、警告（`warning` のイベント）を残して、その機能なしで再生します。スクリプトを外した版は絵と音だけを再生し、
+  ビデオを外した版は埋め込みのビデオを映さず、FLV は見つからない扱いにします。LZMA を外した版は、ZWS の SWF を読めません（`error` のイベント）。
+- Flash Lite と Flash Player の版ごとの構成は、「その版に無い機能を外したもの」です（Flapp が実装している範囲で）。その版のプレイヤーの
+  細かな挙動まで再現するものではありません。Flash Lite の実機とは照合していません。
+- 構成の定義は [tools/profiles.js](tools/profiles.js)、外した機能の代わりに置くモジュールは [src/absent/](src/absent/) にあります。
+
 ## SWF の中身を見る（SWF インスペクタ）
 
 `web/inspect.html` は、SWF のヘッダ・要約・タグの一覧を表にします。行をクリックすると、そのタグの中身（解釈した項目と先頭 256 バイトの 16 進ダンプ）を出します。
