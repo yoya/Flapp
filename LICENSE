@@ -19,8 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Exception: src/video/vp6.js (the VP6 decoder, ported from FFmpeg) and
-tools/mkvp6.js are licensed under the GNU Lesser General Public License,
-version 2.1 or later. See LICENSES/LGPL-2.1-or-later.txt and the notices at
-the top of those files.
