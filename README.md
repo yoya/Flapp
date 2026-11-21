@@ -155,7 +155,7 @@ node tools/build.js flashlite-2  # 構成を選んで作る
 | `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
 | `animation-only` | ActionScript 1 / 2 / 3、ビデオ | 154 KB | 57 KB |
 
-（大きさは 1.1.0 の時点。束ねない `web/flapp.js` は、75 ファイルで 1,212 KB、gzip で 409 KB です。）
+（大きさは 1.2.0 の時点。束ねない `web/flapp.js` は、75 ファイルで 1,215 KB、gzip で 410 KB です。）
 
 - 外した機能が要る SWF は、警告（`warning` のイベント）を残して、その機能なしで再生します。スクリプトを外した版は絵と音だけを再生し、
   ビデオを外した版は埋め込みのビデオを映さず、FLV は見つからない扱いにします。LZMA を外した版は、ZWS の SWF を読めません（`error` のイベント）。

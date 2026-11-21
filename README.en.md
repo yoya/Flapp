@@ -150,7 +150,7 @@ The usage is the same; only the file you load changes.
 | `as3-only` | ActionScript 1 / 2 | 446 KB | 157 KB |
 | `animation-only` | ActionScript 1 / 2 / 3, video | 154 KB | 57 KB |
 
-(Sizes are as of 1.1.0. The unbundled `web/flapp.js` is 75 files, 1,212 KB, or 409 KB with gzip.)
+(Sizes are as of 1.2.0. The unbundled `web/flapp.js` is 75 files, 1,215 KB, or 410 KB with gzip.)
 
 - A SWF that needs a feature that was left out plays without it and leaves a warning (the `warning` event). A build without scripts plays only the pictures and sound.
   A build without video does not show embedded video and treats FLV files as not found. A build without LZMA cannot read ZWS files (the `error` event).
