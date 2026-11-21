@@ -1,6 +1,6 @@
 // Flapp — SWF を JavaScript で再生する Flash Player（web 側の埋め込み部品）
 // Copyright (c) 2026 Yoshihiro Yamazaki
-// Version 1.0.2
+// Version 1.1.0
 //
 // SWF をページに埋め込む部品（<flapp-player> 要素と embed 関数）と、ホスト側の取り決め（信用する SWF の通信と保存）。
 //
