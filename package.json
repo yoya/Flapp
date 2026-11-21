@@ -2,6 +2,7 @@
   "name": "flapp",
   "version": "1.2.0",
   "private": true,
+  "license": "MIT AND LGPL-2.1-or-later",
   "type": "module",
   "scripts": {
     "test": "node --test",

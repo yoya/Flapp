@@ -1,5 +1,6 @@
 // Flapp — SWF を JavaScript で再生する Flash Player（web 側の埋め込み部品）
-// Copyright (c) 2026 Yoshihiro Yamazaki
+// Copyright (c) 2026 Yoshihiro Yamazaki. MIT License (LICENSE).
+// VP6 の復号器（src/video/vp6.js）だけは LGPL 2.1 以降で、別のファイルとして、VP6 のビデオを映すときにだけ読み込む。
 // Version 1.2.0
 //
 // SWF をページに埋め込む部品（<flapp-player> 要素と embed 関数）と、ホスト側の取り決め（信用する SWF の通信と保存）。

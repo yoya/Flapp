@@ -268,3 +268,16 @@ SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
   映します。`Movie.load` に `matchPlayer: true` を渡すと（ブラウザのページでは URL に `?matchPlayer` を付けると）、実機と同じに映しません。
 - 実機は、埋め込みの H.263 / VP6 のビデオを整数倍で描くとき、横方向だけ、各画素の右端を右隣の画素と混ぜます。
   Flapp は混ぜずに描きますが、`matchPlayer: true` のときは実機と同じに混ぜます。
+
+# ライセンス
+
+Flapp は [MIT ライセンス](LICENSE)です。
+
+ただし、VP6 の復号器（[src/video/vp6.js](src/video/vp6.js)）と、それに寄りかかるテスト用の素材の生成（[tools/mkvp6.js](tools/mkvp6.js)）だけは、
+FFmpeg の移植なので、FFmpeg と同じ LGPL 2.1 以降（[LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)）です。
+
+- VP6 の復号器は、プレイヤーの本体からは別のファイルで、VP6 のビデオを映すときにだけ読み込まれます（「VP6 の復号器」）。
+  束ねた版（`dist/flapp.*.min.js`）には入っていないので、束は MIT のコードだけでできています。
+- VP6 の復号器を配るとき（`dist/flapp-vp6.js`）は、LGPL の本文（`dist/LGPL-2.1-or-later.txt`）を一緒に置いてください。
+  `flapp-vp6.js` は最小化していない、ソースそのままのファイルです。
+- VP6 を配らないときは、`flapp-vp6.js` を置かなければ、MIT のコードだけで動きます（VP6 のビデオだけが映りません）。

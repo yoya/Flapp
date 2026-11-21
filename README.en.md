@@ -259,3 +259,16 @@ To see the contents of a SWF, use `node tools/swfdump.js file.swf`.
   Passing `matchPlayer: true` to `Movie.load` (on a browser page, adding `?matchPlayer` to the URL) makes it match the real player.
 - When the real player draws embedded H.263 / VP6 video at an integer scale, it blends each pixel's right edge with the pixel to its right, horizontally only.
   Flapp draws without this blend, but with `matchPlayer: true` it blends the same way as the real player.
+
+# License
+
+Flapp is under the [MIT License](LICENSE).
+
+The exceptions are the VP6 decoder ([src/video/vp6.js](src/video/vp6.js)) and the test material generation that depends on it ([tools/mkvp6.js](tools/mkvp6.js)).
+They are ported from FFmpeg, so they are under the same LGPL 2.1 or later as FFmpeg ([LICENSES/LGPL-2.1-or-later.txt](LICENSES/LGPL-2.1-or-later.txt)).
+
+- The player loads the VP6 decoder from a separate file, only when it shows VP6 video (see "The VP6 decoder").
+  It is not in the bundles (`dist/flapp.*.min.js`), so the bundles consist of MIT code only.
+- When you distribute the VP6 decoder (`dist/flapp-vp6.js`), place the LGPL text (`dist/LGPL-2.1-or-later.txt`) with it.
+  `flapp-vp6.js` is not minified; it is the source file as it is.
+- If you do not distribute VP6, leave `flapp-vp6.js` out; the player then runs on MIT code only (only VP6 video is not shown).

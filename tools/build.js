@@ -47,7 +47,7 @@ try {
     const file = join(out, `flapp.${name}.min.js`);
     // 最小化はコメントを消すので、著作権と、VP6 の復号器を別のファイルから読むことは、先頭に書いておく。
     const vp6 = video ? ' VP6 video is decoded by flapp-vp6.js, a separate file under LGPL-2.1-or-later (not included in this file).' : '';
-    const banner = `/* Flapp ${version} (${name}${without.length ? `: without ${without.join(', ')}` : ''}). Copyright (c) 2026 Yoshihiro Yamazaki.${vp6} */`;
+    const banner = `/* Flapp ${version} (${name}${without.length ? `: without ${without.join(', ')}` : ''}). Copyright (c) 2026 Yoshihiro Yamazaki. MIT License.${vp6} */`;
     execFileSync('bun', ['build', join(dir, 'web/flapp.js'), '--minify', '--target=browser', '--format=esm', `--banner=${banner}`, `--outfile=${file}`], { stdio: 'pipe' });
     const bytes = readFileSync(file);
     console.log(`${name.padEnd(20)}${kb(bytes.length)}${kb(gzipSync(bytes, { level: 9 }).length)}  ${note}`);
