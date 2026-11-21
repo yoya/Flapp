@@ -9,7 +9,7 @@ It runs in JavaScript.
 
 It loads SWF files and plays them on a browser Canvas. It has no dependent packages.
 
-- **Files**: uncompressed SWF, zlib-compressed SWF (CWS), and LZMA-compressed SWF (ZWS)
+- **Files**: uncompressed SWF (FWS), zlib-compressed SWF (CWS), and LZMA-compressed SWF (ZWS)
 - **Display**: shapes (solid, gradient, and bitmap fills and lines), bitmaps, morph shapes, text (static text and text fields, with per-range formats, `htmlText` format tags, bullets, and word wrap),
   buttons, masks, blend modes, 9-slice scaling, scenes, filters (blur, drop shadow, glow, bevel, gradient glow, gradient bevel, color matrix, convolution, and displacement map),
   3D transforms (AS3 `z`, `rotationX` / `rotationY`, `Matrix3D`, and perspective projection)
