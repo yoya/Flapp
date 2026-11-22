@@ -25,11 +25,9 @@ export const FEATURES = {
  */
 export const PROFILES = {
   full: { without: [], note: '全部入り（最新の Flash Player 相当）' },
-  'flashplayer-12': { without: [], note: 'Flash Player 12 相当。Flapp が実装している範囲では full と同じ' },
   'flashplayer-8': { without: ['avm2', 'lzma', 'h264'], note: 'Flash Player 8 相当（ActionScript 1 / 2、フィルタ、BitmapData、H.263・VP6 のビデオ）' },
   'flashlite-4': { without: ['lzma'], note: 'Flash Lite 4 相当（Flash Player 10 が元。ActionScript 3 あり）' },
-  'flashlite-2': { without: ['avm2', 'video', 'lzma', 'flash8'], note: 'Flash Lite 2 相当（Flash Player 7 が元。ActionScript 1 / 2）' },
-  'flashlite-1.1': { without: ['avm2', 'video', 'lzma', 'flash8'], note: 'Flash Lite 1.1 相当（SWF 4 のタグと、SWF 5 相当までのスクリプト。モジュールは flashlite-2 と同じ）' },
+  'flashlite-2': { without: ['avm2', 'video', 'lzma', 'flash8'], note: 'Flash Lite 1.1 / 2.0 相当（2.0 は Flash Player 7 が元で ActionScript 1 / 2。1.1 は SWF 4 のタグと、SWF 5 相当までのスクリプト）' },
   'no-video': { without: ['video'], note: 'ビデオ抜き' },
   'no-avm2': { without: ['avm2'], note: 'ActionScript 3 抜き' },
   'no-avm2-no-video': { without: ['avm2', 'video'], note: 'ActionScript 3 とビデオ抜き' },

@@ -139,11 +139,9 @@ The usage is the same; only the file you load changes.
 | Profile | Left out | Size | gzip |
 |---|---|---|---|
 | `full` | nothing (the latest Flash Player) | 510 KB | 177 KB |
-| `flashplayer-12` | nothing (the same as `full`, within what Flapp implements) | 510 KB | 177 KB |
 | `flashplayer-8` | ActionScript 3, LZMA compression, H.264 | 286 KB | 102 KB |
 | `flashlite-4` | LZMA compression | 508 KB | 176 KB |
-| `flashlite-2` | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 229 KB | 81 KB |
-| `flashlite-1.1` | the same as `flashlite-2` | 229 KB | 81 KB |
+| `flashlite-2` (Flash Lite 1.1 / 2.0) | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 229 KB | 81 KB |
 | `no-video` | video | 488 KB | 169 KB |
 | `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3, video | 267 KB | 95 KB |

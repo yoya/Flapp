@@ -144,11 +144,9 @@ node tools/build.js flashlite-2  # 構成を選んで作る
 | 構成 | 外すもの | 大きさ | gzip |
 |---|---|---|---|
 | `full` | なし（最新の Flash Player 相当） | 510 KB | 177 KB |
-| `flashplayer-12` | なし（Flapp が実装している範囲では `full` と同じ） | 510 KB | 177 KB |
 | `flashplayer-8` | ActionScript 3、LZMA 圧縮、H.264 | 286 KB | 102 KB |
 | `flashlite-4` | LZMA 圧縮 | 508 KB | 176 KB |
-| `flashlite-2` | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 229 KB | 81 KB |
-| `flashlite-1.1` | `flashlite-2` と同じ | 229 KB | 81 KB |
+| `flashlite-2`（Flash Lite 1.1 / 2.0） | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 229 KB | 81 KB |
 | `no-video` | ビデオ | 488 KB | 169 KB |
 | `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3、ビデオ | 267 KB | 95 KB |
