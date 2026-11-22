@@ -6,27 +6,37 @@ import { shapeRecords } from './shape.js';
 const CACHE_SIZE = 64; // 比率ごとに作ったパスを覚えておく数
 
 /**
- * @returns {{ id: number, startBounds: object, endBounds: object,
- *   pathsAt: (ratio: number) => object[] }}  ratio は 0（開始形状）〜65535（終了形状）
+ * DefineMorphShape / 2 の中身をそのまま読む（補間はしない）。fillStyles / lineStyles は開始と終了の組（{ start, end }）、
+ * startRecords / endRecords は shapeRecords の形。
  */
-export function parseDefineMorphShape(tag) {
+export function readMorphShape(tag) {
   if (tag.code !== 46 && tag.code !== 84) throw new SWFError(`tag ${tag.code} is not a DefineMorphShape`);
   const version = tag.code === 84 ? 2 : 1;
   const r = new Reader(tag.body);
   const morph = { id: r.u16(), startBounds: r.rect(), endBounds: r.rect() };
   if (version === 2) {
-    r.rect(); // StartEdgeBounds
-    r.rect(); // EndEdgeBounds
+    morph.startEdgeBounds = r.rect();
+    morph.endEdgeBounds = r.rect();
     r.u8(); // UsesNonScalingStrokes, UsesScalingStrokes
   }
   const offset = r.u32();
   const endEdges = r.pos + offset;
-  const fillStyles = styleArray(r, () => fillStylePair(r));
-  const lineStyles = styleArray(r, () => lineStylePair(r, version));
+  morph.fillStyles = styleArray(r, () => fillStylePair(r));
+  morph.lineStyles = styleArray(r, () => lineStylePair(r, version));
   // 開始形状は塗り・線の指定つき、終了形状は辺だけ。スタイルの版は RGBA 固定なので 3 として読む。
-  const startRecords = shapeRecords(r, 3);
+  morph.startRecords = shapeRecords(r, 3);
   if (endEdges > tag.body.length) throw new SWFError('morph shape end edges are out of range');
-  const endRecords = shapeRecords(new Reader(tag.body.subarray(endEdges)), 3);
+  morph.endRecords = shapeRecords(new Reader(tag.body.subarray(endEdges)), 3);
+  return morph;
+}
+
+/**
+ * @returns {{ id: number, startBounds: object, endBounds: object,
+ *   pathsAt: (ratio: number) => object[] }}  ratio は 0（開始形状）〜65535（終了形状）
+ */
+export function parseDefineMorphShape(tag) {
+  const { id, startBounds, endBounds, fillStyles, lineStyles, startRecords, endRecords } = readMorphShape(tag);
+  const morph = { id, startBounds, endBounds };
 
   const cache = new Map();
   morph.pathsAt = (ratio) => {

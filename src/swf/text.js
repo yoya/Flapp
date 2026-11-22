@@ -69,13 +69,15 @@ export function parseDefineFont(tag) {
 
   const paths = new Map(); // グリフ番号 → パス（無いグリフは null）
   font.glyphCount = offsets.length;
+  /** グリフの SHAPE のレコード（shapeRecords の形）。番号が範囲外なら null、壊れていれば SWFError。 */
+  font.glyphRecords = (index) => (index >= 0 && index < offsets.length ? shapeRecords(new Reader(tag.body.subarray(tableStart + offsets[index])), 1) : null);
   /** グリフの輪郭（em 単位、原点はベースラインの左端）。読めないグリフは null。 */
   font.glyphPath = (index) => {
     if (paths.has(index)) return paths.get(index);
     let path = null;
     if (index >= 0 && index < offsets.length) {
       try {
-        const records = shapeRecords(new Reader(tag.body.subarray(tableStart + offsets[index])), 1);
+        const records = font.glyphRecords(index);
         // グリフは塗り 1 つだけの図形。どちら側に塗りが指定されていても同じ輪郭になる。
         path = shapeToPaths({ fillStyles: [{}], lineStyles: [], records, usesWindingRule: false })[0]?.path ?? null;
       } catch (e) {
