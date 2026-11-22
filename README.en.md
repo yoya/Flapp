@@ -240,7 +240,7 @@ Without drawing, Node.js alone can run it (the tests run it this way).
 npm test
 ```
 
-To see the contents of a SWF, use `node tools/swfdump.js file.swf`.
+To see the contents of a SWF, use `node tools/swfdump.js file.swf`. `-d` adds the fields of each tag, and `-D` goes down to nested items such as shape records and disassembled actions.
 
 # Notes
 

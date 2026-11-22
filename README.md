@@ -245,7 +245,7 @@ IME は変換中の文字列を `movie.compose(text)`、コピー・切り取り
 npm test
 ```
 
-SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。
+SWF の中身を見るには `node tools/swfdump.js file.swf` を使います。`-d` でタグの中身、`-D` でシェイプのレコードやアクションの逆アセンブルなど入れ子の項目まで出します。
 
 # 備考
 
