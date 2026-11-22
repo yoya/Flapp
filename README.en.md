@@ -141,14 +141,14 @@ The usage is the same; only the file you load changes.
 | `full` | nothing (the latest Flash Player) | 510 KB | 177 KB |
 | `flashplayer-8` | ActionScript 3, LZMA compression, H.264 | 286 KB | 102 KB |
 | `flashlite-4` | LZMA compression | 508 KB | 176 KB |
-| `flashlite-2` (Flash Lite 1.1 / 2.0) | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 229 KB | 81 KB |
+| `flashlite-2` (Flash Lite 1.1 / 2.0) | ActionScript 3, video, LZMA compression, filters, `flash.geom`, `BitmapData` | 230 KB | 81 KB |
 | `no-video` | video | 488 KB | 169 KB |
-| `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
+| `no-avm2` | ActionScript 3 | 290 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3, video | 267 KB | 95 KB |
 | `as3-only` | ActionScript 1 / 2 | 417 KB | 147 KB |
-| `animation-only` | ActionScript 1 / 2 / 3, video | 154 KB | 57 KB |
+| `animation-only` | ActionScript 1 / 2 / 3, video | 155 KB | 57 KB |
 
-(Sizes are as of the change that moved the VP6 decoder into its own file. The unbundled `web/flapp.js` is 74 files, 1,155 KB, or 393 KB with gzip.)
+(Sizes are as of 1.3.0. The unbundled `web/flapp.js` is 74 files, 1,156 KB, or 394 KB with gzip.)
 
 Profiles with video do not include the VP6 decoder in the bundle; it is placed separately as `dist/flapp-vp6.js` (66 KB, 19 KB with gzip). See "The VP6 decoder" below.
 

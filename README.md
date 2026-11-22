@@ -146,14 +146,14 @@ node tools/build.js flashlite-2  # 構成を選んで作る
 | `full` | なし（最新の Flash Player 相当） | 510 KB | 177 KB |
 | `flashplayer-8` | ActionScript 3、LZMA 圧縮、H.264 | 286 KB | 102 KB |
 | `flashlite-4` | LZMA 圧縮 | 508 KB | 176 KB |
-| `flashlite-2`（Flash Lite 1.1 / 2.0） | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 229 KB | 81 KB |
+| `flashlite-2`（Flash Lite 1.1 / 2.0） | ActionScript 3、ビデオ、LZMA 圧縮、フィルタ・`flash.geom`・`BitmapData` | 230 KB | 81 KB |
 | `no-video` | ビデオ | 488 KB | 169 KB |
-| `no-avm2` | ActionScript 3 | 289 KB | 104 KB |
+| `no-avm2` | ActionScript 3 | 290 KB | 104 KB |
 | `no-avm2-no-video` | ActionScript 3、ビデオ | 267 KB | 95 KB |
 | `as3-only` | ActionScript 1 / 2 | 417 KB | 147 KB |
-| `animation-only` | ActionScript 1 / 2 / 3、ビデオ | 154 KB | 57 KB |
+| `animation-only` | ActionScript 1 / 2 / 3、ビデオ | 155 KB | 57 KB |
 
-（大きさは、VP6 の復号器を別のファイルにした後の時点。束ねない `web/flapp.js` は、74 ファイルで 1,155 KB、gzip で 393 KB です。）
+（大きさは 1.3.0 の時点。束ねない `web/flapp.js` は、74 ファイルで 1,156 KB、gzip で 394 KB です。）
 
 ビデオを含む構成は、VP6 の復号器を束に入れず、`dist/flapp-vp6.js`（66 KB、gzip で 19 KB）として別に置きます（下の「VP6 の復号器」）。
 
