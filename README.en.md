@@ -129,6 +129,7 @@ node tools/build.js flashlite-2  # build the profiles you name
 ```
 
 Bundling uses [bun](https://bun.sh) (it is not needed just to play; `web/flapp.js` works without bundling).
+Every profile is also attached to the [releases](https://github.com/yoya/Flapp/releases) (since 1.3.0), so you can use them without bun.
 The usage is the same; only the file you load changes.
 
 ```html

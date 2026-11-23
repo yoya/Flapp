@@ -134,6 +134,7 @@ node tools/build.js flashlite-2  # 構成を選んで作る
 ```
 
 束ねるのには [bun](https://bun.sh) を使います（再生するだけなら不要です。`web/flapp.js` は束ねなくても動きます）。
+束ねたものは、[リリース](https://github.com/yoya/Flapp/releases)にも全部の構成を添付しています（1.3.0 から）。bun が無くても、そのまま使えます。
 使い方は同じで、読み込むファイルだけを替えます。
 
 ```html
